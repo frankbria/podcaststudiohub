@@ -4,10 +4,12 @@ FastAPI dependency injection helpers
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import Optional
 
 from src.database import get_db
-from src.middleware.auth import get_current_user_id, get_current_tenant_id
+from src.middleware.auth import get_current_user_id as get_user_id_from_auth, get_current_tenant_id
+from src.models.user import User
 
 
 security = HTTPBearer()
@@ -15,13 +17,50 @@ security = HTTPBearer()
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """
+    Dependency to get the current authenticated user object.
+
+    Usage:
+        @app.get("/me")
+        async def read_current_user(user: User = Depends(get_current_user)):
+            return user
+
+    Args:
+        credentials: HTTP authorization credentials from request
+        db: Database session
+
+    Returns:
+        User object from database
+
+    Raises:
+        HTTPException: If authentication fails or user not found
+    """
+    user_id = await get_user_id_from_auth(credentials)
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return user
+
+
+async def get_current_user_id(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> str:
     """
     Dependency to get the current authenticated user ID.
 
     Usage:
-        @app.get("/me")
-        async def read_current_user(user_id: str = Depends(get_current_user)):
+        @app.get("/data")
+        async def read_data(user_id: str = Depends(get_current_user_id)):
             return {"user_id": user_id}
 
     Args:
@@ -33,7 +72,7 @@ async def get_current_user(
     Raises:
         HTTPException: If authentication fails
     """
-    return await get_current_user_id(credentials)
+    return await get_user_id_from_auth(credentials)
 
 
 async def get_tenant_id(
@@ -115,6 +154,6 @@ async def get_optional_user(
             scheme="Bearer",
             credentials=auth_header.split(" ")[1]
         )
-        return await get_current_user_id(credentials)
+        return await get_user_id_from_auth(credentials)
     except HTTPException:
         return None

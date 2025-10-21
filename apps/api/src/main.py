@@ -68,12 +68,14 @@ async def internal_error_handler(request, exc):
     )
 
 
-# Register routers (will be added in Phase 3 - User Story implementations)
-# Example:
-# from src.routers import auth, projects, episodes
-# app.include_router(auth.router, prefix="/auth", tags=["authentication"])
-# app.include_router(projects.router, prefix="/projects", tags=["projects"])
-# app.include_router(episodes.router, prefix="/episodes", tags=["episodes"])
+# Register routers - User Story 1 (Basic Podcast Generation)
+from src.routers import auth, projects, episodes, content, generation
+
+app.include_router(auth.router)
+app.include_router(projects.router)
+app.include_router(episodes.router)
+app.include_router(content.router)
+app.include_router(generation.router)
 
 
 if __name__ == "__main__":

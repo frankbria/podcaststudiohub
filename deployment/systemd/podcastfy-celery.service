@@ -1,0 +1,34 @@
+[Unit]
+Description=Podcastfy Celery Worker
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+Type=forking
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/podcastfy/api
+
+# Environment
+Environment="PATH=/var/www/podcastfy/api/.venv/bin"
+EnvironmentFile=/var/www/podcastfy/api/.env
+
+# Start command
+ExecStart=/var/www/podcastfy/api/.venv/bin/celery -A src.worker worker \
+    --loglevel=info \
+    --concurrency=2 \
+    --max-tasks-per-child=10 \
+    --time-limit=900 \
+    --soft-time-limit=600
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=podcastfy-celery
+
+[Install]
+WantedBy=multi-user.target

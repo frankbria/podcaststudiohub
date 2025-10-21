@@ -1,0 +1,38 @@
+[Unit]
+Description=Podcastfy API (FastAPI with Uvicorn)
+After=network.target postgresql.service redis.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=notify
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/podcastfy/api
+
+# Environment
+Environment="PATH=/var/www/podcastfy/api/.venv/bin"
+EnvironmentFile=/var/www/podcastfy/api/.env
+
+# Start command
+ExecStart=/var/www/podcastfy/api/.venv/bin/uvicorn src.main:app \
+    --host 0.0.0.0 \
+    --port 8000 \
+    --workers 4 \
+    --log-level info \
+    --access-log
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=podcastfy-api
+
+[Install]
+WantedBy=multi-user.target

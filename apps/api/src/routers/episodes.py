@@ -158,8 +158,8 @@ async def update_episode(
         episode.description = episode_data.description
     if episode_data.episode_number is not None:
         episode.episode_number = episode_data.episode_number
-    if episode_data.metadata is not None:
-        episode.metadata = episode_data.metadata.model_dump()
+    if episode_data.episode_metadata is not None:
+        episode.episode_metadata = episode_data.episode_metadata.model_dump()
 
     await db.commit()
     await db.refresh(episode)

@@ -72,7 +72,7 @@ class EpisodeUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=255)
     description: Optional[str] = Field(None, max_length=2000)
     episode_number: Optional[int] = Field(None, ge=1)
-    metadata: Optional[EpisodeMetadata] = None
+    episode_metadata: Optional[EpisodeMetadata] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -85,7 +85,7 @@ class EpisodeResponse(BaseModel):
     title: str
     description: Optional[str] = None
     episode_number: Optional[int] = None
-    metadata: Dict[str, Any]
+    episode_metadata: Dict[str, Any]
     generation_status: GenerationStatus
     generation_progress: Dict[str, Any]
     audio_s3_key: Optional[str] = None

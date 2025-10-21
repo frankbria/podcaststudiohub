@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { config } from "@/lib/config"
 
 interface Episode {
   id: string
@@ -49,7 +50,7 @@ export default function EpisodePage() {
       // Start SSE connection for progress updates
       // Note: EventSource doesn't support custom headers, so we rely on cookie-based auth
       const eventSource = new EventSource(
-        `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress`
+        `${config.apiUrl}/generation/episodes/${params.id}/progress`
       )
 
       eventSource.onmessage = (event) => {
@@ -72,7 +73,7 @@ export default function EpisodePage() {
 
   const loadEpisode = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}`, {
+      const response = await fetch(`${config.apiUrl}/episodes/${params.id}`, {
         headers: {
           Authorization: `Bearer ${(session as any)?.accessToken}`,
         },

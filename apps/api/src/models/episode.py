@@ -36,7 +36,7 @@ class Episode(Base):
     #   "transcript_url": "https://...",
     #   "pub_date": "2024-10-20T10:00:00Z"
     # }
-    metadata = Column(JSONB, nullable=False, default=dict)
+    episode_metadata = Column(JSONB, nullable=False, default=dict)
 
     # Generation status tracking
     # Values: 'draft', 'queued', 'extracting', 'generating', 'synthesizing', 'complete', 'failed'

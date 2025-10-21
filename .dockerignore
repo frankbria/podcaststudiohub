@@ -16,3 +16,21 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Next.js
+.next/
+out/
+*.tsbuildinfo
+
+# TypeScript
+*.tsbuildinfo
+
+# Deployment
+.vercel/

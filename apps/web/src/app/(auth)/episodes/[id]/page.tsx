@@ -47,13 +47,9 @@ export default function EpisodePage() {
   useEffect(() => {
     if (episode?.generation_status && ["queued", "extracting", "generating", "synthesizing"].includes(episode.generation_status)) {
       // Start SSE connection for progress updates
+      // Note: EventSource doesn't support custom headers, so we rely on cookie-based auth
       const eventSource = new EventSource(
-        `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress`,
-        {
-          headers: {
-            Authorization: `Bearer ${(session as any)?.accessToken}`,
-          } as any,
-        }
+        `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress`
       )
 
       eventSource.onmessage = (event) => {

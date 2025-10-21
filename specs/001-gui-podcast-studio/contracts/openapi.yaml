@@ -1,0 +1,1469 @@
+openapi: 3.1.0
+info:
+  title: Podcastfy GUI API
+  description: Multi-tenant SaaS API for podcast generation and management
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@podcastfy.example.com
+
+servers:
+  - url: https://api.podcastfy.example.com
+    description: Production API
+  - url: http://localhost:8000
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: auth
+    description: Authentication and user management
+  - name: projects
+    description: Project management
+  - name: episodes
+    description: Episode management and generation
+  - name: content
+    description: Content source management
+  - name: generation
+    description: Podcast generation orchestration
+  - name: publishing
+    description: S3 upload and RSS feed generation
+  - name: distribution
+    description: Platform distribution management
+  - name: snippets
+    description: Audio snippet management
+  - name: compositions
+    description: Episode composition and layout
+
+paths:
+  # Authentication Endpoints
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register new user
+      description: Create a new user account (FR-001 via GUI)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, full_name]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+                full_name:
+                  type: string
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Email already exists
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: User login
+      description: Authenticate and receive JWT token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    description: JWT access token
+                  refresh_token:
+                    type: string
+                  token_type:
+                    type: string
+                    enum: [Bearer]
+                  expires_in:
+                    type: integer
+                    description: Token expiration time in seconds
+        '401':
+          description: Invalid credentials
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Get current user
+      responses:
+        '200':
+          description: Current user details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+
+  # Projects
+  /projects:
+    get:
+      tags: [projects]
+      summary: List user's projects
+      description: Get all projects for the authenticated user (FR-006)
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: is_archived
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ProjectResponse'
+                  total:
+                    type: integer
+                  page:
+                    type: integer
+                  page_size:
+                    type: integer
+
+    post:
+      tags: [projects]
+      summary: Create project
+      description: Create a new podcast project (FR-006)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreate'
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+
+  /projects/{project_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectIdParam'
+
+    get:
+      tags: [projects]
+      summary: Get project details
+      responses:
+        '200':
+          description: Project details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+
+    put:
+      tags: [projects]
+      summary: Update project
+      description: Update project metadata (FR-014)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdate'
+      responses:
+        '200':
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectResponse'
+
+    delete:
+      tags: [projects]
+      summary: Delete project
+      responses:
+        '204':
+          description: Project deleted
+
+  # Episodes
+  /projects/{project_id}/episodes:
+    parameters:
+      - $ref: '#/components/parameters/ProjectIdParam'
+
+    get:
+      tags: [episodes]
+      summary: List project episodes
+      description: Get all episodes for a project with search/filtering (FR-021)
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Search episode titles and descriptions
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, queued, processing, completed, failed, published]
+      responses:
+        '200':
+          description: List of episodes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EpisodeResponse'
+                  total:
+                    type: integer
+
+    post:
+      tags: [episodes]
+      summary: Create episode
+      description: Create a new episode (FR-001, FR-002)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EpisodeCreate'
+      responses:
+        '201':
+          description: Episode created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodeResponse'
+
+  /episodes/{episode_id}:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    get:
+      tags: [episodes]
+      summary: Get episode details
+      responses:
+        '200':
+          description: Episode details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodeResponse'
+
+    patch:
+      tags: [episodes]
+      summary: Update episode metadata
+      description: Update episode title, description, etc (FR-008)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EpisodeUpdate'
+      responses:
+        '200':
+          description: Episode updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodeResponse'
+
+    delete:
+      tags: [episodes]
+      summary: Delete episode
+      responses:
+        '204':
+          description: Episode deleted
+
+  # Content Sources
+  /episodes/{episode_id}/content:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    get:
+      tags: [content]
+      summary: List episode content sources
+      description: Get all content sources for an episode (FR-002)
+      responses:
+        '200':
+          description: List of content sources
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ContentSourceResponse'
+
+    post:
+      tags: [content]
+      summary: Add content source
+      description: Add URL, PDF, or text content (FR-002)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContentSourceCreate'
+      responses:
+        '201':
+          description: Content source added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentSourceResponse'
+
+  # Podcast Generation
+  /episodes/{episode_id}/generate:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    post:
+      tags: [generation]
+      summary: Generate podcast
+      description: Start podcast generation job (FR-001, FR-004, FR-015)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tts_config_id:
+                  type: string
+                  format: uuid
+                template_id:
+                  type: string
+                  format: uuid
+                longform:
+                  type: boolean
+                  description: Use long-form generation
+      responses:
+        '202':
+          description: Generation started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id:
+                    type: string
+                    format: uuid
+                    description: Celery task ID for progress tracking
+                  status:
+                    type: string
+                    enum: [queued]
+
+  /episodes/{episode_id}/progress:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    get:
+      tags: [generation]
+      summary: Stream generation progress
+      description: Server-Sent Events stream for real-time progress (FR-005)
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: object
+                properties:
+                  stage:
+                    type: string
+                    enum: [extraction, generation, synthesis, complete, error]
+                  progress:
+                    type: integer
+                    minimum: 0
+                    maximum: 100
+                  message:
+                    type: string
+
+  /episodes/{episode_id}/regenerate:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    post:
+      tags: [generation]
+      summary: Regenerate episode
+      description: Regenerate audio with updated settings (FR-022)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                tts_config_id:
+                  type: string
+                  format: uuid
+                template_id:
+                  type: string
+                  format: uuid
+      responses:
+        '202':
+          description: Regeneration started
+
+  # Publishing
+  /episodes/{episode_id}/publish:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    post:
+      tags: [publishing]
+      summary: Publish to S3
+      description: Upload episode to S3 and update RSS feed (FR-009, FR-012)
+      responses:
+        '200':
+          description: Published successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  s3_url:
+                    type: string
+                    format: uri
+                  rss_feed_url:
+                    type: string
+                    format: uri
+
+  /projects/{project_id}/rss:
+    parameters:
+      - $ref: '#/components/parameters/ProjectIdParam'
+
+    get:
+      tags: [publishing]
+      summary: Get RSS feed
+      description: Get RSS feed details (FR-012)
+      responses:
+        '200':
+          description: RSS feed details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RSSFeedResponse'
+
+    post:
+      tags: [publishing]
+      summary: Generate RSS feed
+      description: Generate/update RSS 2.0 feed (FR-012)
+      responses:
+        '200':
+          description: RSS feed generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RSSFeedResponse'
+
+  /projects/{project_id}/rss/validate:
+    parameters:
+      - $ref: '#/components/parameters/ProjectIdParam'
+
+    post:
+      tags: [publishing]
+      summary: Validate RSS feed
+      description: Validate RSS feed against podcast directory standards (FR-013)
+      responses:
+        '200':
+          description: Validation results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  apple_podcasts:
+                    $ref: '#/components/schemas/ValidationResult'
+                  spotify:
+                    $ref: '#/components/schemas/ValidationResult'
+                  google_podcasts:
+                    $ref: '#/components/schemas/ValidationResult'
+
+  # Distribution
+  /distribution/targets:
+    get:
+      tags: [distribution]
+      summary: List distribution targets
+      description: Get all platform connections and webhooks (FR-010, FR-011)
+      responses:
+        '200':
+          description: List of distribution targets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DistributionTargetResponse'
+
+    post:
+      tags: [distribution]
+      summary: Add distribution target
+      description: Connect platform or webhook (FR-010, FR-011)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DistributionTargetCreate'
+      responses:
+        '201':
+          description: Target added
+
+  /distribution/targets/{target_id}:
+    parameters:
+      - name: target_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    delete:
+      tags: [distribution]
+      summary: Remove distribution target
+      responses:
+        '204':
+          description: Target removed
+
+  /episodes/{episode_id}/distribute:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    post:
+      tags: [distribution]
+      summary: Distribute episode
+      description: Distribute to all configured platforms (FR-010, FR-011)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                target_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                  description: Specific targets (or all if omitted)
+      responses:
+        '202':
+          description: Distribution started
+
+  # Audio Snippets
+  /snippets:
+    get:
+      tags: [snippets]
+      summary: List audio snippets
+      description: Get all audio snippets for the authenticated user (FR-023)
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: project_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter by project
+        - name: snippet_type
+          in: query
+          schema:
+            type: string
+            enum: [intro, outro, midroll, ad, music, other]
+          description: Filter by snippet type
+      responses:
+        '200':
+          description: List of snippets
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AudioSnippetResponse'
+                  total:
+                    type: integer
+
+    post:
+      tags: [snippets]
+      summary: Upload audio snippet
+      description: Upload new audio snippet (intro, outro, etc) (FR-023, FR-024)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, name, snippet_type]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Audio file (MP3, WAV, AAC)
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                snippet_type:
+                  type: string
+                  enum: [intro, outro, midroll, ad, music, other]
+                description:
+                  type: string
+                project_id:
+                  type: string
+                  format: uuid
+                  description: Associate with specific project (optional)
+                metadata:
+                  type: object
+                  description: Additional metadata (JSON string)
+      responses:
+        '201':
+          description: Snippet uploaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioSnippetResponse'
+        '400':
+          description: Invalid file format or size
+
+  /snippets/{snippet_id}:
+    parameters:
+      - name: snippet_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [snippets]
+      summary: Get snippet details
+      description: Get audio snippet metadata and download URL (FR-024)
+      responses:
+        '200':
+          description: Snippet details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioSnippetResponse'
+
+    patch:
+      tags: [snippets]
+      summary: Update snippet metadata
+      description: Update snippet name, type, or description (FR-024)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                snippet_type:
+                  type: string
+                  enum: [intro, outro, midroll, ad, music, other]
+                description:
+                  type: string
+                metadata:
+                  type: object
+      responses:
+        '200':
+          description: Snippet updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioSnippetResponse'
+
+    delete:
+      tags: [snippets]
+      summary: Delete snippet
+      description: Delete audio snippet file and metadata
+      responses:
+        '204':
+          description: Snippet deleted
+
+  /snippets/{snippet_id}/download:
+    parameters:
+      - name: snippet_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [snippets]
+      summary: Download snippet audio
+      description: Get signed S3 URL or direct download
+      responses:
+        '200':
+          description: Audio file
+          content:
+            audio/mpeg:
+              schema:
+                type: string
+                format: binary
+        '302':
+          description: Redirect to S3 signed URL
+
+  # Episode Layouts
+  /layouts:
+    get:
+      tags: [compositions]
+      summary: List episode layouts
+      description: Get all episode layout templates for the user (FR-025, FR-029)
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/PageSizeParam'
+        - name: project_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter by project
+      responses:
+        '200':
+          description: List of layouts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EpisodeLayoutResponse'
+                  total:
+                    type: integer
+
+    post:
+      tags: [compositions]
+      summary: Create episode layout
+      description: Create reusable episode layout template (FR-025, FR-029)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EpisodeLayoutCreate'
+      responses:
+        '201':
+          description: Layout created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodeLayoutResponse'
+
+  /layouts/{layout_id}:
+    parameters:
+      - name: layout_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      tags: [compositions]
+      summary: Get layout details
+      description: Get episode layout configuration
+      responses:
+        '200':
+          description: Layout details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodeLayoutResponse'
+
+    patch:
+      tags: [compositions]
+      summary: Update layout
+      description: Update layout name or configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                layout_config:
+                  $ref: '#/components/schemas/LayoutConfig'
+      responses:
+        '200':
+          description: Layout updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodeLayoutResponse'
+
+    delete:
+      tags: [compositions]
+      summary: Delete layout
+      responses:
+        '204':
+          description: Layout deleted
+
+  # Episode Compositions
+  /episodes/{episode_id}/composition:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    get:
+      tags: [compositions]
+      summary: Get episode composition
+      description: Get current composition timeline for episode (FR-027)
+      responses:
+        '200':
+          description: Composition details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodeCompositionResponse'
+        '404':
+          description: No composition exists for episode
+
+    post:
+      tags: [compositions]
+      summary: Create/update composition
+      description: Apply layout template or create custom composition (FR-026, FR-027)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                layout_id:
+                  type: string
+                  format: uuid
+                  description: Apply layout template (auto-positions snippets)
+                composition_timeline:
+                  $ref: '#/components/schemas/CompositionTimeline'
+                  description: Manual timeline (drag-and-drop editor)
+      responses:
+        '200':
+          description: Composition created/updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodeCompositionResponse'
+
+    delete:
+      tags: [compositions]
+      summary: Remove composition
+      description: Remove all snippets and reset to main content only
+      responses:
+        '204':
+          description: Composition removed
+
+  /episodes/{episode_id}/composition/preview:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    post:
+      tags: [compositions]
+      summary: Preview composition
+      description: Generate preview of merged audio with snippets (FR-028)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                composition_timeline:
+                  $ref: '#/components/schemas/CompositionTimeline'
+                  description: Timeline to preview (if not saved)
+      responses:
+        '200':
+          description: Preview generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preview_url:
+                    type: string
+                    format: uri
+                    description: Temporary S3 URL for preview
+                  duration_seconds:
+                    type: number
+                  expires_at:
+                    type: string
+                    format: date-time
+
+  /episodes/{episode_id}/composition/finalize:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    post:
+      tags: [compositions]
+      summary: Finalize composition
+      description: Merge snippets into final episode audio (FR-026, FR-030)
+      responses:
+        '202':
+          description: Composition merging started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [queued]
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ProjectIdParam:
+      name: project_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    EpisodeIdParam:
+      name: episode_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    PageParam:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    PageSizeParam:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+  schemas:
+    UserResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        full_name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ProjectCreate:
+      type: object
+      required: [name, podcast_metadata]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+        podcast_metadata:
+          $ref: '#/components/schemas/PodcastMetadata'
+
+    ProjectUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        podcast_metadata:
+          $ref: '#/components/schemas/PodcastMetadata'
+        is_archived:
+          type: boolean
+
+    ProjectResponse:
+      allOf:
+        - $ref: '#/components/schemas/ProjectCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            user_id:
+              type: string
+              format: uuid
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    PodcastMetadata:
+      type: object
+      required: [show_title, author, description, category]
+      properties:
+        show_title:
+          type: string
+        author:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        language:
+          type: string
+          default: en-US
+        explicit:
+          type: boolean
+          default: false
+        copyright:
+          type: string
+        artwork_url:
+          type: string
+          format: uri
+
+    EpisodeCreate:
+      type: object
+      required: [metadata]
+      properties:
+        metadata:
+          $ref: '#/components/schemas/EpisodeMetadata'
+
+    EpisodeUpdate:
+      type: object
+      properties:
+        metadata:
+          $ref: '#/components/schemas/EpisodeMetadata'
+
+    EpisodeResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        metadata:
+          $ref: '#/components/schemas/EpisodeMetadata'
+        generation_status:
+          type: string
+          enum: [draft, queued, processing, completed, failed, published]
+        generation_progress:
+          type: object
+        distribution_status:
+          type: object
+        audio_s3_url:
+          type: string
+          format: uri
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        published_at:
+          type: string
+          format: date-time
+
+    EpisodeMetadata:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        episode_number:
+          type: integer
+          minimum: 1
+        season_number:
+          type: integer
+          minimum: 1
+        publication_date:
+          type: string
+          format: date-time
+        tags:
+          type: array
+          items:
+            type: string
+        format:
+          type: string
+          enum: [solo, conversation, interview]
+
+    ContentSourceCreate:
+      type: object
+      required: [source_type, source_data]
+      properties:
+        source_type:
+          type: string
+          enum: [url, pdf, text]
+        source_data:
+          type: object
+          description: Type-specific data
+
+    ContentSourceResponse:
+      allOf:
+        - $ref: '#/components/schemas/ContentSourceCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            extraction_status:
+              type: string
+              enum: [pending, processing, completed, failed]
+
+    DistributionTargetCreate:
+      type: object
+      required: [target_type, config]
+      properties:
+        target_type:
+          type: string
+          enum: [platform, webhook]
+        config:
+          type: object
+
+    DistributionTargetResponse:
+      allOf:
+        - $ref: '#/components/schemas/DistributionTargetCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            is_active:
+              type: boolean
+
+    RSSFeedResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        public_url:
+          type: string
+          format: uri
+        episode_count:
+          type: integer
+        last_generated_at:
+          type: string
+          format: date-time
+
+    ValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+
+    AudioSnippetResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+          nullable: true
+        name:
+          type: string
+        snippet_type:
+          type: string
+          enum: [intro, outro, midroll, ad, music, other]
+        description:
+          type: string
+          nullable: true
+        file_path:
+          type: string
+        s3_key:
+          type: string
+          nullable: true
+        s3_url:
+          type: string
+          format: uri
+          nullable: true
+        duration_seconds:
+          type: number
+          nullable: true
+        file_size_bytes:
+          type: integer
+          nullable: true
+        file_format:
+          type: string
+          nullable: true
+        sample_rate:
+          type: integer
+          nullable: true
+        bit_rate:
+          type: integer
+          nullable: true
+        channels:
+          type: integer
+          default: 2
+        audio_metadata:
+          type: object
+        usage_count:
+          type: integer
+          default: 0
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    EpisodeLayoutCreate:
+      type: object
+      required: [name, layout_config]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+        project_id:
+          type: string
+          format: uuid
+          description: Associate with specific project (optional)
+        layout_config:
+          $ref: '#/components/schemas/LayoutConfig'
+        is_default:
+          type: boolean
+          default: false
+
+    EpisodeLayoutResponse:
+      allOf:
+        - $ref: '#/components/schemas/EpisodeLayoutCreate'
+        - type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            user_id:
+              type: string
+              format: uuid
+            usage_count:
+              type: integer
+              default: 0
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+
+    LayoutConfig:
+      type: object
+      required: [segments]
+      properties:
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/LayoutSegment'
+        auto_normalize:
+          type: boolean
+          default: true
+          description: Normalize audio levels across segments
+        crossfade_duration:
+          type: number
+          default: 0.0
+          description: Crossfade duration in seconds
+
+    LayoutSegment:
+      type: object
+      required: [type, position, order]
+      properties:
+        type:
+          type: string
+          enum: [snippet, main_content]
+        snippet_id:
+          type: string
+          format: uuid
+          description: Required if type=snippet
+        position:
+          type: string
+          description: 'pre-roll, post-roll, percentage (e.g., "50%"), or timestamp (e.g., "120.5")'
+        order:
+          type: integer
+          minimum: 1
+          description: Segment order in timeline
+
+    EpisodeCompositionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        episode_id:
+          type: string
+          format: uuid
+        layout_id:
+          type: string
+          format: uuid
+          nullable: true
+        composition_timeline:
+          $ref: '#/components/schemas/CompositionTimeline'
+        merged_audio_s3_url:
+          type: string
+          format: uri
+          nullable: true
+        total_duration_seconds:
+          type: number
+          nullable: true
+        status:
+          type: string
+          enum: [draft, merging, completed, failed]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CompositionTimeline:
+      type: object
+      required: [segments]
+      properties:
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/TimelineSegment'
+          description: Ordered list of audio segments
+        total_duration_seconds:
+          type: number
+          description: Calculated total duration
+
+    TimelineSegment:
+      type: object
+      required: [type, start_time, duration]
+      properties:
+        type:
+          type: string
+          enum: [snippet, main_content]
+        snippet_id:
+          type: string
+          format: uuid
+          description: Required if type=snippet
+        start_time:
+          type: number
+          description: Start time in seconds from beginning
+        duration:
+          type: number
+          description: Segment duration in seconds
+        order:
+          type: integer
+          minimum: 1
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+                example: Not authenticated
+
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string

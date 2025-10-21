@@ -1,0 +1,35 @@
+{
+  "name": "podcastfy-monorepo",
+  "version": "0.4.1",
+  "description": "Podcastfy GUI - Multi-tenant SaaS platform for AI-generated podcasts",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "cd apps/api && uvicorn src.main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:web": "cd apps/web && npm run dev",
+    "build": "npm run build:web && npm run build:api",
+    "build:web": "cd apps/web && npm run build",
+    "build:api": "echo 'API build not required for Python'",
+    "test": "npm run test:api && npm run test:web",
+    "test:api": "cd apps/api && pytest",
+    "test:web": "cd apps/web && npm run test",
+    "lint": "npm run lint:api && npm run lint:web",
+    "lint:api": "cd apps/api && ruff check .",
+    "lint:web": "cd apps/web && npm run lint",
+    "docker:up": "cd .docker && docker-compose up",
+    "docker:down": "cd .docker && docker-compose down",
+    "docker:build": "cd .docker && docker-compose build",
+    "docker:logs": "cd .docker && docker-compose logs -f"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  }
+}

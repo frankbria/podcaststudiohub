@@ -121,3 +121,27 @@ dist/
 *.pyc
 __pycache__/
 *.egg-info/
+
+# Node.js / Next.js (for apps/web/)
+node_modules/
+.next/
+.turbo/
+out/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+
+# npm/pnpm/yarn
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+.pnpm-debug.log*
+.yarn/
+
+# TypeScript
+*.tsbuildinfo
+
+# Apps directory build artifacts
+apps/web/dist/
+apps/web/build/
+apps/api/dist/

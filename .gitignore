@@ -145,3 +145,10 @@ yarn.lock
 apps/web/dist/
 apps/web/build/
 apps/api/dist/
+
+# Podcastfy CLI - installed as package, not vendored
+podcastfy/
+
+# Large notebook files
+podcastfy.ipynb
+usage/examples.ipynb

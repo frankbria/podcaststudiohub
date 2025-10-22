@@ -71,7 +71,7 @@ jobs:
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ vars.SERVER_HOST }}
-          SSH_USER: ${{ vars.SERVER_USER }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
@@ -81,7 +81,7 @@ jobs:
       - name: Deploy API
         env:
           SSH_HOST: ${{ vars.SERVER_HOST }}
-          SSH_USER: ${{ vars.SERVER_USER }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
           SERVER_PATH: ${{ vars.SERVER_PATH }}
         run: |
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
@@ -112,7 +112,7 @@ jobs:
       - name: Deploy Frontend
         env:
           SSH_HOST: ${{ vars.SERVER_HOST }}
-          SSH_USER: ${{ vars.SERVER_USER }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
           SERVER_PATH: ${{ vars.SERVER_PATH }}
           API_URL: ${{ vars.API_URL }}
         run: |
@@ -136,7 +136,7 @@ jobs:
       - name: Restart Celery
         env:
           SSH_HOST: ${{ vars.SERVER_HOST }}
-          SSH_USER: ${{ vars.SERVER_USER }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
         run: |
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "pm2 restart podcaststudiohub-celery"
           echo "Celery deployment complete"

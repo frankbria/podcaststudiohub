@@ -17,7 +17,6 @@ In the `development` environment, add these **Variables**:
 | Variable Name | Value | Description |
 |--------------|-------|-------------|
 | `SERVER_HOST` | `47.88.89.175` | Development server IP address |
-| `SERVER_USER` | `root` | SSH user for deployment |
 | `SERVER_PATH` | `/var/www/podcaststudiohub` | Application directory on server |
 | `API_URL` | `https://dev.podcaststudiohub.me/api` | Public API URL |
 | `FRONTEND_URL` | `https://dev.podcaststudiohub.me` | Public frontend URL |
@@ -30,6 +29,7 @@ In the `development` environment, add these **Secrets**:
 | Secret Name | How to Generate | Description |
 |------------|-----------------|-------------|
 | `SSH_PRIVATE_KEY` | See below | SSH private key for server access |
+| `SERVER_USER` | N/A | SSH username for deployment (currently `root`, should be changed to dedicated user) |
 | `NEXTAUTH_SECRET` | `openssl rand -base64 32` | NextAuth.js encryption key |
 
 ## Generating SSH Key for Deployment

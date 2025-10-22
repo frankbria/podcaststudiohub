@@ -1,0 +1,185 @@
+name: Deploy to Development
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/**'
+      - 'deployment/**'
+      - '.github/workflows/deploy-dev.yml'
+
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests before deployment'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'apps/web/package-lock.json'
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+          uv pip install --system -r <(uv pip compile pyproject.toml)
+
+      - name: Run API tests
+        if: ${{ !inputs.skip_tests }}
+        working-directory: apps/api
+        env:
+          DATABASE_URL: sqlite:///test.db
+          SECRET_KEY: test-secret-key-for-ci
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+        run: |
+          # TODO: Add pytest when tests are implemented
+          echo "API tests would run here"
+
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_API_URL: ${{ vars.API_URL }}
+          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
+        run: npm run build
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ vars.SERVER_HOST }}
+          SSH_USER: ${{ vars.SERVER_USER }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+
+      - name: Deploy API
+        env:
+          SSH_HOST: ${{ vars.SERVER_HOST }}
+          SSH_USER: ${{ vars.SERVER_USER }}
+          SERVER_PATH: ${{ vars.SERVER_PATH }}
+        run: |
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << 'EOF'
+            cd ${{ env.SERVER_PATH }}
+
+            # Pull latest code
+            git fetch origin
+            git checkout main
+            git pull origin main
+
+            # Update API dependencies
+            cd api
+            source .venv/bin/activate
+            pip install --upgrade pip
+            pip install uv
+            uv pip install --system podcastfy>=0.4.1
+            uv pip install --system -r <(uv pip compile pyproject.toml)
+
+            # Run database migrations
+            alembic upgrade head
+
+            # Restart API service
+            pm2 restart podcaststudiohub-api
+
+            echo "API deployment complete"
+          EOF
+
+      - name: Deploy Frontend
+        env:
+          SSH_HOST: ${{ vars.SERVER_HOST }}
+          SSH_USER: ${{ vars.SERVER_USER }}
+          SERVER_PATH: ${{ vars.SERVER_PATH }}
+        run: |
+          # Sync built frontend to server
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" \
+            apps/web/.next/ \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/.next/
+
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+            apps/web/public/ \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/public/
+
+          # Update runtime config on server
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << 'EOF'
+            cat > ${{ env.SERVER_PATH }}/frontend/public/config.js << 'CONFIGEOF'
+            window.__ENV__ = {
+              API_URL: '${{ vars.API_URL }}'
+            };
+CONFIGEOF
+
+            # Restart frontend service
+            pm2 restart podcaststudiohub-frontend
+
+            echo "Frontend deployment complete"
+          EOF
+
+      - name: Restart Celery
+        env:
+          SSH_HOST: ${{ vars.SERVER_HOST }}
+          SSH_USER: ${{ vars.SERVER_USER }}
+          SERVER_PATH: ${{ vars.SERVER_PATH }}
+        run: |
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << 'EOF'
+            # Restart Celery worker
+            pm2 restart podcaststudiohub-celery
+
+            echo "Celery deployment complete"
+          EOF
+
+      - name: Health Check
+        env:
+          API_URL: ${{ vars.API_URL }}
+          FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+        run: |
+          echo "Waiting for services to start..."
+          sleep 10
+
+          # Check API health
+          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $API_URL/health)
+          if [ "$API_STATUS" != "200" ]; then
+            echo "API health check failed with status: $API_STATUS"
+            exit 1
+          fi
+          echo "✓ API health check passed"
+
+          # Check frontend
+          FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $FRONTEND_URL)
+          if [ "$FRONTEND_STATUS" != "200" ]; then
+            echo "Frontend health check failed with status: $FRONTEND_STATUS"
+            exit 1
+          fi
+          echo "✓ Frontend health check passed"
+
+          echo "🚀 Deployment successful!"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          rm -f ~/.ssh/deploy_key

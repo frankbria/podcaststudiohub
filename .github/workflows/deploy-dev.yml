@@ -86,8 +86,8 @@ jobs:
           SSH_USER: ${{ vars.SERVER_USER }}
           SERVER_PATH: ${{ vars.SERVER_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << 'EOF'
-            cd ${{ env.SERVER_PATH }}
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+            cd $SERVER_PATH
 
             # Pull latest code
             git fetch origin
@@ -116,6 +116,7 @@ jobs:
           SSH_HOST: ${{ vars.SERVER_HOST }}
           SSH_USER: ${{ vars.SERVER_USER }}
           SERVER_PATH: ${{ vars.SERVER_PATH }}
+          API_URL: ${{ vars.API_URL }}
         run: |
           # Sync built frontend to server
           rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" \
@@ -127,31 +128,20 @@ jobs:
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/public/
 
           # Update runtime config on server
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << 'EOF'
-            cat > ${{ env.SERVER_PATH }}/frontend/public/config.js << 'CONFIGEOF'
-            window.__ENV__ = {
-              API_URL: '${{ vars.API_URL }}'
-            };
-CONFIGEOF
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo \"window.__ENV__ = { API_URL: '$API_URL' };\" > $SERVER_PATH/frontend/public/config.js"
 
-            # Restart frontend service
-            pm2 restart podcaststudiohub-frontend
+          # Restart frontend service
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "pm2 restart podcaststudiohub-frontend"
 
-            echo "Frontend deployment complete"
-          EOF
+          echo "Frontend deployment complete"
 
       - name: Restart Celery
         env:
           SSH_HOST: ${{ vars.SERVER_HOST }}
           SSH_USER: ${{ vars.SERVER_USER }}
-          SERVER_PATH: ${{ vars.SERVER_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << 'EOF'
-            # Restart Celery worker
-            pm2 restart podcaststudiohub-celery
-
-            echo "Celery deployment complete"
-          EOF
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "pm2 restart podcaststudiohub-celery"
+          echo "Celery deployment complete"
 
       - name: Health Check
         env:

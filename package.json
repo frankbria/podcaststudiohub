@@ -14,9 +14,13 @@
     "build": "npm run build:web && npm run build:api",
     "build:web": "cd apps/web && npm run build",
     "build:api": "echo 'API build not required for Python'",
-    "test": "npm run test:api && npm run test:web",
+    "test": "npm run test:api && npm run test:web && npm run test:e2e",
     "test:api": "cd apps/api && pytest",
     "test:web": "cd apps/web && npm run test",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:report": "playwright show-report",
     "lint": "npm run lint:api && npm run lint:web",
     "lint:api": "cd apps/api && ruff check .",
     "lint:web": "cd apps/web && npm run lint",
@@ -26,6 +30,7 @@
     "docker:logs": "cd .docker && docker-compose logs -f"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "concurrently": "^8.2.2"
   },
   "engines": {

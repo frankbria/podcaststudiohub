@@ -45,7 +45,7 @@ class UserResponse(BaseModel):
     encrypted_api_keys: Dict[str, str] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
-    last_login_at: Optional[datetime] = None
+    last_login: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 

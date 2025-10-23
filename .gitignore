@@ -2,6 +2,9 @@
 
 specs/
 
+# But allow E2E test specs
+!tests/e2e/specs/
+
 *.whl
 *.wheels
 
@@ -67,6 +70,9 @@ wheels/
 # PyInstaller
 *.manifest
 *.spec
+
+# But allow Playwright test specs
+!tests/**/*.spec.ts
 
 # Installer logs
 pip-log.txt

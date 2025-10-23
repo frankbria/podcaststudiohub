@@ -1,0 +1,157 @@
+name: Playwright E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'apps/web/**'
+      - 'apps/api/**'
+      - 'tests/e2e/**'
+      - 'playwright.config.ts'
+      - '.github/workflows/playwright-tests.yml'
+
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'apps/web/**'
+      - 'apps/api/**'
+      - 'tests/e2e/**'
+      - 'playwright.config.ts'
+
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Which test suite to run'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - auth
+          - projects
+          - episodes
+          - content
+          - generation
+          - navigation
+          - responsive
+          - performance
+          - accessibility
+          - integration
+
+jobs:
+  test:
+    name: Run Playwright Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Browsers
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Run Playwright tests
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        run: npx playwright test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        env:
+          BASE_URL: https://dev.podcaststudiohub.me
+
+      - name: Run specific test suite (manual)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.test_suite != 'all' }}
+        run: npx playwright test tests/e2e/specs/*${{ github.event.inputs.test_suite }}*.spec.ts
+        env:
+          BASE_URL: https://dev.podcaststudiohub.me
+
+      - name: Run all tests (manual)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.test_suite == 'all' }}
+        run: npx playwright test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+        env:
+          BASE_URL: https://dev.podcaststudiohub.me
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-${{ matrix.shard }}
+          path: playwright-report/
+          retention-days: 30
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results-${{ matrix.shard }}
+          path: test-results/
+          retention-days: 7
+
+  merge-reports:
+    name: Merge Test Reports
+    if: always()
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download all reports
+        uses: actions/download-artifact@v4
+        with:
+          path: all-reports/
+          pattern: playwright-report-*
+
+      - name: Merge reports
+        run: npx playwright merge-reports --reporter=html ./all-reports
+        continue-on-error: true
+
+      - name: Upload merged report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report-merged
+          path: playwright-report/
+          retention-days: 30
+
+  notify:
+    name: Notify Test Results
+    if: always()
+    needs: [test, merge-reports]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check test status
+        run: |
+          if [ "${{ needs.test.result }}" == "failure" ]; then
+            echo "Tests failed!"
+            exit 1
+          else
+            echo "Tests passed!"
+          fi

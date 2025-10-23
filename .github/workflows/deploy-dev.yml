@@ -127,6 +127,25 @@ jobs:
             apps/web/public/ \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/public/
 
+          # Sync source files (needed for Next.js server-side rendering)
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+            apps/web/src/ \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/src/
+
+          # Sync node_modules and package files
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+            apps/web/node_modules/ \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/node_modules/
+
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+            apps/web/package.json \
+            apps/web/package-lock.json \
+            apps/web/next.config.mjs \
+            apps/web/tsconfig.json \
+            apps/web/tailwind.config.ts \
+            apps/web/postcss.config.mjs \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/
+
           # Create .env.production with runtime environment variables
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXT_PUBLIC_API_URL=$API_URL' > $SERVER_PATH/frontend/.env.production"
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXTAUTH_SECRET=$NEXTAUTH_SECRET' >> $SERVER_PATH/frontend/.env.production"

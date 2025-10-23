@@ -45,7 +45,6 @@ class Project(Base):
     # Relationships
     user = relationship("User", back_populates="projects")
     episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan")
-    rss_feeds = relationship("RSSFeed", back_populates="project", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Project(id={self.id}, title={self.title})>"

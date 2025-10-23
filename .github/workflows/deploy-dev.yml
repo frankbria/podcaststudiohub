@@ -128,14 +128,13 @@ jobs:
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/public/
 
           # Create .env.production with runtime environment variables
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
-            cat > $SERVER_PATH/frontend/.env.production << 'ENVEOF'
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "cat > $SERVER_PATH/frontend/.env.production << 'ENVEOF'
 NEXT_PUBLIC_API_URL=$API_URL
 NEXTAUTH_SECRET=$NEXTAUTH_SECRET
 NEXTAUTH_URL=$NEXTAUTH_URL
 ENVEOF
-            echo "Runtime environment variables configured"
-          EOF
+"
+          echo "Runtime environment variables configured"
 
           # Update runtime config on server
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo \"window.__ENV__ = { API_URL: '$API_URL' };\" > $SERVER_PATH/frontend/public/config.js"

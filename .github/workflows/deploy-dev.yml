@@ -115,6 +115,8 @@ jobs:
           SSH_USER: ${{ secrets.SERVER_USER }}
           SERVER_PATH: ${{ vars.SERVER_PATH }}
           API_URL: ${{ vars.API_URL }}
+          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+          NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
         run: |
           # Sync built frontend to server
           rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" \
@@ -124,6 +126,16 @@ jobs:
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
             apps/web/public/ \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/public/
+
+          # Create .env.production with runtime environment variables
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+            cat > $SERVER_PATH/frontend/.env.production << 'ENVEOF'
+NEXT_PUBLIC_API_URL=$API_URL
+NEXTAUTH_SECRET=$NEXTAUTH_SECRET
+NEXTAUTH_URL=$NEXTAUTH_URL
+ENVEOF
+            echo "Runtime environment variables configured"
+          EOF
 
           # Update runtime config on server
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo \"window.__ENV__ = { API_URL: '$API_URL' };\" > $SERVER_PATH/frontend/public/config.js"

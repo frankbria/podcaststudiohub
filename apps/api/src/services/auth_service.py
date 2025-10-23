@@ -55,7 +55,7 @@ class AuthService:
         # Create new user
         user = User(
             email=user_data.email,
-            hashed_password=self.hash_password(user_data.password),
+            password_hash=self.hash_password(user_data.password),
             full_name=user_data.full_name,
             tenant_id=tenant_id,
             is_active=True,
@@ -77,7 +77,7 @@ class AuthService:
             raise ValueError("Invalid email or password")
 
         # Verify password
-        if not self.verify_password(password, user.hashed_password):
+        if not self.verify_password(password, user.password_hash):
             raise ValueError("Invalid email or password")
 
         # Check if user is active
@@ -85,7 +85,7 @@ class AuthService:
             raise ValueError("User account is disabled")
 
         # Update last login
-        user.last_login_at = datetime.utcnow()
+        user.last_login = datetime.utcnow()
         await self.db.commit()
 
         # Create tokens
@@ -111,7 +111,7 @@ class AuthService:
         if not user:
             return None
 
-        if not self.verify_password(password, user.hashed_password):
+        if not self.verify_password(password, user.password_hash):
             return None
 
         return user

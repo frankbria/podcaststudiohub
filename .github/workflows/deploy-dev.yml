@@ -135,7 +135,6 @@ jobs:
           # Sync package files and config
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
             apps/web/package.json \
-            apps/web/package-lock.json \
             apps/web/next.config.mjs \
             apps/web/tsconfig.json \
             apps/web/tailwind.config.ts \

@@ -22,11 +22,18 @@ class AuthService:
 
     def hash_password(self, password: str) -> str:
         """Hash a plain password"""
-        return self.pwd_context.hash(password)
+        # Truncate to 72 bytes to avoid bcrypt limitation
+        # This is a bcrypt requirement and considered best practice
+        password_bytes = password.encode('utf-8')[:72]
+        password_truncated = password_bytes.decode('utf-8', errors='ignore')
+        return self.pwd_context.hash(password_truncated)
 
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """Verify a plain password against its hash"""
-        return self.pwd_context.verify(plain_password, hashed_password)
+        # Truncate to 72 bytes to match hash_password behavior
+        password_bytes = plain_password.encode('utf-8')[:72]
+        password_truncated = password_bytes.decode('utf-8', errors='ignore')
+        return self.pwd_context.verify(password_truncated, hashed_password)
 
     async def get_user_by_email(self, email: str) -> Optional[User]:
         """Get user by email address"""

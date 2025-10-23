@@ -84,24 +84,50 @@ jobs:
           SSH_USER: ${{ secrets.SERVER_USER }}
           SERVER_PATH: ${{ vars.SERVER_PATH }}
         run: |
+          # Sync API source files to server
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.pytest_cache' \
+            --exclude='.venv' \
+            apps/api/src/ \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/api/src/
+
+          # Sync API config files
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+            apps/api/pyproject.toml \
+            apps/api/alembic.ini \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/api/
+
+          # Sync migrations
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            apps/api/alembic/ \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/api/alembic/
+
+          # Install dependencies and restart on server
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
-            cd $SERVER_PATH
+            cd $SERVER_PATH/api
 
-            # Pull latest code
-            git fetch origin
-            git checkout main
-            git pull origin main
+            # Create venv if it doesn't exist
+            if [ ! -d ".venv" ]; then
+              python3 -m venv .venv
+            fi
 
-            # Update API dependencies
-            cd api
+            # Activate venv and install dependencies
             source .venv/bin/activate
             pip install --upgrade pip
             pip install uv
-            uv pip install --system podcastfy>=0.4.1
-            uv pip install --system -r <(uv pip compile pyproject.toml)
+            uv pip install podcastfy>=0.4.1
+            uv pip install -r <(uv pip compile pyproject.toml)
 
             # Run database migrations
             alembic upgrade head
+
+            # Clear Python bytecode cache to ensure new code is loaded
+            find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+            find . -type f -name '*.pyc' -delete 2>/dev/null || true
 
             # Restart API service
             pm2 restart podcaststudiohub-api

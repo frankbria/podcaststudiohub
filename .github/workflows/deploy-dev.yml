@@ -132,11 +132,7 @@ jobs:
             apps/web/src/ \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/src/
 
-          # Sync node_modules and package files
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
-            apps/web/node_modules/ \
-            $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/node_modules/
-
+          # Sync package files and config
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
             apps/web/package.json \
             apps/web/package-lock.json \
@@ -145,6 +141,9 @@ jobs:
             apps/web/tailwind.config.ts \
             apps/web/postcss.config.mjs \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/
+
+          # Install dependencies on server
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && npm ci"
 
           # Create .env.production with runtime environment variables
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXT_PUBLIC_API_URL=$API_URL' > $SERVER_PATH/frontend/.env.production"

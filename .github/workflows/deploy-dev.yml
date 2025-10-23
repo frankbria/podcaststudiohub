@@ -136,8 +136,8 @@ jobs:
           # Update runtime config on server
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo \"window.__ENV__ = { API_URL: '$API_URL' };\" > $SERVER_PATH/frontend/public/config.js"
 
-          # Restart frontend service
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "pm2 restart podcaststudiohub-frontend"
+          # Restart frontend service with environment variables
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && NEXT_PUBLIC_API_URL='$API_URL' NEXTAUTH_SECRET='$NEXTAUTH_SECRET' NEXTAUTH_URL='$NEXTAUTH_URL' pm2 restart podcaststudiohub-frontend --update-env"
 
           echo "Frontend deployment complete"
 

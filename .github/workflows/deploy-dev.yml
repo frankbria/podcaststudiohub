@@ -83,6 +83,7 @@ jobs:
           SSH_HOST: ${{ vars.SERVER_HOST }}
           SSH_USER: ${{ secrets.SERVER_USER }}
           SERVER_PATH: ${{ vars.SERVER_PATH }}
+          API_PORT: ${{ vars.API_PORT }}
         run: |
           # Sync API source files to server
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
@@ -129,8 +130,19 @@ jobs:
             find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
             find . -type f -name '*.pyc' -delete 2>/dev/null || true
 
-            # Restart API service
-            pm2 restart podcaststudiohub-api
+            # Restart API service (delete and recreate to ensure fresh start)
+            if pm2 describe podcaststudiohub-api > /dev/null 2>&1; then
+              echo "Stopping existing API service..."
+              pm2 delete podcaststudiohub-api
+            fi
+            
+            echo "Starting API service on port ${API_PORT:-8000}..."
+            pm2 start .venv/bin/python \
+              --name podcaststudiohub-api \
+              --cwd $SERVER_PATH/api \
+              -- -m uvicorn src.main:app --host 0.0.0.0 --port ${API_PORT:-8000}
+            
+            pm2 save
 
             echo "API deployment complete"
           EOF
@@ -143,6 +155,7 @@ jobs:
           API_URL: ${{ vars.API_URL }}
           NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
           NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
+          FRONTEND_PORT: ${{ vars.FRONTEND_PORT }}
         run: |
           # Sync public files to server
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
@@ -170,6 +183,7 @@ jobs:
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXT_PUBLIC_API_URL=$API_URL' > $SERVER_PATH/frontend/.env.production"
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXTAUTH_SECRET=$NEXTAUTH_SECRET' >> $SERVER_PATH/frontend/.env.production"
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXTAUTH_URL=$NEXTAUTH_URL' >> $SERVER_PATH/frontend/.env.production"
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'PORT=${FRONTEND_PORT:-3000}' >> $SERVER_PATH/frontend/.env.production"
           echo "Runtime environment variables configured"
 
           # Rebuild Next.js on server with server's node_modules
@@ -178,18 +192,55 @@ jobs:
           # Update runtime config on server
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo \"window.__ENV__ = { API_URL: '$API_URL' };\" > $SERVER_PATH/frontend/public/config.js"
 
-          # Restart frontend service with environment variables
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && NEXT_PUBLIC_API_URL='$API_URL' NEXTAUTH_SECRET='$NEXTAUTH_SECRET' NEXTAUTH_URL='$NEXTAUTH_URL' pm2 restart podcaststudiohub-frontend --update-env"
-
-          echo "Frontend deployment complete"
+          # Restart frontend service (delete and recreate to ensure fresh start)
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+            cd $SERVER_PATH/frontend
+            
+            if pm2 describe podcaststudiohub-frontend > /dev/null 2>&1; then
+              echo "Stopping existing frontend service..."
+              pm2 delete podcaststudiohub-frontend
+            fi
+            
+            echo "Starting frontend service on port ${FRONTEND_PORT:-3000}..."
+            PORT=${FRONTEND_PORT:-3000} \
+            NEXT_PUBLIC_API_URL='$API_URL' \
+            NEXTAUTH_SECRET='$NEXTAUTH_SECRET' \
+            NEXTAUTH_URL='$NEXTAUTH_URL' \
+            pm2 start npm \
+              --name podcaststudiohub-frontend \
+              --cwd $SERVER_PATH/frontend \
+              -- start
+            
+            pm2 save
+            
+            echo "Frontend deployment complete"
+          EOF
 
       - name: Restart Celery
         env:
           SSH_HOST: ${{ vars.SERVER_HOST }}
           SSH_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PATH: ${{ vars.SERVER_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "pm2 restart podcaststudiohub-celery"
-          echo "Celery deployment complete"
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+            cd $SERVER_PATH/api
+            
+            if pm2 describe podcaststudiohub-celery > /dev/null 2>&1; then
+              echo "Stopping existing Celery service..."
+              pm2 delete podcaststudiohub-celery
+            fi
+            
+            echo "Starting Celery worker..."
+            source .venv/bin/activate
+            pm2 start .venv/bin/python \
+              --name podcaststudiohub-celery \
+              --cwd $SERVER_PATH/api \
+              -- -m celery -A src.core.celery worker --loglevel=info
+            
+            pm2 save
+            
+            echo "Celery deployment complete"
+          EOF
 
       - name: Health Check
         env:

@@ -235,7 +235,7 @@ jobs:
             pm2 start .venv/bin/python \
               --name podcaststudiohub-celery \
               --cwd $SERVER_PATH/api \
-              -- -m celery -A src.core.celery worker --loglevel=info
+              -- -m celery -A src.worker:celery_app worker --loglevel=info
             
             pm2 save
             

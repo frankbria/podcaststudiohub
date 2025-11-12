@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     # Security & Authentication
     ENCRYPTION_KEY: str
     JWT_SECRET_KEY: str
-    JWT_ALGORITHM: str = "RS256"
+    JWT_ALGORITHM: str = "HS256"  # Changed from RS256: HS256 uses symmetric key (simple secret string)
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 

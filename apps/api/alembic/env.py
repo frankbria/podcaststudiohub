@@ -1,13 +1,42 @@
 from logging.config import fileConfig
+import os
+import sys
+from pathlib import Path
 
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from alembic import context
 
+# Add parent directory to path for imports (so we can import from src package)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Import database and models for metadata discovery
+from src.database import Base
+from src.models import (
+    User, Project, Episode, ContentSource,
+    ConversationTemplate, TTSConfiguration,
+    DistributionTarget, RSSFeed, AudioSnippet,
+    EpisodeLayout, EpisodeComposition
+)
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# Override sqlalchemy.url from environment variable
+from src.config import settings
+
+# Convert async database URL to sync for Alembic migrations
+database_url = settings.DATABASE_URL
+if database_url.startswith("postgresql+asyncpg://"):
+    # Replace asyncpg with psycopg for synchronous migrations
+    database_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
+elif database_url.startswith("postgresql://"):
+    # Ensure we use psycopg explicitly
+    database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
+config.set_main_option("sqlalchemy.url", database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -16,9 +45,7 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-# from myapp import mymodel
-# target_metadata = mymodel.Base.metadata
-target_metadata = None
+target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:

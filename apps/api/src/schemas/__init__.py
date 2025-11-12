@@ -1,7 +1,7 @@
 """Pydantic schemas for request/response validation"""
 
 from .auth import UserRegister, UserLogin, UserResponse, TokenResponse, UserUpdate
-from .project import ProjectCreate, ProjectUpdate, ProjectResponse, PodcastMetadata
+from .project import ProjectCreate, ProjectUpdate, ProjectResponse, ProjectListResponse
 from .episode import (
     EpisodeCreate,
     EpisodeUpdate,
@@ -24,7 +24,7 @@ __all__ = [
     "ProjectCreate",
     "ProjectUpdate",
     "ProjectResponse",
-    "PodcastMetadata",
+    "ProjectListResponse",
     # Episode
     "EpisodeCreate",
     "EpisodeUpdate",

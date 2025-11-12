@@ -1,174 +1,213 @@
-"""Projects router for podcast project management"""
+"""
+Project router for RESTful API endpoints.
 
-from typing import List
-from uuid import UUID
-from fastapi import APIRouter, Depends, HTTPException, status
+Provides CRUD operations for podcast projects with pagination, validation,
+and soft delete functionality. All endpoints require authentication and
+automatically enforce tenant isolation via RLS.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from uuid import UUID
 
 from ..database import get_db
-from ..schemas.project import ProjectCreate, ProjectUpdate, ProjectResponse
-from ..schemas.common import PaginationParams, PaginatedResponse
-from ..models.project import Project
-from ..models.episode import Episode
-from ..models.user import User
-from ..dependencies import get_current_user
+from ..middleware.auth import get_current_user
+from ..models import User
+from ..schemas.project import (
+	ProjectCreate,
+	ProjectUpdate,
+	ProjectResponse,
+	ProjectListResponse
+)
+from ..services.project_service import (
+	create_project,
+	get_projects,
+	get_project_by_id,
+	update_project,
+	archive_project
+)
 
-router = APIRouter(prefix="/projects", tags=["Projects"])
-
-
-@router.get("", response_model=PaginatedResponse[ProjectResponse])
-async def list_projects(
-    pagination: PaginationParams = Depends(),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """List all projects for the current user"""
-    # Count total projects
-    count_query = select(func.count()).select_from(Project).where(Project.user_id == current_user.id)
-    total_result = await db.execute(count_query)
-    total = total_result.scalar()
-
-    # Get paginated projects
-    query = (
-        select(Project)
-        .where(Project.user_id == current_user.id)
-        .order_by(Project.created_at.desc())
-        .limit(pagination.limit)
-        .offset(pagination.offset)
-    )
-    result = await db.execute(query)
-    projects = result.scalars().all()
-
-    # Add episode count to each project
-    projects_data = []
-    for project in projects:
-        episode_count_query = select(func.count()).select_from(Episode).where(Episode.project_id == project.id)
-        episode_count_result = await db.execute(episode_count_query)
-        episode_count = episode_count_result.scalar()
-
-        project_dict = ProjectResponse.model_validate(project).model_dump()
-        project_dict["episode_count"] = episode_count
-        projects_data.append(ProjectResponse(**project_dict))
-
-    return PaginatedResponse(
-        items=projects_data,
-        total=total,
-        page=pagination.page,
-        page_size=pagination.page_size,
-        total_pages=(total + pagination.page_size - 1) // pagination.page_size,
-    )
+router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED)
-async def create_project(
-    project_data: ProjectCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+async def create_project_endpoint(
+	project_data: ProjectCreate,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db)
 ):
-    """Create a new project"""
-    project = Project(
-        user_id=current_user.id,
-        tenant_id=current_user.tenant_id,
-        name=project_data.title,  # Schema uses 'title', model uses 'name'
-        description=project_data.description,
-        podcast_metadata=project_data.podcast_metadata.model_dump(),
-    )
+	"""
+	Create new podcast project.
 
-    db.add(project)
-    await db.commit()
-    await db.refresh(project)
+	Requires authentication. Project automatically assigned to user's tenant.
+	RLS ensures tenant isolation automatically.
 
-    project_dict = ProjectResponse.model_validate(project).model_dump()
-    project_dict["episode_count"] = 0
-    return ProjectResponse(**project_dict)
+	Args:
+		project_data: Project creation data with name, description, and podcast_metadata
+		current_user: Authenticated user (from JWT token)
+		db: Database session
+
+	Returns:
+		Created project with all fields
+	"""
+	project = await create_project(
+		db=db,
+		user_id=current_user.id,
+		tenant_id=current_user.tenant_id,
+		project_data=project_data
+	)
+	return project
+
+
+@router.get("", response_model=ProjectListResponse)
+async def list_projects(
+	page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+	page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+	include_archived: bool = Query(False, description="Include archived projects"),
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db)
+):
+	"""
+	List projects with pagination.
+
+	Automatically filtered by user's tenant via RLS. Excludes archived
+	projects by default unless include_archived=True.
+
+	Args:
+		page: Page number (1-indexed)
+		page_size: Items per page (1-100)
+		include_archived: Whether to include archived projects
+		current_user: Authenticated user (from JWT token)
+		db: Database session
+
+	Returns:
+		Paginated list of projects with metadata
+	"""
+	skip = (page - 1) * page_size
+	projects, total = await get_projects(
+		db=db,
+		skip=skip,
+		limit=page_size,
+		include_archived=include_archived
+	)
+
+	total_pages = (total + page_size - 1) // page_size  # Ceiling division
+
+	return ProjectListResponse(
+		projects=projects,
+		total=total,
+		page=page,
+		page_size=page_size,
+		total_pages=total_pages
+	)
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
-    project_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+	project_id: UUID,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db)
 ):
-    """Get a specific project"""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
+	"""
+	Get project details by ID.
 
-    if not project:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+	Returns 404 if project doesn't exist or belongs to different tenant.
+	RLS automatically ensures tenant isolation.
 
-    # Get episode count
-    episode_count_query = select(func.count()).select_from(Episode).where(Episode.project_id == project.id)
-    episode_count_result = await db.execute(episode_count_query)
-    episode_count = episode_count_result.scalar()
+	Args:
+		project_id: UUID of project to retrieve
+		current_user: Authenticated user (from JWT token)
+		db: Database session
 
-    project_dict = ProjectResponse.model_validate(project).model_dump()
-    project_dict["episode_count"] = episode_count
-    return ProjectResponse(**project_dict)
+	Returns:
+		Project details with all fields
+
+	Raises:
+		HTTPException: 404 if project not found or different tenant
+	"""
+	project = await get_project_by_id(db=db, project_id=project_id)
+
+	if project is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail="Project not found"
+		)
+
+	return project
 
 
 @router.put("/{project_id}", response_model=ProjectResponse)
-async def update_project(
-    project_id: UUID,
-    project_data: ProjectUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+async def update_project_endpoint(
+	project_id: UUID,
+	update_data: ProjectUpdate,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db)
 ):
-    """Update a project"""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
+	"""
+	Update project with partial data.
 
-    if not project:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+	Only provided fields are updated (partial updates supported).
+	Returns 404 if project not found or belongs to different tenant.
 
-    # Update fields
-    if project_data.title is not None:
-        project.title = project_data.title
-    if project_data.description is not None:
-        project.description = project_data.description
-    if project_data.podcast_metadata is not None:
-        project.podcast_metadata = project_data.podcast_metadata.model_dump()
+	Args:
+		project_id: UUID of project to update
+		update_data: Update data (only provided fields will be updated)
+		current_user: Authenticated user (from JWT token)
+		db: Database session
 
-    await db.commit()
-    await db.refresh(project)
+	Returns:
+		Updated project with all fields
 
-    # Get episode count
-    episode_count_query = select(func.count()).select_from(Episode).where(Episode.project_id == project.id)
-    episode_count_result = await db.execute(episode_count_query)
-    episode_count = episode_count_result.scalar()
+	Raises:
+		HTTPException: 404 if project not found or different tenant
+	"""
+	project = await get_project_by_id(db=db, project_id=project_id)
 
-    project_dict = ProjectResponse.model_validate(project).model_dump()
-    project_dict["episode_count"] = episode_count
-    return ProjectResponse(**project_dict)
+	if project is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail="Project not found"
+		)
+
+	updated_project = await update_project(
+		db=db,
+		project=project,
+		update_data=update_data
+	)
+
+	return updated_project
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(
-    project_id: UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+	project_id: UUID,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db)
 ):
-    """Delete a project"""
-    result = await db.execute(
-        select(Project).where(
-            Project.id == project_id,
-            Project.user_id == current_user.id,
-        )
-    )
-    project = result.scalar_one_or_none()
+	"""
+	Archive project (soft delete).
 
-    if not project:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+	Sets is_archived=True. Project can be restored by updating is_archived=False.
+	Returns 404 if project not found or belongs to different tenant.
 
-    await db.delete(project)
-    await db.commit()
+	Args:
+		project_id: UUID of project to archive
+		current_user: Authenticated user (from JWT token)
+		db: Database session
+
+	Returns:
+		None (204 No Content)
+
+	Raises:
+		HTTPException: 404 if project not found or different tenant
+	"""
+	project = await get_project_by_id(db=db, project_id=project_id)
+
+	if project is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail="Project not found"
+		)
+
+	await archive_project(db=db, project=project)
+	return None  # 204 No Content

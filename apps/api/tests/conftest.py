@@ -69,11 +69,24 @@ async def test_db():
 @pytest.fixture
 async def client(test_db):
     """
-    Create an async HTTP client for testing FastAPI endpoints with test database
+    Create an async HTTP client for testing FastAPI endpoints with test database.
+    This fixture properly handles tenant context for RLS by accepting the Request parameter.
     """
-    # Override the database dependency
-    async def override_get_db():
-        yield test_db
+    from fastapi import Request
+    from src.database import set_tenant_context
+
+    # Override the database dependency with proper tenant context support
+    async def override_get_db(request: Request):
+        """Override get_db to use test database with tenant context."""
+        try:
+            # Set tenant context for RLS if available
+            if hasattr(request.state, 'tenant_id') and request.state.tenant_id:
+                await set_tenant_context(test_db, str(request.state.tenant_id))
+
+            yield test_db
+        except Exception:
+            await test_db.rollback()
+            raise
 
     app.dependency_overrides[get_db] = override_get_db
 

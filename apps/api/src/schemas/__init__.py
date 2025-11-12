@@ -8,7 +8,15 @@ from .episode import (
     EpisodeResponse,
     EpisodeListResponse,
 )
-from .content import ContentSourceCreate, ContentSourceResponse, ExtractionMetadata, SourceType
+from .content import (
+    ContentSourceCreate,
+    ContentSourceUpdate,
+    ContentSourceResponse,
+    ContentSourceListResponse,
+    ExtractionMetadata,
+    SourceType,
+    ExtractionStatus
+)
 from .common import PaginationParams, PaginatedResponse, ErrorResponse, SuccessResponse
 
 __all__ = [
@@ -30,9 +38,12 @@ __all__ = [
     "EpisodeListResponse",
     # Content
     "ContentSourceCreate",
+    "ContentSourceUpdate",
     "ContentSourceResponse",
+    "ContentSourceListResponse",
     "ExtractionMetadata",
     "SourceType",
+    "ExtractionStatus",
     # Common
     "PaginationParams",
     "PaginatedResponse",

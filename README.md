@@ -1,190 +1,446 @@
-<div align="center">
-<a name="readme-top"></a>
+# Podcastfy Studio Hub 🎙️
 
-<a href="https://trendshift.io/repositories/12965" target="_blank"><img src="https://trendshift.io/api/badge/repositories/12965" alt="Podcastfy.ai | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+A multi-tenant SaaS platform for AI-generated podcasts, built on top of the open-source [Podcastfy](https://github.com/souzatharsis/podcastfy) package.
 
-# Podcastfy.ai 🎙️🤖
-An Open Source API alternative to NotebookLM's podcast feature: Transforming Multimodal Content into Captivating Multilingual Audio Conversations with GenAI
-
-
-
-https://github.com/user-attachments/assets/5d42c106-aabe-44c1-8498-e9c53545ba40
-
-
-
-[Paper](https://github.com/souzatharsis/podcastfy/blob/main/paper/paper.pdf) |
-[Python Package](https://github.com/souzatharsis/podcastfy/blob/59563ee105a0d1dbb46744e0ff084471670dd725/podcastfy.ipynb) |
-[CLI](https://github.com/souzatharsis/podcastfy/blob/59563ee105a0d1dbb46744e0ff084471670dd725/usage/cli.md) |
-[Web App](https://openpod.fly.dev/) |
-[Feedback](https://github.com/souzatharsis/podcastfy/issues)
-
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/souzatharsis/podcastfy/blob/main/podcastfy.ipynb)
-[![PyPi Status](https://img.shields.io/pypi/v/podcastfy)](https://pypi.org/project/podcastfy/)
-![PyPI Downloads](https://static.pepy.tech/badge/podcastfy)
-[![Issues](https://img.shields.io/github/issues-raw/souzatharsis/podcastfy)](https://github.com/souzatharsis/podcastfy/issues)
-[![Pytest](https://github.com/souzatharsis/podcastfy/actions/workflows/python-app.yml/badge.svg)](https://github.com/souzatharsis/podcastfy/actions/workflows/python-app.yml)
-[![Docker](https://github.com/souzatharsis/podcastfy/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/souzatharsis/podcastfy/actions/workflows/docker-publish.yml)
-[![Documentation Status](https://readthedocs.org/projects/podcastfy/badge/?version=latest)](https://podcastfy.readthedocs.io/en/latest/?badge=latest)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-![GitHub Repo stars](https://img.shields.io/github/stars/souzatharsis/podcastfy)
-</div>
 
-Podcastfy is an open-source Python package that transforms multi-modal content (text, images) into engaging, multi-lingual audio conversations using GenAI. Input content includes websites, PDFs, images, YouTube videos, as well as user provided topics.
+## Overview
 
-Unlike closed-source UI-based tools focused primarily on research synthesis (e.g. NotebookLM ❤️), Podcastfy focuses on open source, programmatic and bespoke generation of engaging, conversational content from a multitude of multi-modal sources, enabling customization and scale.
+Podcastfy Studio Hub is a full-stack web application that provides a user-friendly interface and multi-tenant architecture for generating AI-powered podcasts from various content sources. It wraps the powerful Podcastfy engine with:
 
-## Testimonials 💬
+- **User authentication and authorization** (session-based)
+- **Project and episode management**
+- **Asynchronous background processing** with Celery
+- **Multi-tenant data isolation**
+- **RESTful API** built with FastAPI
+- **Modern web interface** built with Next.js
+- **Production-ready deployment** for VPS hosting
 
-> "Love that you casually built an open source version of the most popular product Google built in the last decade"
+## Architecture
 
-> "Loving this initiative and the best I have seen so far especially for a 'non-techie' user."
+This is a **monorepo** containing:
 
-> "Your library was very straightforward to work with. You did Amazing work brother 🙏"
+```
+podcaststudiohub/
+├── apps/
+│   ├── api/              # FastAPI backend (Python)
+│   └── web/              # Next.js frontend (TypeScript/React)
+├── deployment/           # VPS deployment configurations
+├── tests/                # Test suite
+└── [podcastfy core]      # Embedded podcastfy package
+```
 
-> "I think it's awesome that you were inspired/recognize how hard it is to beat NotebookLM's quality, but you did an *incredible* job with this! It sounds incredible, and it's open-source! Thank you for being amazing!"
+### Tech Stack
 
-[![Star History Chart](https://api.star-history.com/svg?repos=souzatharsis/podcastfy&type=Date&theme=dark)](https://api.star-history.com/svg?repos=souzatharsis/podcastfy&type=Date&theme=dark)
+**Backend (FastAPI)**
+- Python 3.11+
+- FastAPI for API framework
+- SQLAlchemy ORM with PostgreSQL
+- Alembic for database migrations
+- Celery + Redis for async task processing
+- Bcrypt for password hashing
+- Podcastfy v0.4.1 for podcast generation
 
-## Audio Examples 🔊
-This sample collection was generated using this [Python Notebook](usage/examples.ipynb).
+**Frontend (Next.js)**
+- Next.js 14 (App Router)
+- TypeScript
+- React 18
+- Tailwind CSS + Shadcn/UI components
+- NextAuth.js for authentication
+- TanStack Query for data fetching
 
-### Images
-Sample 1: Senecio, 1922 (Paul Klee) and Connection of Civilizations (2017) by Gheorghe Virtosu
-***
-<img src="data/images/Senecio.jpeg" alt="Senecio, 1922 (Paul Klee)" width="20%" height="auto"> <img src="data/images/connection.jpg" alt="Connection of Civilizations (2017) by Gheorghe Virtosu " width="21.5%" height="auto">
-<video src="https://github.com/user-attachments/assets/a4134a0d-138c-4ab4-bc70-0f53b3507e6b"></video>  
-***
-Sample 2: The Great Wave off Kanagawa, 1831 (Hokusai) and Takiyasha the Witch and the Skeleton Spectre, c. 1844 (Kuniyoshi)
-***
- <img src="data/images/japan_1.jpg" alt="The Great Wave off Kanagawa, 1831 (Hokusai)" width="20%" height="auto"> <img src="data/images/japan2.jpg" alt="Takiyasha the Witch and the Skeleton Spectre, c. 1844 (Kuniyoshi)" width="21.5%" height="auto"> 
-<video src="https://github.com/user-attachments/assets/f6aaaeeb-39d2-4dde-afaf-e2cd212e9fed"></video>  
-***
-Sample 3: Pop culture icon Taylor Swift and Mona Lisa, 1503 (Leonardo da Vinci)
-***
-<img src="data/images/taylor.png" alt="Taylor Swift" width="28%" height="auto"> <img src="data/images/monalisa.jpeg" alt="Mona Lisa" width="10.5%" height="auto">
-<video src="https://github.com/user-attachments/assets/3b6f7075-159b-4540-946f-3f3907dffbca"></video> 
+**Infrastructure**
+- PostgreSQL 15 for database
+- Redis for caching and task queue
+- Nginx as reverse proxy
+- Systemd for service management
+- VPS deployment (Ubuntu/Debian)
 
+## Features
 
-### Text
-| Audio | Description  | Source |
-|-------|--|--------|
-| <video src="https://github.com/user-attachments/assets/ef41a207-a204-4b60-a11e-06d66a0fbf06"></video>  | Personal Website | [Website](https://www.souzatharsis.com) |
-| [Audio](https://soundcloud.com/high-lander123/amodei?in=high-lander123/sets/podcastfy-sample-audio-longform&si=b8dfaf4e3ddc4651835e277500384156) (`longform=True`) | Lex Fridman Podcast: 5h interview with Dario Amodei Anthropic's CEO |  [Youtube](https://www.youtube.com/watch?v=ugvHCXCOmm4) |
-| [Audio](https://soundcloud.com/high-lander123/benjamin?in=high-lander123/sets/podcastfy-sample-audio-longform&si=dca7e2eec1c94252be18b8794499959a&utm_source=clipboard&utm_medium=text&utm_campaign=social_sharing) (`longform=True`)| Benjamin Franklin's Autobiography | [Book](https://www.gutenberg.org/cache/epub/148/pg148.txt) |
+### Core Podcast Generation
+- Transform multi-modal content (websites, PDFs, images, YouTube) into engaging audio conversations
+- Support for 100+ LLM models via LiteLLM (OpenAI, Anthropic, Google Gemini)
+- Multiple TTS providers (OpenAI, ElevenLabs, Google, Edge TTS)
+- Short-form (2-5 min) and long-form (30+ min) podcasts
+- Multi-language support
 
-### Multi-Lingual Text
-| Language | Content Type | Description | Audio | Source |
-|----------|--------------|-------------|-------|--------|
-| French | Website | Agroclimate research information | [Audio](https://audio.com/thatupiso/audio/podcast-fr-agro) | [Website](https://agroclim.inrae.fr/) |
-| Portuguese-BR | News Article | Election polls in São Paulo | [Audio](https://audio.com/thatupiso/audio/podcast-thatupiso-br) | [Website](https://noticias.uol.com.br/eleicoes/2024/10/03/nova-pesquisa-datafolha-quem-subiu-e-quem-caiu-na-disputa-de-sp-03-10.htm) |
+### Platform Features
+- **User Management**: Secure authentication with session management
+- **Project Organization**: Group episodes into projects
+- **Episode Management**: Create, track, and manage podcast episodes
+- **Content Sources**: Support for URLs, files, and user-provided topics
+- **Background Processing**: Async generation with progress tracking
+- **Multi-tenant**: Complete data isolation per user
+- **Storage**: Local filesystem with optional S3 integration
 
-
-## Quickstart 💻
+## Getting Started
 
 ### Prerequisites
+
 - Python 3.11 or higher
-- `$ pip install ffmpeg` (for audio processing)
+- Node.js 20 or higher
+- PostgreSQL 15+
+- Redis 7+
+- FFmpeg (for audio processing)
 
-### Setup
-1. Install from PyPI
-  `$ pip install podcastfy`
+### Local Development Setup
 
-2. Set up your [API keys](usage/config.md)
+#### 1. Clone the Repository
 
-### Python
-```python
-from podcastfy.client import generate_podcast
-
-audio_file = generate_podcast(urls=["<url1>", "<url2>"])
-```
-### CLI
-```
-python -m podcastfy.client --url <url1> --url <url2>
+```bash
+git clone https://github.com/frankbria/podcaststudiohub.git
+cd podcaststudiohub
 ```
 
-### Fastapi (Beta for urls)
+#### 2. Set Up Backend (API)
+
+```bash
+cd apps/api
+
+# Create virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies (using uv for faster installs)
+uv sync
+# OR using pip
+pip install -r requirements.txt
+
+# Configure environment variables
+cp .env.example .env
+# Edit .env with your settings:
+# - DATABASE_URL
+# - REDIS_URL
+# - JWT_SECRET_KEY
+# - ENCRYPTION_KEY
+# - API keys (OPENAI_API_KEY, GEMINI_API_KEY, etc.)
+
+# Run database migrations
+alembic upgrade head
+
+# Start the API server
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+# In another terminal, start Celery worker
+celery -A src.worker worker --loglevel=info
 ```
-Containerize podcastify and launch the api
-Dockerfile_api
 
-Make requests to the api look at the notebook for a clear example
-fetch_audio(request_data, ENDPOINT, BASE_URL)
+#### 3. Set Up Frontend (Web)
+
+```bash
+cd apps/web
+
+# Install dependencies
+npm install
+
+# Configure environment variables
+cp .env.example .env.local
+# Edit .env.local with your settings:
+# - NEXT_PUBLIC_API_URL=http://localhost:8000
+# - NEXTAUTH_SECRET
+# - NEXTAUTH_URL=http://localhost:3000
+
+# Start development server
+npm run dev
 ```
-  
-## Usage 💻
 
-- [Python Package Quickstart](podcastfy.ipynb)
+#### 4. Access the Application
 
-- [How to](usage/how-to.md)
+- **Frontend**: http://localhost:3000
+- **API Documentation**: http://localhost:8000/docs
+- **API Health Check**: http://localhost:8000/health
 
-- [Python Package Reference Manual](https://podcastfy.readthedocs.io/en/latest/podcastfy.html)
+### Environment Variables
 
-- [CLI](usage/cli.md)
+#### Backend (`apps/api/.env`)
 
-## Customization 🔧
+```bash
+# Database
+DATABASE_URL=postgresql://user:password@localhost/podcastfy
 
-Podcastfy offers a range of customization options to tailor your AI-generated podcasts:
-- Customize podcast [conversation](usage/conversation_custom.md) (e.g. format, style, voices)
-- Choose to run [Local LLMs](usage/local_llm.md) (156+ HuggingFace models)
-- Set other [Configuration Settings](usage/config.md)
+# Redis
+REDIS_URL=redis://localhost:6379/0
 
-## Features ✨
+# Security
+JWT_SECRET_KEY=<generate-with-openssl-rand-hex-32>
+JWT_ALGORITHM=HS256
+ENCRYPTION_KEY=<generate-with-openssl-rand-hex-32>
 
-- Generate conversational content from multiple sources and formats (images, text, websites, YouTube, and PDFs).
-- Generate shorts (2-5 minutes) or longform (30+ minutes) podcasts.
-- Customize transcript and audio generation (e.g., style, language, structure).
-- Generate transcripts using 100+ LLM models (OpenAI, Anthropic, Google etc).
-- Leverage local LLMs for transcript generation for increased privacy and control.
-- Integrate with advanced text-to-speech models (OpenAI, Google, ElevenLabs, and Microsoft Edge).
-- Provide multi-language support for global content creation.
-- Integrate seamlessly with CLI and Python packages for automated workflows.
+# API Settings
+DEBUG=True
+LOG_LEVEL=INFO
+API_HOST=0.0.0.0
+API_PORT=8000
+CORS_ORIGINS=http://localhost:3000
 
-## Built with Podcastfy 🚀
+# AI API Keys (users can override in their profiles)
+OPENAI_API_KEY=sk-...
+GEMINI_API_KEY=...
+ELEVENLABS_API_KEY=...
 
-- [OpenNotebook](https://www.open-notebook.ai/)
-- [SurfSense](https://www.surfsense.net/)
-- [OpenPod](https://openpod.fly.dev/)
-- [Podcast-llm](https://github.com/evandempsey/podcast-llm)
-- [Podcastfy-HuggingFace App](https://huggingface.co/spaces/thatupiso/Podcastfy.ai_demo)
+# Storage (optional S3)
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_S3_BUCKET=...
+```
 
+#### Frontend (`apps/web/.env.local`)
 
-## Updates 🚀🚀
+```bash
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXTAUTH_URL=http://localhost:3000
+NEXTAUTH_SECRET=<generate-with-openssl-rand-hex-32>
+```
 
-### v0.4.0+ release
-- Leverage natural conversational multi-Speaker TTS model
-- Generate short or longform podcasts
-- Generate podcasts from input topic using grounded real-time web search
-- Integrate with 100+ LLM models (OpenAI, Anthropic, Google etc) for transcript generation
+## Production Deployment
 
-See [CHANGELOG](CHANGELOG.md) for more details.
+Deployment to **47.88.89.175** (`/opt/podcaststudiohub/`) using **PM2** for process management.
 
+### Automated Deployment (Recommended)
+
+**GitHub Actions automatically deploys on push to `main`:**
+
+```bash
+git push origin main
+```
+
+The workflow (`.github/workflows/deploy-dev.yml`):
+- Runs tests (API + Frontend)
+- Builds Next.js frontend
+- Syncs code via rsync
+- Installs dependencies with `uv` and `npm`
+- Runs database migrations
+- Restarts PM2 processes
+- Performs health checks
+
+**Manual trigger in GitHub:**
+1. Go to **Actions** tab
+2. Select **Deploy to Development**
+3. Click **Run workflow**
+
+### Manual Deployment
+
+For manual deployment that parallels the GitHub Actions workflow, see [`deployment/README.md`](deployment/README.md).
+
+### Deployment Features
+
+- **Process Manager**: PM2 for all services (API, Celery, Frontend)
+- **Python Dependencies**: Managed with `uv`
+- **Database Migrations**: Automated Alembic migrations
+- **Nginx Reverse Proxy**: Routes traffic to PM2 processes
+- **Health Checks**: Automated verification after deployment
+- **SSL/TLS**: Configured for https://dev.podcaststudiohub.me
+
+See [`deployment/README.md`](deployment/README.md) for complete deployment documentation and troubleshooting.
+
+## Project Structure
+
+```
+podcaststudiohub/
+├── apps/
+│   ├── api/                          # FastAPI backend
+│   │   ├── src/
+│   │   │   ├── api/                  # API endpoints (routers)
+│   │   │   ├── models/               # SQLAlchemy models
+│   │   │   ├── schemas/              # Pydantic schemas
+│   │   │   ├── services/             # Business logic
+│   │   │   │   ├── auth_service.py   # Authentication
+│   │   │   │   ├── podcast_service.py # Podcast generation
+│   │   │   │   └── storage_service.py # File storage
+│   │   │   ├── middleware/           # CORS, tenant context
+│   │   │   ├── routers/              # API route handlers
+│   │   │   ├── config.py             # Configuration
+│   │   │   ├── database.py           # Database connection
+│   │   │   ├── main.py               # FastAPI app
+│   │   │   └── worker.py             # Celery worker
+│   │   ├── alembic/                  # Database migrations
+│   │   └── pyproject.toml            # Python dependencies
+│   │
+│   └── web/                          # Next.js frontend
+│       ├── src/
+│       │   ├── app/                  # App router pages
+│       │   ├── components/           # React components
+│       │   ├── lib/                  # Utilities
+│       │   └── styles/               # CSS styles
+│       └── package.json              # Node dependencies
+│
+├── deployment/                       # Deployment configs
+│   ├── nginx/                        # Nginx configuration
+│   ├── systemd/                      # Systemd service files
+│   ├── scripts/                      # Deployment scripts
+│   ├── QUICKSTART.md                 # Deployment guide
+│   └── DEPLOYMENT.md                 # Full deployment docs
+│
+├── tests/                            # Test suite
+│   ├── test_api.py                   # API tests
+│   ├── test_auth.py                  # Auth tests
+│   └── ...
+│
+├── data/                             # Runtime data
+│   ├── audio/                        # Generated podcasts
+│   └── transcripts/                  # Generated transcripts
+│
+├── .github/workflows/                # CI/CD workflows
+│   └── deploy.yml                    # Deployment workflow
+│
+├── pyproject.toml                    # Root Python config (podcastfy)
+├── package.json                      # Root Node config
+├── docker-compose.yml                # Local development stack
+├── CLAUDE.md                         # Claude Code instructions
+└── README.md                         # This file
+```
+
+## API Endpoints
+
+### Authentication
+- `POST /api/auth/register` - Register new user
+- `POST /api/auth/login` - Login user
+- `POST /api/auth/logout` - Logout user
+- `GET /api/auth/me` - Get current user
+
+### Projects
+- `GET /api/projects` - List user's projects
+- `POST /api/projects` - Create new project
+- `GET /api/projects/{id}` - Get project details
+- `PUT /api/projects/{id}` - Update project
+- `DELETE /api/projects/{id}` - Delete project
+
+### Episodes
+- `GET /api/episodes` - List episodes
+- `POST /api/episodes` - Create episode
+- `GET /api/episodes/{id}` - Get episode details
+- `PUT /api/episodes/{id}` - Update episode
+- `DELETE /api/episodes/{id}` - Delete episode
+
+### Content & Generation
+- `POST /api/content/extract` - Extract content from source
+- `POST /api/generate/podcast` - Generate podcast (async)
+- `GET /api/generate/status/{task_id}` - Get generation status
+- `GET /api/episodes/{id}/audio` - Download audio file
+
+See full API documentation at http://localhost:8000/docs (when running locally).
+
+## Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=src --cov-report=html
+
+# Run specific test file
+pytest tests/test_api.py
+
+# Run frontend tests
+cd apps/web
+npm test
+
+# Run end-to-end tests with Playwright
+npx playwright test
+```
+
+## Development Workflow
+
+### Backend Development
+
+```bash
+cd apps/api
+
+# Activate virtual environment
+source .venv/bin/activate
+
+# Install new dependency
+uv add <package-name>
+
+# Create database migration
+alembic revision --autogenerate -m "Description"
+
+# Run migration
+alembic upgrade head
+
+# Run tests
+pytest
+
+# Format code
+black src/ tests/
+ruff check src/ tests/
+```
+
+### Frontend Development
+
+```bash
+cd apps/web
+
+# Install new dependency
+npm install <package-name>
+
+# Run development server
+npm run dev
+
+# Build for production
+npm run build
+
+# Run production build locally
+npm start
+
+# Lint
+npm run lint
+```
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+### Code Style
+
+- **Python**: Follow PEP 8, use Black formatter, type hints required
+- **TypeScript**: Follow ESLint config, use Prettier formatter
+- **Git**: Conventional commits preferred
+
+## Upstream Podcastfy Package
+
+This project is built on top of the excellent [Podcastfy](https://github.com/souzatharsis/podcastfy) package by Tharsis T. P. Souza. The core podcast generation engine (in the root directory) comes from that package.
+
+### Syncing with Upstream
+
+To update to a newer version of Podcastfy:
+
+```bash
+# See UPSTREAM_SYNC.md for detailed instructions
+git remote add upstream https://github.com/souzatharsis/podcastfy.git
+git fetch upstream
+# Follow merge strategy in UPSTREAM_SYNC.md
+```
 
 ## License
 
-This software is licensed under [Apache 2.0](LICENSE). See [instructions](usage/license-guide.md) if you would like to use podcastfy in your software.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
-## Contributing 🤝
+The embedded Podcastfy package is also licensed under Apache 2.0.
 
-We welcome contributions! See [Guidelines](GUIDELINES.md) for more details.
+## Acknowledgments
 
-## Example Use Cases 🎧🎶
+- [Podcastfy](https://github.com/souzatharsis/podcastfy) by Tharsis T. P. Souza - The core podcast generation engine
+- [FastAPI](https://fastapi.tiangolo.com/) - Modern Python web framework
+- [Next.js](https://nextjs.org/) - React framework for production
+- [Shadcn/UI](https://ui.shadcn.com/) - Beautiful UI components
 
-- **Content Creators** can use `Podcastfy` to convert blog posts, articles, or multimedia content into podcast-style audio, enabling them to reach broader audiences. By transforming content into an audio format, creators can cater to users who prefer listening over reading.
+## Support
 
-- **Educators** can transform lecture notes, presentations, and visual materials into audio conversations, making educational content more accessible to students with different learning preferences. This is particularly beneficial for students with visual impairments or those who have difficulty processing written information.
+- **Documentation**: See [`deployment/`](deployment/) directory for deployment docs
+- **Issues**: Report bugs or request features via GitHub Issues
+- **API Docs**: Available at `/docs` endpoint when API is running
 
-- **Researchers** can convert research papers, visual data, and technical content into conversational audio. This makes it easier for a wider audience, including those with disabilities, to consume and understand complex scientific information. Researchers can also create audio summaries of their work to enhance accessibility.
+---
 
-- **Accessibility Advocates** can use `Podcastfy` to promote digital accessibility by providing a tool that converts multimodal content into auditory formats. This helps individuals with visual impairments, dyslexia, or other disabilities that make it challenging to consume written or visual content.
-  
-## Contributors
-
-<a href="https://github.com/souzatharsis/podcastfy/graphs/contributors">
-  <img alt="contributors" src="https://contrib.rocks/image?repo=souzatharsis/podcastfy"/>
-</a>
-
-<p align="right" style="font-size: 14px; color: #555; margin-top: 20px;">
-    <a href="#readme-top" style="text-decoration: none; color: #007bff; font-weight: bold;">
-        ↑ Back to Top ↑
-    </a>
-</p>
+**Server**: 47.88.89.175
+**Repository**: https://github.com/frankbria/podcaststudiohub
+**Upstream**: https://github.com/souzatharsis/podcastfy

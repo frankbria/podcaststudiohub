@@ -1,436 +1,334 @@
-# Podcastfy Studio - Deployment Configuration
+# Podcastfy Studio Hub - Deployment Guide
 
-This directory contains all configuration files and scripts needed to deploy Podcastfy Studio to production.
+## Overview
 
-## Server Information
+This application deploys to **47.88.89.175** at `/opt/podcaststudiohub/` using **PM2** for process management.
 
-- **IP Address**: 47.88.89.175
-- **Target Directory**: `/var/www/podcastfy/`
-- **OS**: Ubuntu/Debian
-- **Web Server**: Nginx
-- **Domain**: *To be configured*
+## Deployment Methods
 
-## Directory Structure
+### 1. Automated Deployment (Recommended)
 
-```
-deployment/
-├── README.md                    # This file
-├── QUICKSTART.md               # Step-by-step deployment guide (START HERE!)
-├── DEPLOYMENT.md               # Comprehensive deployment documentation
-├── nginx/
-│   └── podcastfy.conf          # Nginx reverse proxy configuration
-├── systemd/
-│   ├── podcastfy-api.service   # FastAPI/Uvicorn service
-│   ├── podcastfy-celery.service # Celery worker service
-│   └── podcastfy-frontend.service # Next.js production service
-└── scripts/
-    ├── setup-server.sh         # Initial server setup script
-    └── deploy.sh               # Automated deployment script
+**GitHub Actions automatically deploys when code is pushed to `main`.**
+
+The workflow is defined in `.github/workflows/deploy-dev.yml` and:
+- ✅ Runs tests (API + Frontend)
+- ✅ Builds frontend with Next.js
+- ✅ Syncs code to server via rsync
+- ✅ Installs dependencies with `uv` (API) and `npm` (frontend)
+- ✅ Runs database migrations
+- ✅ Restarts PM2 processes
+- ✅ Performs health checks
+
+**To trigger deployment:**
+```bash
+git push origin main
 ```
 
-## Quick Start
+**To deploy manually without tests:**
+1. Go to **Actions** tab in GitHub
+2. Select **Deploy to Development** workflow
+3. Click **Run workflow**
+4. Check **Skip tests** if needed
+5. Click **Run workflow**
 
-**New deployment? Start here:**
+### 2. Manual Deployment
 
-1. Read `QUICKSTART.md` for step-by-step instructions
-2. Transfer files to server: `scp -r deployment/ root@47.88.89.175:/tmp/`
-3. SSH to server: `ssh root@47.88.89.175`
-4. Run setup: `/tmp/deployment/scripts/setup-server.sh`
-5. Configure environment variables
-6. Run deployment: `./deployment/scripts/deploy.sh`
+If you need to deploy manually (parallel to GitHub Actions workflow):
 
-## File Descriptions
+#### Prerequisites
+- SSH access to server: `ssh root@47.88.89.175`
+- Server has PM2 installed globally
+- Server has `uv` installed for Python dependencies
 
-### Configuration Files
-
-**`nginx/podcastfy.conf`**
-- Nginx reverse proxy configuration
-- Routes `/api/*` to FastAPI backend (port 8000)
-- Routes `/*` to Next.js frontend (port 3000)
-- SSL ready (commented out, uncomment after certbot)
-- SSE support for real-time progress updates
-- Long timeouts (600s) for podcast generation
-- 50MB file upload limit
-
-**`systemd/podcastfy-api.service`**
-- FastAPI application service
-- Runs with Uvicorn (4 workers)
-- User: www-data
-- Working directory: `/var/www/podcastfy/api`
-- Environment: `.env` file
-- Auto-restart on failure
-
-**`systemd/podcastfy-celery.service`**
-- Celery worker service
-- Concurrency: 2 workers
-- Max tasks per child: 10
-- Time limit: 900s (15 min)
-- Soft time limit: 600s (10 min)
-- Auto-restart on failure
-
-**`systemd/podcastfy-frontend.service`**
-- Next.js production server
-- Port: 3000
-- Environment: `.env.local` file
-- User: www-data
-- Auto-restart on failure
-
-### Scripts
-
-**`scripts/setup-server.sh`**
-- **Purpose**: Initial server infrastructure setup
-- **Run once**: On first deployment only
-- **Actions**:
-  - Creates `/var/www/podcastfy/` directory structure
-  - Installs system dependencies (Python 3.11, Node.js 20, PostgreSQL, Redis, Nginx)
-  - Creates PostgreSQL database and user
-  - Configures Redis with memory limits
-  - Copies Nginx configuration
-  - Creates environment file templates
-
-**`scripts/deploy.sh`**
-- **Purpose**: Deploy application code and restart services
-- **Run**: Every time you want to deploy updates
-- **Actions**:
-  - Builds Next.js frontend locally
-  - Deploys frontend and API via rsync
-  - Installs Python dependencies in virtual environment
-  - Installs Node.js dependencies
-  - Runs database migrations (Alembic)
-  - Restarts all services (API, Celery, Frontend)
-  - Checks service status
-
-### Documentation
-
-**`QUICKSTART.md`**
-- Step-by-step deployment guide
-- Start here if this is your first deployment
-- Includes troubleshooting and checklists
-
-**`DEPLOYMENT.md`**
-- Comprehensive deployment documentation
-- Service management commands
-- Monitoring and troubleshooting
-- Security configuration
-- Backup procedures
-- Performance tuning
-
-## Deployment Workflow
-
-### First-Time Deployment
+#### Step 1: Build Frontend Locally
 
 ```bash
-# 1. Transfer deployment files
-cd /home/frankbria/projects/podcastfy
-tar -czf podcastfy-deployment.tar.gz deployment/
-scp podcastfy-deployment.tar.gz root@47.88.89.175:/tmp/
-
-# 2. SSH to server
-ssh root@47.88.89.175
-
-# 3. Extract and run setup
-cd /tmp
-tar -xzf podcastfy-deployment.tar.gz
-chmod +x deployment/scripts/setup-server.sh
-./deployment/scripts/setup-server.sh
-
-# 4. Install systemd services
-cp deployment/systemd/*.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable podcastfy-api podcastfy-celery podcastfy-frontend
-
-# 5. Configure environment variables
-nano /var/www/podcastfy/api/.env.template
-# Edit: DATABASE_URL password, ENCRYPTION_KEY, JWT_SECRET_KEY
-
-cp /var/www/podcastfy/api/.env.template /var/www/podcastfy/api/.env
-chmod 600 /var/www/podcastfy/api/.env
-chown www-data:www-data /var/www/podcastfy/api/.env
-
-# 6. Update PostgreSQL password
-sudo -u postgres psql -c "ALTER USER podcastfy_user WITH PASSWORD 'YOUR_PASSWORD';"
-
-# 7. Return to local machine and deploy
-exit
-./deployment/scripts/deploy.sh
+cd apps/web
+npm ci
+npm run build
+cd ../..
 ```
 
-### Subsequent Deployments
+#### Step 2: Deploy API
 
 ```bash
-# From local machine
-cd /home/frankbria/projects/podcastfy
-git pull origin main
-./deployment/scripts/deploy.sh
+# Sync API source
+rsync -avz --exclude='__pycache__' --exclude='*.pyc' --exclude='.pytest_cache' --exclude='.venv' \
+  apps/api/src/ root@47.88.89.175:/opt/podcaststudiohub/api/src/
+
+# Sync API config
+rsync -avz apps/api/pyproject.toml apps/api/uv.lock apps/api/alembic.ini \
+  root@47.88.89.175:/opt/podcaststudiohub/api/
+
+# Sync migrations
+rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
+  apps/api/alembic/ root@47.88.89.175:/opt/podcaststudiohub/api/alembic/
+
+# Install dependencies and run migrations on server
+ssh root@47.88.89.175 << 'EOF'
+cd /opt/podcaststudiohub/api
+uv sync
+uv run alembic upgrade head
+
+# Clear Python cache
+find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+find . -type f -name '*.pyc' -delete 2>/dev/null || true
+
+# Restart API
+pm2 delete podcaststudiohub-api 2>/dev/null || true
+pm2 start uv --name podcaststudiohub-api --cwd /opt/podcaststudiohub/api \
+  -- run uvicorn src.main:app --host 0.0.0.0 --port 8001
+pm2 save
+EOF
 ```
 
-### Domain Configuration (When Ready)
+#### Step 3: Deploy Frontend
 
 ```bash
-# 1. SSH to server
-ssh root@47.88.89.175
+# Sync public files
+rsync -avz apps/web/public/ root@47.88.89.175:/opt/podcaststudiohub/frontend/public/
 
-# 2. Update Nginx configuration
-nano /etc/nginx/sites-available/podcastfy
-# Replace: YOUR_DOMAIN with actual domain
-# Replace: _ in server_name with actual domain
+# Sync source files
+rsync -avz apps/web/src/ root@47.88.89.175:/opt/podcaststudiohub/frontend/src/
 
-# 3. Test and reload Nginx
-nginx -t
-systemctl reload nginx
+# Sync config files
+rsync -avz apps/web/package.json apps/web/next.config.mjs apps/web/tsconfig.json \
+  apps/web/tailwind.config.ts apps/web/postcss.config.mjs \
+  root@47.88.89.175:/opt/podcaststudiohub/frontend/
 
-# 4. Install SSL certificate
-certbot --nginx -d YOUR_DOMAIN
+# Install dependencies and rebuild on server
+ssh root@47.88.89.175 << 'EOF'
+cd /opt/podcaststudiohub/frontend
 
-# 5. Update frontend environment
-nano /var/www/podcastfy/frontend/.env.local
-# Set: NEXT_PUBLIC_API_URL=https://YOUR_DOMAIN/api
-# Set: NEXTAUTH_URL=https://YOUR_DOMAIN
-# Set: NEXTAUTH_SECRET=<openssl rand -hex 32>
+# Create environment file
+cat > .env.production << 'ENVEOF'
+NEXT_PUBLIC_API_URL=https://dev.podcaststudiohub.me/api
+NEXTAUTH_SECRET=<your-secret>
+NEXTAUTH_URL=https://dev.podcaststudiohub.me
+PORT=3003
+ENVEOF
 
-cp /var/www/podcastfy/frontend/.env.local.template /var/www/podcastfy/frontend/.env.local
+# Install and build
+npm ci
+npm run build
 
-# 6. Restart frontend
-systemctl restart podcastfy-frontend
+# Update runtime config
+echo "window.__ENV__ = { API_URL: 'https://dev.podcaststudiohub.me/api' };" > public/config.js
+
+# Restart frontend
+pm2 delete podcaststudiohub-frontend 2>/dev/null || true
+PORT=3003 \
+NEXT_PUBLIC_API_URL='https://dev.podcaststudiohub.me/api' \
+NEXTAUTH_SECRET='<your-secret>' \
+NEXTAUTH_URL='https://dev.podcaststudiohub.me' \
+pm2 start npm --name podcaststudiohub-frontend --cwd /opt/podcaststudiohub/frontend -- start
+pm2 save
+EOF
+```
+
+#### Step 4: Restart Celery
+
+```bash
+ssh root@47.88.89.175 << 'EOF'
+cd /opt/podcaststudiohub/api
+
+pm2 delete podcaststudiohub-celery 2>/dev/null || true
+pm2 start uv --name podcaststudiohub-celery --cwd /opt/podcaststudiohub/api \
+  -- run celery -A src.worker:celery_app worker --loglevel=info
+pm2 save
+EOF
+```
+
+#### Step 5: Verify Deployment
+
+```bash
+# Check PM2 processes
+ssh root@47.88.89.175 "pm2 list"
+
+# Check API health
+curl https://dev.podcaststudiohub.me/api/health
+
+# Check frontend
+curl https://dev.podcaststudiohub.me
+```
+
+## Server Structure
+
+```
+/opt/podcaststudiohub/
+├── api/                    # FastAPI backend
+│   ├── .venv/             # Python virtual env (created by uv)
+│   ├── src/               # Source code
+│   ├── alembic/           # Database migrations
+│   ├── pyproject.toml     # Python dependencies
+│   └── .env               # Environment variables (not in git)
+│
+└── frontend/              # Next.js frontend
+    ├── .next/             # Built Next.js files
+    ├── node_modules/      # Node dependencies
+    ├── src/               # Source code
+    ├── public/            # Static files
+    ├── package.json       # Node dependencies
+    └── .env.production    # Environment variables (not in git)
+```
+
+## PM2 Processes
+
+**View all processes:**
+```bash
+ssh root@47.88.89.175 "pm2 list"
+```
+
+**Check logs:**
+```bash
+ssh root@47.88.89.175 "pm2 logs podcaststudiohub-api --lines 50"
+ssh root@47.88.89.175 "pm2 logs podcaststudiohub-frontend --lines 50"
+ssh root@47.88.89.175 "pm2 logs podcaststudiohub-celery --lines 50"
+```
+
+**Restart individual service:**
+```bash
+ssh root@47.88.89.175 "pm2 restart podcaststudiohub-api"
+ssh root@47.88.89.175 "pm2 restart podcaststudiohub-frontend"
+ssh root@47.88.89.175 "pm2 restart podcaststudiohub-celery"
+```
+
+**Restart all:**
+```bash
+ssh root@47.88.89.175 "pm2 restart all"
 ```
 
 ## Environment Variables
 
-### API Environment (`/var/www/podcastfy/api/.env`)
+### GitHub Secrets/Variables
 
-**Required:**
+Configure in **Settings** → **Environments** → **development**:
+
+**Variables:**
+- `SERVER_HOST`: `47.88.89.175`
+- `SERVER_PATH`: `/opt/podcaststudiohub`
+- `API_URL`: `https://dev.podcaststudiohub.me/api`
+- `FRONTEND_URL`: `https://dev.podcaststudiohub.me`
+- `NEXTAUTH_URL`: `https://dev.podcaststudiohub.me`
+- `API_PORT`: `8001`
+- `FRONTEND_PORT`: `3003`
+
+**Secrets:**
+- `SSH_PRIVATE_KEY`: SSH key for deployment
+- `SERVER_USER`: `root`
+- `NEXTAUTH_SECRET`: Generated with `openssl rand -base64 32`
+
+### Server Environment Files
+
+**API (`/opt/podcaststudiohub/api/.env`):**
 ```bash
-DATABASE_URL=postgresql://podcastfy_user:PASSWORD@localhost/podcastfy
+DATABASE_URL=postgresql://user:pass@localhost/podcastfy
 REDIS_URL=redis://localhost:6379/0
-ENCRYPTION_KEY=<openssl rand -hex 32>
-JWT_SECRET_KEY=<openssl rand -hex 32>
-JWT_ALGORITHM=RS256
+JWT_SECRET_KEY=<generate-with-openssl-rand-hex-32>
+JWT_ALGORITHM=HS256
+ENCRYPTION_KEY=<generate-with-openssl-rand-hex-32>
 DEBUG=False
 LOG_LEVEL=INFO
+
+# Optional - users can provide their own
+OPENAI_API_KEY=
+GEMINI_API_KEY=
+ELEVENLABS_API_KEY=
 ```
 
-**Optional (users can provide their own):**
+**Frontend (`/opt/podcaststudiohub/frontend/.env.production`):**
 ```bash
-OPENAI_API_KEY=sk-...
-GEMINI_API_KEY=...
-ELEVENLABS_API_KEY=...
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_S3_BUCKET=...
+NEXT_PUBLIC_API_URL=https://dev.podcaststudiohub.me/api
+NEXTAUTH_URL=https://dev.podcaststudiohub.me
+NEXTAUTH_SECRET=<same-as-github-secret>
+PORT=3003
 ```
 
-### Frontend Environment (`/var/www/podcastfy/frontend/.env.local`)
+## Nginx Configuration
 
-**Configure after domain is set up:**
+Nginx reverse proxy configuration is in `deployment/nginx/podcastfy.conf`.
+
+**Routes:**
+- `https://dev.podcaststudiohub.me/api` → `localhost:8001` (API)
+- `https://dev.podcaststudiohub.me` → `localhost:3003` (Frontend)
+
+**To update Nginx config:**
 ```bash
-NEXT_PUBLIC_API_URL=https://YOUR_DOMAIN/api
-NEXTAUTH_URL=https://YOUR_DOMAIN
-NEXTAUTH_SECRET=<openssl rand -hex 32>
-```
-
-## Service Management
-
-### Start/Stop/Restart
-
-```bash
-# All services
-systemctl restart podcastfy-api podcastfy-celery podcastfy-frontend
-
-# Individual services
-systemctl start podcastfy-api
-systemctl stop podcastfy-api
-systemctl restart podcastfy-api
-systemctl status podcastfy-api
-
-# View logs
-journalctl -u podcastfy-api -f
-journalctl -u podcastfy-celery -f
-journalctl -u podcastfy-frontend -f
-```
-
-### Check Status
-
-```bash
-# All services at once
-systemctl status podcastfy-api podcastfy-celery podcastfy-frontend nginx
-
-# Check listening ports
-netstat -tulpn | grep -E '(3000|8000)'
-
-# Test API health
-curl http://localhost:8000/health
-
-# Test frontend
-curl http://localhost:3000
-```
-
-## Directory Structure on Server
-
-After deployment, the server will have:
-
-```
-/var/www/podcastfy/
-├── api/                       # FastAPI application
-│   ├── .venv/                 # Python virtual environment
-│   ├── .env                   # API environment variables
-│   ├── src/                   # Source code
-│   ├── alembic/              # Database migrations
-│   └── requirements.txt       # Python dependencies
-├── frontend/                  # Next.js application
-│   ├── .next/                 # Built Next.js files
-│   ├── .env.local            # Frontend environment variables
-│   ├── node_modules/          # Node dependencies
-│   └── ...                    # Frontend source
-├── logs/                      # Application logs
-│   ├── frontend-access.log
-│   └── frontend-error.log
-├── ssl/                       # SSL certificates (Let's Encrypt)
-├── uploads/                   # User uploaded files
-└── data/
-    └── audio/                 # Generated podcast files
-
-/etc/nginx/sites-available/podcastfy    # Nginx config
-/etc/systemd/system/
-├── podcastfy-api.service
-├── podcastfy-celery.service
-└── podcastfy-frontend.service
-```
-
-## Security Checklist
-
-Before going live:
-
-- [ ] Change default PostgreSQL password
-- [ ] Generate strong ENCRYPTION_KEY and JWT_SECRET_KEY
-- [ ] Configure firewall (allow only SSH, HTTP, HTTPS)
-- [ ] Set up SSL with Let's Encrypt
-- [ ] Set proper file permissions (www-data:www-data)
-- [ ] Configure automatic security updates
-- [ ] Set up database backups
-- [ ] Review Nginx security headers
-- [ ] Enable fail2ban for SSH protection (recommended)
-
-## Firewall Configuration
-
-```bash
-# Enable firewall
-ufw enable
-
-# Allow SSH (CRITICAL - do this first!)
-ufw allow 22/tcp
-
-# Allow HTTP and HTTPS
-ufw allow 80/tcp
-ufw allow 443/tcp
-
-# Check status
-ufw status
+scp deployment/nginx/podcastfy.conf root@47.88.89.175:/etc/nginx/sites-available/podcastfy
+ssh root@47.88.89.175 "nginx -t && systemctl reload nginx"
 ```
 
 ## Troubleshooting
 
-### API won't start
+### Deployment Failed in GitHub Actions
+
+1. Check **Actions** tab for error logs
+2. Common issues:
+   - SSH connection failed → Verify `SSH_PRIVATE_KEY` secret
+   - Health check failed → Check PM2 logs on server
+   - Build failed → Check build errors in workflow logs
+
+### Service Not Starting
+
 ```bash
-journalctl -u podcastfy-api -n 50
-# Check: DATABASE_URL, missing dependencies, port conflicts
+# SSH to server
+ssh root@47.88.89.175
+
+# Check PM2 status
+pm2 list
+pm2 logs podcaststudiohub-api --lines 100
+
+# Try restarting
+pm2 restart podcaststudiohub-api
+pm2 save
 ```
 
-### Celery not processing
+### Database Migration Issues
+
 ```bash
-journalctl -u podcastfy-celery -n 50
-redis-cli ping  # Should return PONG
+ssh root@47.88.89.175 << 'EOF'
+cd /opt/podcaststudiohub/api
+uv run alembic current
+uv run alembic history
+uv run alembic upgrade head
+EOF
 ```
 
-### Frontend not loading
+### Clear All and Restart
+
 ```bash
-journalctl -u podcastfy-frontend -n 50
-netstat -tulpn | grep 3000
-cd /var/www/podcastfy/frontend && npm run build
+ssh root@47.88.89.175 << 'EOF'
+cd /opt/podcaststudiohub/api
+pm2 delete all
+pm2 save --force
+
+# Restart API
+pm2 start uv --name podcaststudiohub-api --cwd /opt/podcaststudiohub/api \
+  -- run uvicorn src.main:app --host 0.0.0.0 --port 8001
+
+# Restart Frontend
+cd /opt/podcaststudiohub/frontend
+PORT=3003 pm2 start npm --name podcaststudiohub-frontend --cwd /opt/podcaststudiohub/frontend -- start
+
+# Restart Celery
+cd /opt/podcaststudiohub/api
+pm2 start uv --name podcaststudiohub-celery --cwd /opt/podcaststudiohub/api \
+  -- run celery -A src.worker:celery_app worker --loglevel=info
+
+pm2 save
+pm2 list
+EOF
 ```
 
-### Nginx errors
-```bash
-nginx -t
-tail -f /var/www/podcastfy/logs/frontend-error.log
-```
+## GitHub Actions Workflow Details
 
-See `DEPLOYMENT.md` for detailed troubleshooting.
+See `.github/workflows/deploy-dev.yml` for the complete workflow.
 
-## Monitoring
-
-### System Resources
-```bash
-htop                           # CPU and memory
-df -h                          # Disk usage
-du -sh /var/www/podcastfy/*   # Application size
-```
-
-### Service Health
-```bash
-systemctl status podcastfy-api podcastfy-celery podcastfy-frontend nginx
-curl http://localhost:8000/health
-```
-
-### Logs
-```bash
-# Real-time monitoring
-journalctl -u podcastfy-api -f
-journalctl -u podcastfy-celery -f
-journalctl -u podcastfy-frontend -f
-tail -f /var/www/podcastfy/logs/frontend-access.log
-```
-
-## Backup
-
-### Database Backup
-```bash
-# Manual backup
-sudo -u postgres pg_dump podcastfy | gzip > /var/backups/podcastfy-$(date +%Y%m%d).sql.gz
-
-# Automated daily backup (add to crontab)
-0 2 * * * sudo -u postgres pg_dump podcastfy | gzip > /var/backups/podcastfy-$(date +\%Y\%m\%d).sql.gz
-```
-
-### File Backup
-```bash
-tar -czf /var/backups/podcastfy-files-$(date +%Y%m%d).tar.gz \
-    /var/www/podcastfy/uploads/ \
-    /var/www/podcastfy/data/audio/
-```
-
-## Performance Tuning
-
-See `DEPLOYMENT.md` for detailed performance tuning (Nginx workers, PostgreSQL buffers, Redis memory).
-
-## Support
-
-- **QUICKSTART.md**: Step-by-step deployment guide
-- **DEPLOYMENT.md**: Comprehensive documentation
-- **GitHub Issues**: https://github.com/souzatharsis/podcastfy/issues
-
-## Files in This Directory
-
-| File | Purpose | When to Use |
-|------|---------|-------------|
-| `QUICKSTART.md` | Step-by-step guide | First deployment |
-| `DEPLOYMENT.md` | Comprehensive docs | Reference, troubleshooting |
-| `nginx/podcastfy.conf` | Nginx config | Copy to `/etc/nginx/sites-available/` |
-| `systemd/*.service` | Service definitions | Copy to `/etc/systemd/system/` |
-| `scripts/setup-server.sh` | Initial setup | Run once on new server |
-| `scripts/deploy.sh` | Deploy updates | Run every deployment |
-
-## Next Steps
-
-1. **Read `QUICKSTART.md`** for detailed step-by-step instructions
-2. **Run setup script** to prepare server infrastructure
-3. **Configure environment variables** (API keys, database password)
-4. **Deploy application** using deploy.sh script
-5. **Configure domain** when ready
-6. **Set up SSL** with Let's Encrypt
-7. **Test everything** works end-to-end
+See `.github/DEPLOYMENT_SETUP.md` for GitHub configuration instructions.
 
 ---
 
 **Server**: 47.88.89.175
-**Target**: `/var/www/podcastfy/`
-**Domain**: *To be configured*
+**Path**: `/opt/podcaststudiohub/`
+**Process Manager**: PM2
+**Domain**: https://dev.podcaststudiohub.me

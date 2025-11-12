@@ -62,11 +62,16 @@ class ProjectResponse(BaseModel):
     id: UUID
     user_id: UUID
     tenant_id: UUID
-    title: str
+    name: str  # Database model uses 'name' field
     description: Optional[str] = None
     podcast_metadata: Dict[str, Any]
     created_at: datetime
     updated_at: datetime
     episode_count: int = Field(default=0, description="Number of episodes in this project")
+
+    @property
+    def title(self) -> str:
+        """Alias for 'name' field for backwards compatibility"""
+        return self.name
 
     model_config = ConfigDict(from_attributes=True)

@@ -70,7 +70,7 @@ async def create_project(
     project = Project(
         user_id=current_user.id,
         tenant_id=current_user.tenant_id,
-        title=project_data.title,
+        name=project_data.title,  # Schema uses 'title', model uses 'name'
         description=project_data.description,
         podcast_metadata=project_data.podcast_metadata.model_dump(),
     )

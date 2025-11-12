@@ -3,7 +3,9 @@ Async database configuration and session management
 """
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base
-from typing import AsyncGenerator
+from sqlalchemy import text
+from typing import AsyncGenerator, Optional
+from fastapi import Request
 
 from src.config import settings
 
@@ -29,18 +31,33 @@ AsyncSessionLocal = async_sessionmaker(
 Base = declarative_base()
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
     """
-    Dependency for getting async database sessions.
+    Dependency for getting async database sessions with tenant context.
+
+    This dependency:
+    1. Creates a new database session
+    2. If request.state.tenant_id is set, configures PostgreSQL RLS context
+    3. Sets app.tenant_id session variable for Row-Level Security policies
+    4. Yields the session for use in route handlers
+    5. Commits or rolls back based on success/failure
 
     Usage:
-        @app.get("/items")
-        async def read_items(db: AsyncSession = Depends(get_db)):
-            result = await db.execute(select(Item))
+        @app.get("/projects")
+        async def list_projects(db: AsyncSession = Depends(get_db)):
+            # RLS policies will automatically filter by tenant_id
+            result = await db.execute(select(Project))
             return result.scalars().all()
+
+    Args:
+        request: FastAPI request (injected by FastAPI automatically)
     """
     async with AsyncSessionLocal() as session:
         try:
+            # Set tenant context for RLS if available
+            if hasattr(request.state, 'tenant_id') and request.state.tenant_id:
+                await set_tenant_context(session, str(request.state.tenant_id))
+
             yield session
             await session.commit()
         except Exception:
@@ -50,12 +67,42 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             await session.close()
 
 
+# Alias for backwards compatibility
+async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
+    """
+    Backwards compatible alias for get_db_session.
+
+    This allows existing code to continue using get_db as the dependency name.
+    """
+    async for session in get_db_session(request):
+        yield session
+
+
 async def set_tenant_context(db: AsyncSession, tenant_id: str) -> None:
     """
-    Set the tenant_id in PostgreSQL session for Row-Level Security.
+    Manually set the tenant_id in PostgreSQL session for Row-Level Security.
+
+    This is typically not needed as get_db() handles it automatically.
+    Use this only for manual session management outside of request context.
+
+    PostgreSQL's SET LOCAL command doesn't support bind parameters, so we
+    validate the tenant_id is a valid UUID before using it in the query.
 
     Args:
         db: Async database session
-        tenant_id: UUID of the tenant
+        tenant_id: UUID of the tenant (as string)
+
+    Raises:
+        ValueError: If tenant_id is not a valid UUID format
     """
-    await db.execute(f"SET LOCAL app.tenant_id = '{tenant_id}'")
+    from uuid import UUID
+
+    # Validate tenant_id is a valid UUID to prevent SQL injection
+    try:
+        UUID(tenant_id)
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid tenant_id format: {tenant_id}")
+
+    # PostgreSQL SET LOCAL doesn't support bind parameters
+    # Safe to use format since we validated it's a UUID
+    await db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))

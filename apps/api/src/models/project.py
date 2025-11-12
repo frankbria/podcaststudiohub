@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, DateTime, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
@@ -23,20 +23,28 @@ class Project(Base):
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
 
     # Basic info
-    title = Column(String(255), nullable=False)
-    description = Column(String(2000), nullable=True)
+    name = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
 
     # Podcast metadata for RSS feed
     # Structure: {
-    #   "author": "John Doe",
+    #   "show_title": "My Podcast",
+    #   "author": "Author Name",
+    #   "description": "Podcast description",
     #   "category": "Technology",
-    #   "language": "en",
+    #   "language": "en-US",
     #   "explicit": false,
-    #   "image_url": "https://...",
-    #   "website_url": "https://...",
-    #   "copyright": "© 2024 John Doe"
+    #   "copyright": "© 2025 Author",
+    #   "artwork_url": "https://s3.../artwork.jpg"
     # }
     podcast_metadata = Column(JSONB, nullable=False, default=dict)
+
+    # Default configurations
+    default_tts_config_id = Column(UUID(as_uuid=True), ForeignKey("tts_configurations.id", ondelete="SET NULL"), nullable=True)
+    default_template_id = Column(UUID(as_uuid=True), ForeignKey("conversation_templates.id", ondelete="SET NULL"), nullable=True)
+
+    # Status
+    is_archived = Column(Boolean, nullable=False, default=False)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -45,6 +53,8 @@ class Project(Base):
     # Relationships
     user = relationship("User", back_populates="projects")
     episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan")
+    default_tts_config = relationship("TTSConfiguration", foreign_keys=[default_tts_config_id])
+    default_template = relationship("ConversationTemplate", foreign_keys=[default_template_id])
 
     def __repr__(self) -> str:
-        return f"<Project(id={self.id}, title={self.title})>"
+        return f"<Project(id={self.id}, name={self.name})>"

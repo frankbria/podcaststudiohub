@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, DateTime, Integer, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, Integer, BigInteger, Numeric, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
@@ -19,54 +19,64 @@ class Episode(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Foreign keys
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
 
-    # Basic info
-    title = Column(String(255), nullable=False)
-    description = Column(String(2000), nullable=True)
+    # Episode number (can be null for unnumbered episodes)
     episode_number = Column(Integer, nullable=True)
 
-    # Episode metadata
+    # Episode metadata (title, description, episode_number stored here per migration 002)
     # Structure: {
+    #   "title": "Episode Title",
+    #   "description": "Episode description",
+    #   "episode_number": 1,
+    #   "season_number": 1,
+    #   "publication_date": "2025-10-20T00:00:00Z",
+    #   "tags": ["tech", "ai", "podcast"],
     #   "duration_seconds": 300,
     #   "file_size_bytes": 5242880,
-    #   "audio_format": "mp3",
-    #   "sample_rate": 44100,
-    #   "transcript_url": "https://...",
-    #   "pub_date": "2024-10-20T10:00:00Z"
+    #   "format": "conversation"
     # }
     episode_metadata = Column(JSONB, nullable=False, default=dict)
 
+    # File paths and storage
+    file_path = Column(Text, nullable=True)
+    s3_key = Column(Text, nullable=True)
+    s3_url = Column(Text, nullable=True)
+    duration_seconds = Column(Numeric(10, 2), nullable=True)
+    file_size_bytes = Column(BigInteger, nullable=True)
+    transcript_path = Column(Text, nullable=True)
+
     # Generation status tracking
     # Values: 'draft', 'queued', 'extracting', 'generating', 'synthesizing', 'complete', 'failed'
-    generation_status = Column(String(50), nullable=False, default='draft', index=True)
+    generation_status = Column(Text, nullable=False, default='draft', index=True)
 
     # Generation progress tracking
     # Structure: {
     #   "stage": "extracting" | "generating" | "synthesizing" | "complete",
     #   "progress": 0-100,
-    #   "celery_task_id": "uuid",
     #   "error_message": "string" (if failed),
     #   "started_at": "timestamp",
     #   "completed_at": "timestamp"
     # }
     generation_progress = Column(JSONB, nullable=False, default=dict)
 
-    # Audio storage
-    audio_s3_key = Column(String(500), nullable=True)  # S3 object key
-    audio_url = Column(String(1000), nullable=True)    # Public URL for playback
+    # Configuration overrides
+    tts_config_id = Column(UUID(as_uuid=True), ForeignKey("tts_configurations.id", ondelete="SET NULL"), nullable=True)
+    template_id = Column(UUID(as_uuid=True), ForeignKey("conversation_templates.id", ondelete="SET NULL"), nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    published_at = Column(DateTime, nullable=True)
 
     # Relationships
+    user = relationship("User")
     project = relationship("Project", back_populates="episodes")
     content_sources = relationship("ContentSource", back_populates="episode", cascade="all, delete-orphan")
-    audio_snippets = relationship("AudioSnippet", back_populates="episode", cascade="all, delete-orphan")
-    episode_layouts = relationship("EpisodeLayout", back_populates="episode", cascade="all, delete-orphan")
+    tts_config = relationship("TTSConfiguration", foreign_keys=[tts_config_id])
+    template = relationship("ConversationTemplate", foreign_keys=[template_id])
 
     def __repr__(self) -> str:
-        return f"<Episode(id={self.id}, title={self.title}, status={self.generation_status})>"
+        title = self.episode_metadata.get('title', 'Untitled') if self.episode_metadata else 'Untitled'
+        return f"<Episode(id={self.id}, title={title}, status={self.generation_status})>"

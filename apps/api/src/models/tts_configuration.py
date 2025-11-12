@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
@@ -19,16 +19,14 @@ class TTSConfiguration(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Foreign keys
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
 
     # Configuration info
-    name = Column(String(255), nullable=False)
-    description = Column(String(1000), nullable=True)
-    is_system_template = Column(Boolean, default=False, nullable=False)  # Built-in vs user-created
+    name = Column(Text, nullable=False)
 
-    # TTS provider: 'openai', 'elevenlabs', 'gemini', 'geminimulti', 'edge'
-    provider = Column(String(50), nullable=False, index=True)
+    # TTS provider: 'openai', 'elevenlabs', 'gemini', 'gemini_multi', 'edge'
+    provider = Column(Text, nullable=False, index=True)
 
     # TTS configuration
     # Structure varies by provider:
@@ -45,7 +43,7 @@ class TTSConfiguration(Base):
     #   "stability": 0.5,
     #   "similarity_boost": 0.75
     # }
-    # Gemini: {
+    # Gemini/Gemini Multi: {
     #   "model": "en-US-Studio-MultiSpeaker",
     #   "language_code": "en-US"
     # }
@@ -55,7 +53,10 @@ class TTSConfiguration(Base):
     #   "rate": "+0%",
     #   "volume": "+0%"
     # }
-    config = Column(JSONB, nullable=False)
+    config = Column(JSONB, nullable=False, default=dict)
+
+    # Default flag
+    is_default = Column(Boolean, nullable=False, default=False)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

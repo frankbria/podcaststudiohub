@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
@@ -19,13 +19,12 @@ class ConversationTemplate(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 
     # Foreign keys
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
 
     # Template info
-    name = Column(String(255), nullable=False)
-    description = Column(String(1000), nullable=True)
-    is_system_template = Column(Boolean, default=False, nullable=False)  # Built-in vs user-created
+    name = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
 
     # Conversation configuration
     # Structure follows existing conversation_config.yaml format:
@@ -41,7 +40,10 @@ class ConversationTemplate(Base):
     #   "engagement_techniques": ["rhetorical questions", "anecdotes"],
     #   "creativity": 0.7
     # }
-    config = Column(JSONB, nullable=False)
+    config = Column(JSONB, nullable=False, default=dict)
+
+    # Default flag
+    is_default = Column(Boolean, nullable=False, default=False)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

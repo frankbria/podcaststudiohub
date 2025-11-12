@@ -1,91 +1,23 @@
-"""
-JWT authentication middleware
-"""
-from fastapi import Request, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+"""JWT authentication middleware for protecting endpoints and extracting user context"""
+
 from typing import Optional
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from uuid import UUID
 
-from src.utils.jwt import verify_token, get_user_id_from_token, get_tenant_id_from_token
+from ..database import get_db
+from ..services.auth_service import verify_jwt_token, get_user_by_id
+from ..models.user import User
 
-
+# HTTPBearer security scheme for extracting Authorization header
 security = HTTPBearer()
 
 
-async def verify_jwt_token(credentials: HTTPAuthorizationCredentials) -> dict:
-    """
-    Verify JWT token from Authorization header.
-
-    Args:
-        credentials: HTTP authorization credentials
-
-    Returns:
-        Dictionary of token payload
-
-    Raises:
-        HTTPException: If token is invalid or expired
-    """
-    token = credentials.credentials
-
-    payload = verify_token(token)
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return payload
-
-
-async def get_current_user_id(credentials: HTTPAuthorizationCredentials) -> str:
-    """
-    Extract user ID from JWT token.
-
-    Args:
-        credentials: HTTP authorization credentials
-
-    Returns:
-        User ID from token
-
-    Raises:
-        HTTPException: If token is invalid or user ID missing
-    """
-    payload = await verify_jwt_token(credentials)
-    user_id = payload.get("sub")
-
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User ID not found in token",
-        )
-
-    return user_id
-
-
-async def get_current_tenant_id(credentials: HTTPAuthorizationCredentials) -> str:
-    """
-    Extract tenant ID from JWT token.
-
-    Args:
-        credentials: HTTP authorization credentials
-
-    Returns:
-        Tenant ID from token
-
-    Raises:
-        HTTPException: If token is invalid or tenant ID missing
-    """
-    payload = await verify_jwt_token(credentials)
-    tenant_id = payload.get("tenant_id")
-
-    if not tenant_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Tenant ID not found in token",
-        )
-
-    return tenant_id
-
+# =============================================================================
+# Helper Functions for Token Extraction
+# =============================================================================
 
 async def extract_token_from_header(request: Request) -> Optional[str]:
     """
@@ -95,10 +27,149 @@ async def extract_token_from_header(request: Request) -> Optional[str]:
         request: FastAPI request object
 
     Returns:
-        JWT token string if present, None otherwise
+        JWT token string or None if not present
     """
     auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    if not auth_header:
         return None
 
-    return auth_header.split(" ")[1]
+    # Extract token from "Bearer <token>" format
+    parts = auth_header.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        return None
+
+    return parts[1]
+
+
+def get_tenant_id_from_token(token: str) -> Optional[str]:
+    """
+    Extract tenant_id from JWT token payload.
+
+    Args:
+        token: JWT token string
+
+    Returns:
+        Tenant ID string or None if token is invalid
+    """
+    try:
+        payload = verify_jwt_token(token)
+        return payload.get("tenant_id")
+    except (ValueError, Exception):
+        return None
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: AsyncSession = Depends(get_db)
+) -> User:
+    """
+    Extract and validate JWT token from Authorization header.
+    Returns authenticated User model instance.
+
+    Usage in endpoints:
+        @router.get("/protected")
+        async def protected_endpoint(user: User = Depends(get_current_user)):
+            return {"user_id": user.id, "email": user.email}
+
+    Args:
+        credentials: HTTP Bearer token from Authorization header
+        db: Database session
+
+    Returns:
+        Authenticated User model instance
+
+    Raises:
+        HTTPException 401: If token is invalid or user not found
+        HTTPException 403: If user account is inactive
+    """
+    token = credentials.credentials
+
+    try:
+        # Decode and verify JWT token
+        payload = verify_jwt_token(token)
+        user_id = payload.get("sub")
+        tenant_id = payload.get("tenant_id")
+
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Retrieve user from database
+        result = await db.execute(
+            select(User).where(User.id == UUID(user_id))
+        )
+        user = result.scalar_one_or_none()
+
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Inactive user account"
+            )
+
+        # Store tenant_id from token for RLS context (Task 2.4 will use this)
+        # This allows middleware to enforce row-level security
+        user._tenant_id_from_token = tenant_id
+
+        return user
+
+    except ValueError as e:
+        # Token verification failed (invalid signature, expired, etc.)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Catch-all for unexpected errors
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+async def get_active_user(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """
+    Ensure user is active and verified.
+
+    Optional additional layer of validation for endpoints that require
+    verified accounts.
+
+    Args:
+        current_user: User from get_current_user dependency
+
+    Returns:
+        Active User model instance
+
+    Raises:
+        HTTPException 403: If user is inactive or unverified
+    """
+    if not current_user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Inactive user"
+        )
+
+    # Optional: Enforce email verification
+    # if not current_user.is_verified:
+    #     raise HTTPException(
+    #         status_code=status.HTTP_403_FORBIDDEN,
+    #         detail="Email not verified"
+    #     )
+
+    return current_user

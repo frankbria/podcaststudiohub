@@ -1,6 +1,6 @@
 """Pydantic schemas for request/response validation"""
 
-from .auth import UserCreate, UserLogin, UserResponse, TokenResponse, UserUpdate
+from .auth import UserRegister, UserLogin, UserResponse, TokenResponse, UserUpdate
 from .project import ProjectCreate, ProjectUpdate, ProjectResponse, PodcastMetadata
 from .episode import (
     EpisodeCreate,
@@ -15,7 +15,7 @@ from .common import PaginationParams, PaginatedResponse, ErrorResponse, SuccessR
 
 __all__ = [
     # Auth
-    "UserCreate",
+    "UserRegister",
     "UserLogin",
     "UserResponse",
     "TokenResponse",

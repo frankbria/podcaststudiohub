@@ -52,12 +52,25 @@ jobs:
           CELERY_BROKER_URL: redis://localhost:6379/0
           CELERY_RESULT_BACKEND: redis://localhost:6379/0
         run: |
-          # TODO: Add pytest when tests are implemented
-          echo "API tests would run here"
+          uv run pytest tests/ \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-fail-under=80 \
+            -v
 
       - name: Install frontend dependencies
         working-directory: apps/web
-        run: npm install
+        run: npm ci
+
+      - name: Run frontend tests
+        if: ${{ !inputs.skip_tests }}
+        working-directory: apps/web
+        run: |
+          npm test -- \
+            --passWithNoTests \
+            --watchAll=false \
+            --coverage \
+            --coverageReporters=text
 
       - name: Build frontend
         working-directory: apps/web

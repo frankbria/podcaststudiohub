@@ -6,9 +6,7 @@ from .episode import (
     EpisodeCreate,
     EpisodeUpdate,
     EpisodeResponse,
-    EpisodeMetadata,
-    GenerationProgress,
-    GenerationStatus,
+    EpisodeListResponse,
 )
 from .content import ContentSourceCreate, ContentSourceResponse, ExtractionMetadata, SourceType
 from .common import PaginationParams, PaginatedResponse, ErrorResponse, SuccessResponse
@@ -29,9 +27,7 @@ __all__ = [
     "EpisodeCreate",
     "EpisodeUpdate",
     "EpisodeResponse",
-    "EpisodeMetadata",
-    "GenerationProgress",
-    "GenerationStatus",
+    "EpisodeListResponse",
     # Content
     "ContentSourceCreate",
     "ContentSourceResponse",

@@ -26,8 +26,7 @@ podcaststudiohub/
 │   ├── api/              # FastAPI backend (Python)
 │   └── web/              # Next.js frontend (TypeScript/React)
 ├── deployment/           # VPS deployment configurations
-├── tests/                # Test suite
-└── [podcastfy core]      # Embedded podcastfy package
+└── tests/                # E2E test suite (Playwright)
 ```
 
 ### Tech Stack

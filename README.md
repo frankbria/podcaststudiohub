@@ -1,4 +1,6 @@
-# Podcastfy Studio Hub 🎙️
+# Podcastfy Studio Hub 🎤️
+
+[![Follow on X](https://img.shields.io/twitter/follow/FrankBria18044?style=social)](https://x.com/FrankBria18044)
 
 A multi-tenant SaaS platform for AI-generated podcasts, built on top of the open-source [Podcastfy](https://github.com/souzatharsis/podcastfy) package.
 

@@ -1,0 +1,77 @@
+name: "Repo Maintainer: Controls"
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform"
+        required: true
+        type: choice
+        options:
+          - pause
+          - resume
+          - advance-phase
+          - switch-to-build
+          - switch-to-maintain
+          - status
+      reason:
+        description: "Reason (for pause action)"
+        required: false
+        type: string
+        default: "Manual pause via workflow dispatch"
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install tools
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Execute control action
+        run: |
+          case "${{ inputs.action }}" in
+            pause)
+              bash scripts/repo-maintainer/update-state.sh pause "${{ inputs.reason }}"
+              echo "::notice::Maintainer loop PAUSED: ${{ inputs.reason }}"
+              ;;
+            resume)
+              bash scripts/repo-maintainer/update-state.sh resume
+              echo "::notice::Maintainer loop RESUMED"
+              ;;
+            advance-phase)
+              bash scripts/repo-maintainer/update-state.sh advance-phase
+              ;;
+            switch-to-build)
+              bash scripts/repo-maintainer/update-state.sh switch-mode build
+              echo "::notice::Switched to BUILD mode"
+              ;;
+            switch-to-maintain)
+              bash scripts/repo-maintainer/update-state.sh switch-mode maintain
+              echo "::notice::Switched to MAINTAIN mode"
+              ;;
+            status)
+              echo "=== Config ==="
+              cat .github/repo-maintainer/config.yml
+              echo ""
+              echo "=== State ==="
+              cat .github/repo-maintainer/state.json | jq .
+              ;;
+          esac
+
+      - name: Commit changes
+        if: inputs.action != 'status'
+        run: |
+          git config user.name "repo-maintainer[bot]"
+          git config user.email "repo-maintainer[bot]@users.noreply.github.com"
+          git add .github/repo-maintainer/
+          git diff --staged --quiet || git commit -m "chore(maintainer): ${{ inputs.action }}"
+          git push origin main

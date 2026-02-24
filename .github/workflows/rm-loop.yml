@@ -1,0 +1,237 @@
+name: "Repo Maintainer: Implementation Loop"
+
+on:
+  schedule:
+    # Build mode: every 4 hours. Switch cron in config.yml, then update here.
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      force_issue:
+        description: "Force implement a specific issue number (bypasses selection)"
+        required: false
+        type: number
+      dry_run:
+        description: "Dry run — select issue but don't implement"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: repo-maintainer
+  cancel-in-progress: false
+
+env:
+  CONFIG_PATH: .github/repo-maintainer/config.yml
+  STATE_PATH: .github/repo-maintainer/state.json
+  SCRIPTS_PATH: scripts/repo-maintainer
+
+jobs:
+  # ── Job 1: Circuit Breaker Check ──────────────────
+  circuit-breaker:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+      mode: ${{ steps.check.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Check circuit breakers
+        id: check
+        run: |
+          RESULT=$(bash ${{ env.SCRIPTS_PATH }}/check-circuit-breakers.sh 2>&1) || true
+          echo "result=$RESULT"
+          SHOULD_RUN=$(echo "$RESULT" | jq -r '.should_run // false')
+          MODE=$(echo "$RESULT" | jq -r '.mode // "maintain"')
+          REASON=$(echo "$RESULT" | jq -r '.reason // "unknown"')
+          echo "should_run=$SHOULD_RUN" >> $GITHUB_OUTPUT
+          echo "mode=$MODE" >> $GITHUB_OUTPUT
+          echo "reason=$REASON" >> $GITHUB_OUTPUT
+          if [[ "$SHOULD_RUN" != "true" ]]; then
+            echo "::notice::Circuit breaker tripped: $REASON"
+          fi
+
+  # ── Job 2: Select Issue ───────────────────────────
+  select-issue:
+    needs: circuit-breaker
+    if: needs.circuit-breaker.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      issue_number: ${{ steps.select.outputs.issue_number }}
+      tier: ${{ steps.select.outputs.tier }}
+      title: ${{ steps.select.outputs.title }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Select next issue
+        id: select
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -n "${{ inputs.force_issue }}" ]]; then
+            RESULT=$(bash ${{ env.SCRIPTS_PATH }}/select-next-issue.sh "${{ inputs.force_issue }}")
+          else
+            RESULT=$(bash ${{ env.SCRIPTS_PATH }}/select-next-issue.sh)
+          fi
+          echo "result=$RESULT"
+          ISSUE=$(echo "$RESULT" | jq -r '.issue_number // empty')
+          TIER=$(echo "$RESULT" | jq -r '.tier // "T1"')
+          TITLE=$(echo "$RESULT" | jq -r '.title // ""')
+          if [[ -z "$ISSUE" || "$ISSUE" == "null" ]]; then
+            echo "::notice::No eligible issues found"
+            echo "issue_number=" >> $GITHUB_OUTPUT
+          else
+            echo "issue_number=$ISSUE" >> $GITHUB_OUTPUT
+            echo "tier=$TIER" >> $GITHUB_OUTPUT
+            echo "title=$TITLE" >> $GITHUB_OUTPUT
+            echo "::notice::Selected issue #$ISSUE ($TIER): $TITLE"
+          fi
+
+  # ── Job 3: Implement ──────────────────────────────
+  implement:
+    needs: [circuit-breaker, select-issue]
+    if: |
+      needs.select-issue.outputs.issue_number != '' &&
+      inputs.dry_run != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    outputs:
+      pr_number: ${{ steps.get-pr.outputs.pr_number }}
+      result: ${{ steps.get-pr.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read implementation prompt
+        id: prompt
+        run: |
+          MODE="${{ needs.circuit-breaker.outputs.mode }}"
+          TIER="${{ needs.select-issue.outputs.tier }}"
+          ISSUE="${{ needs.select-issue.outputs.issue_number }}"
+
+          # Resolve mode-specific limits
+          MAX_LINES=$(yq -r ".limits.${MODE}.max_lines_per_pr // 500" ${{ env.CONFIG_PATH }} 2>/dev/null || echo 500)
+          MAX_FILES=$(yq -r ".limits.${MODE}.max_files_per_pr // 15" ${{ env.CONFIG_PATH }} 2>/dev/null || echo 15)
+
+          # Determine PR type based on tier
+          case "$TIER" in
+            T0) PR_TYPE="auto-merge" ;;
+            T1) PR_TYPE="normal" ;;
+            T2|T3) PR_TYPE="draft" ;;
+            *) PR_TYPE="normal" ;;
+          esac
+
+          # Create slug from issue title
+          SLUG=$(echo "${{ needs.select-issue.outputs.title }}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | head -c 40 | sed 's/-$//')
+
+          echo "max_lines=$MAX_LINES" >> $GITHUB_OUTPUT
+          echo "max_files=$MAX_FILES" >> $GITHUB_OUTPUT
+          echo "pr_type=$PR_TYPE" >> $GITHUB_OUTPUT
+          echo "slug=$SLUG" >> $GITHUB_OUTPUT
+        env:
+          YQ_INSTALLED: "true"
+
+      - name: Install yq for prompt reading
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Run Claude Code Implementation
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the Repo Maintainer agent implementing issue #${{ needs.select-issue.outputs.issue_number }}.
+
+            ## Instructions
+            1. Read the issue: `gh issue view ${{ needs.select-issue.outputs.issue_number }}`
+            2. Check issue comments for an implementation plan
+            3. Read CLAUDE.md for project conventions
+            4. Explore the codebase to understand existing patterns
+
+            ## Implementation
+            - Follow TDD: write tests first, then implement
+            - Follow existing code patterns
+            - Keep changes under ${{ steps.prompt.outputs.max_lines }} lines and ${{ steps.prompt.outputs.max_files }} files
+            - Create branch: `maintainer/issue-${{ needs.select-issue.outputs.issue_number }}-${{ steps.prompt.outputs.slug }}`
+
+            ## Testing
+            - Python: `cd apps/api && uv run pytest`
+            - TypeScript: `cd apps/web && npm test`
+            - Linting: `cd apps/api && uv run ruff check .` and `cd apps/web && npm run lint`
+
+            ## PR Creation
+            Create a ${{ steps.prompt.outputs.pr_type }} PR that closes #${{ needs.select-issue.outputs.issue_number }}.
+            Include a summary, list of changes, and test plan.
+            Add footer: `Automated by repo-maintainer (${{ needs.select-issue.outputs.tier }})`
+
+            If tests fail after 2 attempts, create a draft PR explaining the issue.
+          claude_args: '--model sonnet'
+
+      - name: Get PR number from output
+        id: get-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Find the most recent PR created by the maintainer for this issue
+          PR=$(gh pr list \
+            --search "maintainer/issue-${{ needs.select-issue.outputs.issue_number }}" \
+            --json number --limit 1 --jq '.[0].number // empty' 2>/dev/null || echo "")
+          if [[ -n "$PR" ]]; then
+            echo "pr_number=$PR" >> $GITHUB_OUTPUT
+            echo "result=success" >> $GITHUB_OUTPUT
+          else
+            echo "pr_number=" >> $GITHUB_OUTPUT
+            echo "result=failure" >> $GITHUB_OUTPUT
+          fi
+
+  # ── Job 4: Update State ───────────────────────────
+  update-state:
+    needs: [circuit-breaker, select-issue, implement]
+    if: always() && needs.select-issue.outputs.issue_number != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install tools
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Update state
+        run: |
+          ISSUE="${{ needs.select-issue.outputs.issue_number }}"
+          PR="${{ needs.implement.outputs.pr_number || '' }}"
+          RESULT="${{ needs.implement.outputs.result || 'failure' }}"
+
+          bash ${{ env.SCRIPTS_PATH }}/update-state.sh record-run \
+            "$ISSUE" "${PR:-0}" "$RESULT" "1.00"
+
+      - name: Commit state
+        run: |
+          git config user.name "repo-maintainer[bot]"
+          git config user.email "repo-maintainer[bot]@users.noreply.github.com"
+          git add ${{ env.STATE_PATH }}
+          git diff --staged --quiet || git commit -m "chore(maintainer): update state after issue #${{ needs.select-issue.outputs.issue_number }}"
+          git push origin main

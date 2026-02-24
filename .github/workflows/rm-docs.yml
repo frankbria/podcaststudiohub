@@ -1,0 +1,62 @@
+name: "Repo Maintainer: Documentation"
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - ".github/repo-maintainer/**"
+      - "scripts/repo-maintainer/**"
+
+concurrency:
+  group: repo-maintainer-docs
+  cancel-in-progress: true
+
+jobs:
+  update-docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check for significant changes
+        id: check
+        run: |
+          # Get list of changed files in last commit
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || echo "")
+          echo "changed=$CHANGED"
+
+          # Only update docs if source code changed (not just docs/config)
+          if echo "$CHANGED" | grep -qE '\.(py|ts|tsx|js|jsx)$'; then
+            echo "should_update=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_update=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update documentation
+        if: steps.check.outputs.should_update == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Source code was just updated on main. Check if documentation needs updating.
+
+            1. Run `git diff HEAD~1 HEAD --name-only` to see what changed
+            2. Read README.md — does it reference anything that changed?
+            3. Read CLAUDE.md — does the architecture section need updating?
+            4. If updates are needed:
+               - Create a branch: `docs/maintainer-update-$(date +%Y%m%d%H%M)`
+               - Make minimal, focused documentation updates
+               - Create a PR with the changes
+            5. If no updates needed, do nothing.
+
+            Rules:
+            - Only update documentation that is clearly outdated by the code changes
+            - Do NOT rewrite entire sections — make targeted edits
+            - Do NOT add new documentation sections unless something was added to the codebase
+            - Keep README.md concise
+          claude_args: '--model haiku --allowed-tools "Bash(git:*),Bash(gh:*),Read,Write,Edit,Glob,Grep"'

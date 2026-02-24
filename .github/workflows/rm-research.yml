@@ -1,0 +1,85 @@
+name: "Repo Maintainer: Research"
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"  # Weekly Monday midnight UTC
+  workflow_dispatch:
+
+concurrency:
+  group: repo-maintainer-research
+  cancel-in-progress: true
+
+jobs:
+  research:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run security audit
+        id: audit
+        continue-on-error: true
+        run: |
+          echo "=== Python Audit ===" > /tmp/audit-results.txt
+          pip install pip-audit 2>/dev/null
+          cd apps/api && pip-audit -r requirements.txt 2>&1 >> /tmp/audit-results.txt || true
+          cd ../..
+
+          echo "" >> /tmp/audit-results.txt
+          echo "=== NPM Audit ===" >> /tmp/audit-results.txt
+          cd apps/web && npm audit 2>&1 >> /tmp/audit-results.txt || true
+          cd ../..
+
+          echo "audit_file=/tmp/audit-results.txt" >> $GITHUB_OUTPUT
+
+      - name: Run proactive research
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are running the weekly research cycle for Podcastfy Studio Hub.
+
+            ## Tasks
+
+            ### 1. Security Audit Review
+            Read the audit results at /tmp/audit-results.txt.
+            If there are critical or high vulnerabilities:
+            - Create a GitHub issue with label "security" and "priority-p1"
+            - Include the specific CVE and affected package
+
+            ### 2. Test Coverage Check
+            - Run `cd apps/api && uv run pytest --cov --cov-report=term-missing 2>/dev/null || true`
+            - Run `cd apps/web && npm test -- --coverage 2>/dev/null || true`
+            - If coverage dropped below 80%, create an issue
+
+            ### 3. Codebase Health
+            - Check for any TODO/FIXME/HACK comments: `grep -rn 'TODO\|FIXME\|HACK' apps/ --include='*.py' --include='*.ts' --include='*.tsx' | head -20`
+            - If there are significant patterns, note them
+
+            ### 4. Roadmap Ideas (max 2 new issues)
+            Based on your analysis, create at most 2 new enhancement issues if you identify:
+            - Missing error handling patterns
+            - Performance improvement opportunities
+            - Missing test coverage for critical paths
+            - Documentation gaps
+
+            ## Rules
+            - Maximum 3 new issues total across all tasks
+            - Label all new issues appropriately (type, priority, phase)
+            - Add "plan-ready" label if you can write an implementation plan
+            - Do NOT create issues for things that are already tracked
+            - Check existing issues first: `gh issue list --state open --json number,title --limit 100`
+          claude_args: '--model sonnet --allowed-tools "Bash(gh:*),Bash(cd:*),Bash(grep:*),Bash(uv:*),Bash(npm:*),Bash(pip:*),Bash(cat:*),Read,Glob,Grep"'

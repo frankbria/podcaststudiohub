@@ -1,0 +1,81 @@
+name: "Repo Maintainer: Plan Refinement"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/repo-maintainer/state.json"
+
+concurrency:
+  group: repo-maintainer-refine
+  cancel-in-progress: true
+
+jobs:
+  refine:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install tools
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Check if refinement is needed
+        id: check
+        run: |
+          LAST_RESULT=$(jq -r '.loop.last_run_result // ""' .github/repo-maintainer/state.json)
+          LAST_ISSUE=$(jq -r '.loop.last_implemented_issue // ""' .github/repo-maintainer/state.json)
+          if [[ "$LAST_RESULT" == "success" && -n "$LAST_ISSUE" ]]; then
+            echo "should_refine=true" >> $GITHUB_OUTPUT
+            echo "last_issue=$LAST_ISSUE" >> $GITHUB_OUTPUT
+          else
+            echo "should_refine=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run plan refinement
+        if: steps.check.outputs.should_refine == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You just saw issue #${{ steps.check.outputs.last_issue }} get implemented and merged.
+
+            Review the remaining issue backlog and make adjustments:
+
+            1. List open issues: `gh issue list --state open --json number,title,labels --limit 50`
+            2. Check: are any issues now redundant because of what was just implemented?
+            3. Check: do any issues need their description updated?
+            4. Check: should any new issues be created for gaps discovered?
+            5. If all issues in the current phase are done, note that.
+
+            Rules:
+            - Maximum 3 issue changes per run (create, edit, or close)
+            - Always explain your reasoning in issue comments
+            - Do NOT close issues without commenting why
+            - Do NOT create issues that overlap with existing ones
+
+            Use `gh issue create`, `gh issue edit`, and `gh issue close` as needed.
+          claude_args: '--model sonnet --allowed-tools "Bash(gh:*),Read,Glob,Grep"'
+
+      - name: Check phase completion
+        if: steps.check.outputs.should_refine == 'true'
+        run: |
+          CURRENT_PHASE=$(jq -r '.phases.current_phase' .github/repo-maintainer/state.json)
+          OPEN=$(gh issue list --state open --label "$CURRENT_PHASE" --json number --jq 'length' 2>/dev/null || echo 999)
+          if [[ "$OPEN" -eq 0 ]]; then
+            bash scripts/repo-maintainer/update-state.sh advance-phase
+            git config user.name "repo-maintainer[bot]"
+            git config user.email "repo-maintainer[bot]@users.noreply.github.com"
+            git add .github/repo-maintainer/state.json
+            git diff --staged --quiet || git commit -m "chore(maintainer): advance phase from $CURRENT_PHASE"
+            git push origin main
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

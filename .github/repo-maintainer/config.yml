@@ -1,0 +1,113 @@
+# Autonomous Repo Maintainer Configuration
+# Docs: see plan at .claude/plans/ or scripts/repo-maintainer/README.md
+version: 1
+
+# ── Operating Mode ──────────────────────────────────
+# "build" = completing core product (faster, more autonomous)
+# "maintain" = stable product (conservative, careful)
+operating_mode: build
+
+# ── Proving Period ──────────────────────────────────
+# First N successful PRs are always T1+ (notify, no auto-merge).
+# After N consecutive successes, the system graduates to configured autonomy.
+# Resets to proving on 2 consecutive failures.
+proving:
+  required_successes: 5
+
+# ── Schedules ───────────────────────────────────────
+schedule:
+  build:
+    loop_cron: "0 */4 * * *"
+    cooldown_minutes: 15
+  maintain:
+    loop_cron: "0 */8 * * *"
+    cooldown_minutes: 60
+  research_cron: "0 0 * * 1"
+
+# ── Governance Tiers ────────────────────────────────
+# T0 = autonomous (implement → PR → auto-merge if CI passes)
+# T1 = notify     (implement → PR → notify human)
+# T2 = draft      (implement → DRAFT PR → human must approve)
+# T3 = human only (recommendation comment only, never implement)
+governance:
+  autonomous:
+    labels:
+      - priority-p2
+      - priority-p3
+      - "good first issue"
+    max_lines:
+      build: 500
+      maintain: 300
+  notify:
+    labels:
+      - priority-p1
+      - feature
+      - enhancement
+    max_lines:
+      build: 800
+      maintain: 500
+  approve:
+    labels:
+      - priority-p0
+      - security
+      - critical
+      - breaking-change
+  human_only:
+    labels:
+      - needs-discussion
+      - architecture
+      - legal
+  protected_paths:
+    - "deployment/.*"
+    - "\\.env.*"
+    - "docker-compose.*"
+    - ".github/repo-maintainer/.*"
+
+# ── Limits ──────────────────────────────────────────
+limits:
+  build:
+    max_prs_per_day: 4
+    budget_usd_per_day: 50
+    budget_usd_per_month: 500
+    max_lines_per_pr: 800
+    max_files_per_pr: 20
+  maintain:
+    max_prs_per_day: 2
+    budget_usd_per_day: 30
+    budget_usd_per_month: 300
+    max_lines_per_pr: 500
+    max_files_per_pr: 15
+  max_new_dependencies: 2
+  max_implementation_attempts: 2
+
+# ── Model Selection ─────────────────────────────────
+models:
+  triage: haiku
+  review: sonnet
+  implementation:
+    build: opus
+    maintain: sonnet
+  refinement: sonnet
+  research: sonnet
+  docs: haiku
+
+# ── Issue Selection ─────────────────────────────────
+issue_selection:
+  strategy: phase_priority
+  phases:
+    - phase-1
+    - phase-2
+    - phase-3
+    - phase-4
+    - phase-5
+
+# ── Local Mode (Mode B) ────────────────────────────
+local:
+  enabled: true
+  use_skill: implementing-issue-plans
+  use_beads: true
+
+# ── Research ────────────────────────────────────────
+research:
+  comparable_repos:
+    - "souzatharsis/podcastfy"

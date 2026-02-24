@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "loop": {
+    "last_run_at": null,
+    "last_run_result": null,
+    "last_implemented_issue": null,
+    "active_pr": null,
+    "paused": false,
+    "pause_reason": null
+  },
+  "counters": {
+    "prs_today": 0,
+    "issues_created_today": 0,
+    "estimated_cost_today_usd": 0,
+    "day_reset_date": null,
+    "prs_this_month": 0,
+    "estimated_cost_this_month_usd": 0,
+    "month_reset_date": null
+  },
+  "proving": {
+    "graduated": false,
+    "consecutive_successes": 0
+  },
+  "phases": {
+    "current_phase": "phase-1",
+    "completed_phases": []
+  },
+  "feedback": {
+    "consecutive_rejected_prs": 0,
+    "consecutive_ci_failures": 0
+  },
+  "history": []
+}

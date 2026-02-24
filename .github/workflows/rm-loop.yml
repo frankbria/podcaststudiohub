@@ -156,7 +156,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          prompt: |
+          direct_prompt: |
             You are the Repo Maintainer agent implementing issue #${{ needs.select-issue.outputs.issue_number }}.
 
             ## Instructions
@@ -182,7 +182,7 @@ jobs:
             Add footer: `Automated by repo-maintainer (${{ needs.select-issue.outputs.tier }})`
 
             If tests fail after 2 attempts, create a draft PR explaining the issue.
-          claude_args: '--model sonnet'
+          claude_args: '--model sonnet --allowed-tools "Bash,Read,Write,Edit,Glob,Grep"'
 
       - name: Get PR number from output
         id: get-pr

@@ -187,10 +187,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Find the most recent PR created by the maintainer for this issue
-          PR=$(gh pr list \
-            --search "maintainer/issue-${{ needs.select-issue.outputs.issue_number }}" \
-            --json number --limit 1 --jq '.[0].number // empty' 2>/dev/null || echo "")
+          ISSUE="${{ needs.select-issue.outputs.issue_number }}"
+          # Find open PRs with branch names starting with maintainer/issue-N
+          PR=$(gh pr list --state open --json number,headRefName \
+            --jq "[.[] | select(.headRefName | startswith(\"maintainer/issue-${ISSUE}\"))] | .[0].number // empty" \
+            2>/dev/null || echo "")
           if [[ -n "$PR" ]]; then
             echo "pr_number=$PR" >> $GITHUB_OUTPUT
             echo "result=success" >> $GITHUB_OUTPUT

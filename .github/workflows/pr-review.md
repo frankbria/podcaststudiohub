@@ -2,6 +2,8 @@
 on:
   pull_request:
     types: [opened, synchronize]
+bots:
+  - 'claude[bot]'
 permissions:
   contents: read
   pull-requests: read

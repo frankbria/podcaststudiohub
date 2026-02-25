@@ -1,11 +1,16 @@
 """
 Celery tasks for S3 file uploads
 """
+import os
+import logging
 from celery import Task
 from typing import Dict, Any
-import logging
+
+import boto3
+from botocore.exceptions import ClientError
 
 from src.worker import celery_app
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +34,7 @@ def upload_to_s3_task(
         content_type: MIME type of the file
 
     Returns:
-        Dictionary with upload results
+        Dictionary with upload results including s3_url, s3_key, file_size_bytes
     """
     try:
         self.update_state(
@@ -39,10 +44,6 @@ def upload_to_s3_task(
                 'status': 'Starting S3 upload...'
             }
         )
-
-        import boto3
-        from botocore.exceptions import ClientError
-        import os
 
         # Initialize S3 client
         s3_client = boto3.client('s3')
@@ -57,7 +58,7 @@ def upload_to_s3_task(
                 state='PROGRESS',
                 meta={
                     'progress': progress,
-                    'status': f'Uploading... {progress}%'
+                    'status': f'Uploading to S3... {progress}%'
                 }
             )
 
@@ -70,8 +71,13 @@ def upload_to_s3_task(
             Callback=upload_progress
         )
 
-        # Generate public URL
-        s3_url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
+        # Generate region-aware public URL
+        region = settings.AWS_REGION
+        if region == "us-east-1":
+            # us-east-1 uses the legacy URL format without region subdomain
+            s3_url = f"https://{bucket_name}.s3.amazonaws.com/{s3_key}"
+        else:
+            s3_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{s3_key}"
 
         return {
             "status": "success",
@@ -82,7 +88,12 @@ def upload_to_s3_task(
         }
 
     except ClientError as e:
-        logger.error(f"S3 upload failed: {str(e)}")
+        error_code = e.response.get("Error", {}).get("Code", "")
+        # Don't retry client errors (invalid credentials, bucket not found)
+        if error_code in ("NoSuchBucket", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied"):
+            logger.error(f"S3 upload failed with non-retryable error: {str(e)}")
+        else:
+            logger.error(f"S3 upload failed for {file_path}: {str(e)}")
         return {
             "status": "failed",
             "s3_key": None,
@@ -91,7 +102,7 @@ def upload_to_s3_task(
             "error": str(e)
         }
     except Exception as e:
-        logger.error(f"Unexpected error during S3 upload: {str(e)}")
+        logger.error(f"S3 upload failed for {file_path}: {str(e)}")
         return {
             "status": "failed",
             "s3_key": None,

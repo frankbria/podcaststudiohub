@@ -180,7 +180,7 @@ jobs:
             Add footer: `Automated by repo-maintainer (${{ needs.select-issue.outputs.tier }})`
 
             If tests fail after 2 attempts, create a draft PR explaining the issue.
-          claude_args: '--model sonnet --allowedTools "Bash,Read,Write,Edit,Glob,Grep" --max-turns 50'
+          claude_args: '--model sonnet --allowedTools "Bash,Read,Write,Edit,Glob,Grep" --max-turns 100'
 
       - name: Get PR number from output
         id: get-pr

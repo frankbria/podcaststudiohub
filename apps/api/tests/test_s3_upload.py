@@ -8,6 +8,8 @@ or by configuring Celery eager mode.
 import uuid
 from unittest.mock import MagicMock, patch
 
+from botocore.exceptions import ClientError
+
 
 # ============================================================================
 # Helpers
@@ -461,3 +463,99 @@ class TestGeneratePodcastTaskChaining:
         kwargs = mock_finalize.delay.call_args.kwargs
         assert kwargs.get("episode_id") == episode_id
         assert kwargs.get("generation_result", {}).get("status") == "success"
+
+    def test_generate_falls_back_to_sync_when_broker_unavailable(self):
+        """When .delay() raises (broker down), finalize runs synchronously."""
+        episode_id = str(uuid.uuid4())
+        mock_audio_path = "/tmp/test_podcast.mp3"
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=60_000)
+
+        with (
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task") as mock_finalize,
+            patch("podcastfy.client.generate_podcast", return_value=mock_audio_path),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+        ):
+            # Simulate broker failure on .delay()
+            mock_finalize.delay.side_effect = ConnectionError("Redis unavailable")
+            mock_finalize.return_value = {"status": "success"}
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+
+            from src.tasks.podcast_generation import generate_podcast_task
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+            )
+
+        # Generation still succeeds even though broker was down
+        assert result["status"] == "success"
+        # .delay() was attempted
+        mock_finalize.delay.assert_called_once()
+        # Synchronous fallback was called
+        mock_finalize.assert_called_once_with(
+            episode_id=episode_id,
+            generation_result=result,
+        )
+
+
+# ============================================================================
+# Non-retryable S3 error tests
+# ============================================================================
+
+class TestNonRetryableS3Errors:
+    """Tests for non-retryable S3 client errors being raised (not swallowed)."""
+
+    def _invoke_upload(self, **kwargs):
+        from src.tasks.s3_upload import upload_to_s3_task
+        return _invoke_task(upload_to_s3_task, **kwargs)
+
+    def test_non_retryable_client_error_raises(self):
+        """Non-retryable S3 errors (NoSuchBucket, etc.) are raised, not returned as dict."""
+        import pytest
+
+        error_response = {"Error": {"Code": "NoSuchBucket", "Message": "Bucket not found"}}
+        client_error = ClientError(error_response, "PutObject")
+
+        with (
+            patch("src.tasks.s3_upload.settings") as mock_settings,
+            patch("src.tasks.s3_upload.boto3") as mock_boto,
+            patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
+        ):
+            mock_settings.AWS_REGION = "us-east-1"
+            mock_s3 = MagicMock()
+            mock_s3.upload_file.side_effect = client_error
+            mock_boto.client.return_value = mock_s3
+
+            with pytest.raises(ClientError):
+                self._invoke_upload(
+                    file_path="/tmp/audio.mp3",
+                    s3_key="test/key.mp3",
+                    bucket_name="nonexistent-bucket",
+                )
+
+    def test_retryable_client_error_returns_failed_dict(self):
+        """Retryable S3 errors (e.g. InternalError) return a failed dict, not raise."""
+        error_response = {"Error": {"Code": "InternalError", "Message": "Internal error"}}
+        client_error = ClientError(error_response, "PutObject")
+
+        with (
+            patch("src.tasks.s3_upload.settings") as mock_settings,
+            patch("src.tasks.s3_upload.boto3") as mock_boto,
+            patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
+        ):
+            mock_settings.AWS_REGION = "us-east-1"
+            mock_s3 = MagicMock()
+            mock_s3.upload_file.side_effect = client_error
+            mock_boto.client.return_value = mock_s3
+
+            result = self._invoke_upload(
+                file_path="/tmp/audio.mp3",
+                s3_key="test/key.mp3",
+                bucket_name="my-bucket",
+            )
+
+        assert result["status"] == "failed"
+        assert "InternalError" in result["error"]

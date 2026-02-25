@@ -2,9 +2,9 @@
 Async database configuration and session management
 """
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import create_engine, text
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator
 from fastapi import Request
 
 from src.config import settings
@@ -29,6 +29,11 @@ AsyncSessionLocal = async_sessionmaker(
 
 # Synchronous engine for Celery tasks (cannot use async sessions in Celery)
 # Convert asyncpg URL to psycopg (psycopg3 sync driver)
+if not settings.DATABASE_URL.startswith("postgresql+asyncpg://"):
+    raise ValueError(
+        f"DATABASE_URL must use the 'postgresql+asyncpg://' driver prefix, "
+        f"got: {settings.DATABASE_URL.split('://')[0]}://"
+    )
 _sync_db_url = settings.DATABASE_URL.replace(
     "postgresql+asyncpg://", "postgresql+psycopg://"
 )
@@ -48,27 +53,6 @@ SyncSessionLocal = sessionmaker(
     autoflush=False,
 )
 
-
-def get_sync_db() -> Generator[Session, None, None]:
-    """
-    Synchronous database session generator for Celery tasks.
-
-    Celery workers cannot use async database sessions. This provides
-    a synchronous session backed by psycopg (psycopg3 sync driver).
-
-    Usage:
-        with SyncSessionLocal() as db:
-            episode = db.get(Episode, episode_id)
-    """
-    db = SyncSessionLocal()
-    try:
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
 
 # Base class for SQLAlchemy models
 Base = declarative_base()

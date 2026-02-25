@@ -166,11 +166,30 @@ def generate_podcast_task(
             "error": None
         }
 
-        # Chain the finalization task (S3 upload + DB update)
-        finalize_episode_generation_task.delay(
-            episode_id=episode_id,
-            generation_result=generation_result,
-        )
+        # Chain the finalization task (S3 upload + DB update).
+        # Isolated try/except: a broker hiccup must not mark a successful
+        # generation as "failed" or orphan the audio file.
+        try:
+            finalize_episode_generation_task.delay(
+                episode_id=episode_id,
+                generation_result=generation_result,
+            )
+        except Exception as broker_err:
+            logger.critical(
+                "Celery broker unavailable after successful generation for "
+                "episode %s — falling back to synchronous finalization: %s",
+                episode_id, broker_err,
+            )
+            try:
+                finalize_episode_generation_task(
+                    episode_id=episode_id,
+                    generation_result=generation_result,
+                )
+            except Exception as sync_err:
+                logger.critical(
+                    "Synchronous finalization also failed for episode %s: %s",
+                    episode_id, sync_err,
+                )
 
         return generation_result
 

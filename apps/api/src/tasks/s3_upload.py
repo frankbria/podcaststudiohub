@@ -89,11 +89,16 @@ def upload_to_s3_task(
 
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code", "")
-        # Don't retry client errors (invalid credentials, bucket not found)
-        if error_code in ("NoSuchBucket", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AccessDenied"):
-            logger.error(f"S3 upload failed with non-retryable error: {str(e)}")
-        else:
-            logger.error(f"S3 upload failed for {file_path}: {str(e)}")
+        NON_RETRYABLE_CODES = frozenset({
+            "NoSuchBucket", "InvalidAccessKeyId",
+            "SignatureDoesNotMatch", "AccessDenied",
+        })
+        if error_code in NON_RETRYABLE_CODES:
+            # Re-raise non-retryable errors so they are never retried,
+            # even if autoretry_for is added to this task in the future.
+            logger.error(f"S3 upload failed with non-retryable error ({error_code}): {e}")
+            raise
+        logger.error(f"S3 upload failed for {file_path}: {str(e)}")
         return {
             "status": "failed",
             "s3_key": None,

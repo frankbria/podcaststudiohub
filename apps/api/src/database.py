@@ -1,10 +1,11 @@
 """
 Async database configuration and session management
 """
+import re
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import declarative_base
-from sqlalchemy import text
-from typing import AsyncGenerator, Optional
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import declarative_base, sessionmaker
+from typing import AsyncGenerator
 from fastapi import Request
 
 from src.config import settings
@@ -26,6 +27,14 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
     autoflush=False,
 )
+
+# Create synchronous engine for Celery callbacks and other sync contexts.
+# Converts postgresql+asyncpg:// to postgresql+psycopg:// for psycopg3 sync access.
+_sync_db_url = re.sub(r'\+asyncpg', '+psycopg', settings.DATABASE_URL)
+sync_engine = create_engine(_sync_db_url, pool_pre_ping=True)
+
+# Synchronous session factory for use in Celery callbacks
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
 
 # Base class for SQLAlchemy models
 Base = declarative_base()

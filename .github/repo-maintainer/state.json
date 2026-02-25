@@ -1,9 +1,9 @@
 {
   "version": 1,
   "loop": {
-    "last_run_at": "2026-02-24T04:41:35Z",
+    "last_run_at": "2026-02-25T05:41:19Z",
     "last_run_result": "failure",
-    "last_implemented_issue": 12,
+    "last_implemented_issue": 11,
     "active_pr": null,
     "paused": false,
     "pause_reason": null
@@ -11,10 +11,10 @@
   "counters": {
     "prs_today": 0,
     "issues_created_today": 0,
-    "estimated_cost_today_usd": 3,
-    "day_reset_date": "2026-02-24",
+    "estimated_cost_today_usd": 1,
+    "day_reset_date": "2026-02-25",
     "prs_this_month": 0,
-    "estimated_cost_this_month_usd": 3,
+    "estimated_cost_this_month_usd": 4,
     "month_reset_date": "2026-02"
   },
   "proving": {
@@ -27,7 +27,7 @@
   },
   "feedback": {
     "consecutive_rejected_prs": 0,
-    "consecutive_ci_failures": 0
+    "consecutive_ci_failures": 1
   },
   "history": [
     {
@@ -50,6 +50,13 @@
       "result": "failure",
       "cost_usd": 1.00,
       "at": "2026-02-24T04:41:35Z"
+    },
+    {
+      "issue": 11,
+      "pr": null,
+      "result": "failure",
+      "cost_usd": 1.00,
+      "at": "2026-02-25T05:41:19Z"
     }
   ]
 }

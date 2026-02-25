@@ -65,11 +65,32 @@ SORTED=$(echo "$FILTERED" | jq 'sort_by(
 	else 4 end
 )')
 
+# Read max_implementation_attempts from config (default 2)
+MAX_ATTEMPTS=$(yq -r '.limits.max_implementation_attempts // 2' "$CONFIG")
+
+# Build a list of issues that have hit max consecutive failures in history.
+# Groups failure entries by issue number and skips those with >= max attempts.
+FAILED_ISSUES=$(jq -r --argjson max "$MAX_ATTEMPTS" '
+	[.history[] | select(.result == "failure")]
+	| group_by(.issue)
+	| map(select(length >= $max))
+	| map(.[0].issue)
+	| .[]
+' "$STATE" 2>/dev/null || echo "")
+
 # Extract just the issue numbers in priority order, then check each for open PRs
 ISSUE_NUMBERS=$(echo "$SORTED" | jq -r '.[].number')
 
 SELECTED_NUMBER=""
 for NUM in $ISSUE_NUMBERS; do
+	# Skip issues that have exceeded max implementation attempts
+	if echo "$FAILED_ISSUES" | grep -qw "$NUM"; then
+		echo "Skipping issue #${NUM}: hit ${MAX_ATTEMPTS} consecutive failures" >&2
+		# Add maintainer-skip label so future runs filter it out early
+		gh issue edit "$NUM" --add-label "maintainer-skip" 2>/dev/null || true
+		continue
+	fi
+
 	# Check if there's already an open PR for this issue
 	EXISTING_PR=$(gh pr list --search "maintainer/issue-${NUM}" --state open --json number --limit 1 2>/dev/null || echo "[]")
 	if [[ "$EXISTING_PR" != "[]" && -n "$EXISTING_PR" ]]; then

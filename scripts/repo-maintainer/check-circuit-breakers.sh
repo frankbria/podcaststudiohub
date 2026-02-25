@@ -68,9 +68,21 @@ if [[ "$REJECTED" -ge 2 ]]; then
 	skip "2+ consecutive PR rejections — auto-paused"
 fi
 
-# 3. Consecutive CI failures
+# 3. Consecutive CI failures (half-open recovery after 24h cooldown)
 if [[ "$CI_FAILURES" -ge 3 ]]; then
-	skip "3+ consecutive CI failures — auto-paused"
+	HALF_OPEN_HOURS=24
+	if [[ -n "$LAST_RUN" ]]; then
+		LAST_EPOCH=$(date -u -d "$LAST_RUN" +%s 2>/dev/null || echo 0)
+		HOURS_SINCE=$(( (NOW_EPOCH - LAST_EPOCH) / 3600 ))
+		if [[ "$HOURS_SINCE" -ge "$HALF_OPEN_HOURS" ]]; then
+			echo "{\"should_run\":true,\"reason\":\"half-open probe after ${HOURS_SINCE}h cooldown (${CI_FAILURES} CI failures)\",\"mode\":\"$MODE\",\"half_open\":true}" >&2
+			# Fall through — allow this probe run
+		else
+			skip "3+ consecutive CI failures — blocked (${HOURS_SINCE}h/${HALF_OPEN_HOURS}h cooldown remaining)"
+		fi
+	else
+		skip "3+ consecutive CI failures — auto-paused (no last_run_at)"
+	fi
 fi
 
 # 4. Daily PR limit

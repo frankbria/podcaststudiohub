@@ -27,7 +27,7 @@
   },
   "feedback": {
     "consecutive_rejected_prs": 0,
-    "consecutive_ci_failures": 3
+    "consecutive_ci_failures": 0
   },
   "history": [
     {

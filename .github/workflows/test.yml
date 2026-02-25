@@ -21,6 +21,21 @@ jobs:
     name: Backend Tests (Python/FastAPI)
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: podcastfy
+          POSTGRES_PASSWORD: podcastfy_password
+          POSTGRES_DB: podcastfy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,7 +57,7 @@ jobs:
       - name: Run pytest with coverage
         working-directory: apps/api
         env:
-          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
+          DATABASE_URL: postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy
           SECRET_KEY: test-secret-key-for-ci
           ENCRYPTION_KEY: test-encryption-key-for-ci-0000
           JWT_SECRET_KEY: test-jwt-secret-for-ci

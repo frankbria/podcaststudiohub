@@ -52,6 +52,9 @@ const config = {
     '**/__tests__/**/*.[jt]s?(x)',
     '**/?(*.)+(spec|test).[jt]s?(x)',
   ],
+
+  // Exclude Playwright E2E tests from Jest
+  testPathIgnorePatterns: ['/node_modules/', '/e2e/'],
 }
 
 // createJestConfig is exported this way to ensure that next/jest can load the Next.js config which is async

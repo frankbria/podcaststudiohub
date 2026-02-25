@@ -99,6 +99,14 @@ async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]
 
             yield session
             await session.commit()
+        except ValueError:
+            # Invalid tenant_id format — treat as auth failure
+            from fastapi import HTTPException, status
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid tenant context",
+            )
         except Exception:
             await session.rollback()
             raise

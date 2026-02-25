@@ -140,8 +140,7 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 
-# npm/pnpm/yarn
-package-lock.json
+# npm/pnpm/yarn (package-lock.json is committed for CI reproducibility)
 pnpm-lock.yaml
 yarn.lock
 .pnpm-debug.log*

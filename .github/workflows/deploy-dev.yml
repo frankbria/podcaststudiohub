@@ -47,8 +47,10 @@ jobs:
         if: ${{ !inputs.skip_tests }}
         working-directory: apps/api
         env:
-          DATABASE_URL: sqlite:///test.db
+          DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/test
           SECRET_KEY: test-secret-key-for-ci
+          ENCRYPTION_KEY: test-encryption-key-for-ci-0000
+          JWT_SECRET_KEY: test-jwt-secret-for-ci
           CELERY_BROKER_URL: redis://localhost:6379/0
           CELERY_RESULT_BACKEND: redis://localhost:6379/0
         run: |

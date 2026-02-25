@@ -27,31 +27,43 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
 )
 
-# Synchronous engine for Celery tasks (cannot use async sessions in Celery)
-# Convert asyncpg URL to psycopg (psycopg3 sync driver)
-if not settings.DATABASE_URL.startswith("postgresql+asyncpg://"):
-    raise ValueError(
-        f"DATABASE_URL must use the 'postgresql+asyncpg://' driver prefix, "
-        f"got: {settings.DATABASE_URL.split('://')[0]}://"
-    )
-_sync_db_url = settings.DATABASE_URL.replace(
-    "postgresql+asyncpg://", "postgresql+psycopg://"
-)
-sync_engine = create_engine(
-    _sync_db_url,
-    echo=settings.DEBUG,
-    pool_pre_ping=True,
-    pool_size=settings.DATABASE_POOL_SIZE,
-    max_overflow=settings.DATABASE_MAX_OVERFLOW,
-)
+# Lazy synchronous engine for Celery tasks (cannot use async sessions in Celery).
+# Deferred so that importing this module doesn't crash when DATABASE_URL isn't
+# a PostgreSQL asyncpg URL (e.g. in test environments using SQLite).
+_sync_engine = None
+_sync_session_factory = None
 
-# Synchronous session factory for Celery tasks
-SyncSessionLocal = sessionmaker(
-    bind=sync_engine,
-    expire_on_commit=False,
-    autocommit=False,
-    autoflush=False,
-)
+
+def _get_sync_engine():
+    global _sync_engine
+    if _sync_engine is None:
+        db_url = settings.DATABASE_URL
+        if not db_url.startswith("postgresql+asyncpg://"):
+            raise ValueError(
+                f"DATABASE_URL must use the 'postgresql+asyncpg://' driver prefix, "
+                f"got: {db_url.split('://')[0]}://"
+            )
+        _sync_engine = create_engine(
+            db_url.replace("postgresql+asyncpg://", "postgresql+psycopg://"),
+            echo=settings.DEBUG,
+            pool_pre_ping=True,
+            pool_size=settings.DATABASE_POOL_SIZE,
+            max_overflow=settings.DATABASE_MAX_OVERFLOW,
+        )
+    return _sync_engine
+
+
+def SyncSessionLocal():
+    """Synchronous session factory for Celery tasks — lazily creates the engine."""
+    global _sync_session_factory
+    if _sync_session_factory is None:
+        _sync_session_factory = sessionmaker(
+            bind=_get_sync_engine(),
+            expire_on_commit=False,
+            autocommit=False,
+            autoflush=False,
+        )
+    return _sync_session_factory()
 
 
 # Base class for SQLAlchemy models

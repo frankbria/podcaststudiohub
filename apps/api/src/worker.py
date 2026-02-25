@@ -39,8 +39,11 @@ celery_app.conf.update(
 
 # Task routes (optional - for future scaling)
 celery_app.conf.task_routes = {
+    "generate_podcast": {"queue": "podcast_generation"},
+    "finalize_episode_generation": {"queue": "podcast_generation"},
     "src.tasks.podcast_generation.*": {"queue": "podcast_generation"},
     "src.tasks.audio_composition.*": {"queue": "audio_processing"},
+    "upload_to_s3": {"queue": "uploads"},
     "src.tasks.s3_upload.*": {"queue": "uploads"},
     "src.tasks.platform_distribution.*": {"queue": "distribution"},
 }

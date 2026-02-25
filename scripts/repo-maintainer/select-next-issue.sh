@@ -92,7 +92,9 @@ for NUM in $ISSUE_NUMBERS; do
 	fi
 
 	# Check if there's already an open PR for this issue
-	EXISTING_PR=$(gh pr list --search "maintainer/issue-${NUM}" --state open --json number --limit 1 2>/dev/null || echo "[]")
+	EXISTING_PR=$(gh pr list --state open --json number,headRefName \
+		--jq "[.[] | select(.headRefName | startswith(\"maintainer/issue-${NUM}\"))]" \
+		2>/dev/null || echo "[]")
 	if [[ "$EXISTING_PR" != "[]" && -n "$EXISTING_PR" ]]; then
 		continue
 	fi

@@ -117,6 +117,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
       - name: Read implementation prompt
         id: prompt
         run: |
@@ -143,56 +148,39 @@ jobs:
           echo "max_files=$MAX_FILES" >> $GITHUB_OUTPUT
           echo "pr_type=$PR_TYPE" >> $GITHUB_OUTPUT
           echo "slug=$SLUG" >> $GITHUB_OUTPUT
-        env:
-          YQ_INSTALLED: "true"
-
-      - name: Install tools
-        run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          npm install -g @anthropic-ai/claude-code@latest
 
       - name: Run Claude Code Implementation
         id: claude
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ISSUE=${{ needs.select-issue.outputs.issue_number }}
-          MAX_LINES=${{ steps.prompt.outputs.max_lines }}
-          MAX_FILES=${{ steps.prompt.outputs.max_files }}
-          PR_TYPE=${{ steps.prompt.outputs.pr_type }}
-          SLUG=${{ steps.prompt.outputs.slug }}
-          TIER=${{ needs.select-issue.outputs.tier }}
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the Repo Maintainer agent implementing issue #${{ needs.select-issue.outputs.issue_number }}.
 
-          claude -p "You are the Repo Maintainer agent implementing issue #${ISSUE}.
+            ## Instructions
+            1. Read the issue: `gh issue view ${{ needs.select-issue.outputs.issue_number }}`
+            2. Check issue comments for an implementation plan
+            3. Read CLAUDE.md for project conventions
+            4. Explore the codebase to understand existing patterns
 
-          ## Instructions
-          1. Read the issue: gh issue view ${ISSUE}
-          2. Check issue comments for an implementation plan
-          3. Read CLAUDE.md for project conventions
-          4. Explore the codebase to understand existing patterns
+            ## Implementation
+            - Follow TDD: write tests first, then implement
+            - Follow existing code patterns
+            - Keep changes under ${{ steps.prompt.outputs.max_lines }} lines and ${{ steps.prompt.outputs.max_files }} files
+            - Create branch: `maintainer/issue-${{ needs.select-issue.outputs.issue_number }}-${{ steps.prompt.outputs.slug }}`
 
-          ## Implementation
-          - Follow TDD: write tests first, then implement
-          - Follow existing code patterns
-          - Keep changes under ${MAX_LINES} lines and ${MAX_FILES} files
-          - Create branch: maintainer/issue-${ISSUE}-${SLUG}
+            ## Testing
+            - Python: `cd apps/api && uv run pytest`
+            - TypeScript: `cd apps/web && npm test`
+            - Linting: `cd apps/api && uv run ruff check .` and `cd apps/web && npm run lint`
 
-          ## Testing
-          - Python: cd apps/api && uv run pytest
-          - TypeScript: cd apps/web && npm test
-          - Linting: cd apps/api && uv run ruff check . and cd apps/web && npm run lint
+            ## PR Creation
+            Create a ${{ steps.prompt.outputs.pr_type }} PR that closes #${{ needs.select-issue.outputs.issue_number }}.
+            Include a summary, list of changes, and test plan.
+            Add footer: `Automated by repo-maintainer (${{ needs.select-issue.outputs.tier }})`
 
-          ## PR Creation
-          Create a ${PR_TYPE} PR that closes #${ISSUE}.
-          Include a summary, list of changes, and test plan.
-          Add footer: Automated by repo-maintainer (${TIER})
-
-          If tests fail after 2 attempts, create a draft PR explaining the issue." \
-            --model sonnet \
-            --allowedTools 'Bash,Read,Write,Edit,Glob,Grep' \
-            --max-turns 50
+            If tests fail after 2 attempts, create a draft PR explaining the issue.
+          claude_args: '--model sonnet --allowedTools "Bash,Read,Write,Edit,Glob,Grep" --max-turns 50'
 
       - name: Get PR number from output
         id: get-pr

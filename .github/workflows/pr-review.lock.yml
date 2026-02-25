@@ -22,7 +22,7 @@
 # For more information: https://github.github.com/gh-aw/introduction/overview/
 #
 #
-# gh-aw-metadata: {"schema_version":"v1","frontmatter_hash":"19633381c6b7d1b9aedc2d1c5474f57b2aab863fc0326801d18f6f619d6633b2","compiler_version":"v0.46.5"}
+# gh-aw-metadata: {"schema_version":"v1","frontmatter_hash":"73ba1ca8cdb33552de00fa4f2b08bfcc3f2195331dad7a8f2339b293b73f3c2d","compiler_version":"v0.46.5"}
 
 name: "PR Review Agent"
 "on":

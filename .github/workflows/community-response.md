@@ -2,6 +2,10 @@
 on:
   issue_comment:
     types: [created]
+  skip-bots:
+    - github-actions
+    - dependabot
+    - repo-maintainer
 permissions:
   contents: read
   issues: read

@@ -8,10 +8,11 @@ automatically enforce tenant isolation via RLS.
 Note: Content sources are nested under episodes at /episodes/{episode_id}/content
 """
 
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
-from typing import Optional
+from typing import Dict, Any
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
@@ -30,6 +31,8 @@ from ..services.content_service import (
     delete_content_source
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["content"])
 
 
@@ -41,6 +44,7 @@ router = APIRouter(tags=["content"])
 async def create_content_source(
     episode_id: UUID,
     content_data: ContentSourceCreate,
+    auto_extract: bool = True,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -51,9 +55,13 @@ async def create_content_source(
     Validates source_data structure based on source_type.
     Requires authentication. Initial extraction_status is 'pending'.
 
+    If auto_extract=True (default), queues a background extraction task
+    immediately after creation so content is ready for generation.
+
     Args:
         episode_id: UUID of parent episode
         content_data: Content source creation data with source_type and source_data
+        auto_extract: Whether to automatically trigger extraction (default True)
         current_user: Authenticated user (from JWT token)
         db: Database session
 
@@ -85,6 +93,24 @@ async def create_content_source(
         tenant_id=current_user.tenant_id,
         content_data=content_data
     )
+
+    # Auto-trigger extraction if requested
+    if auto_extract and content_source.source_type in ('url', 'pdf', 'text'):
+        try:
+            from ..tasks.content_extraction import extract_content_task
+            extract_content_task.delay(
+                content_source_id=str(content_source.id),
+                source_type=content_source.source_type,
+            )
+            logger.info(
+                f"Triggered extraction task for content source {content_source.id}"
+            )
+        except Exception as e:
+            # Broker unavailable — log but don't fail creation
+            logger.warning(
+                f"Could not queue extraction task for {content_source.id}: {e}"
+            )
+
     return content_source
 
 
@@ -255,3 +281,117 @@ async def delete_content_source_endpoint(
 
     await delete_content_source(db=db, content_source=content_source)
     return None  # 204 No Content
+
+
+@router.post(
+    "/content/{content_id}/extract",
+    status_code=status.HTTP_202_ACCEPTED
+)
+async def trigger_content_extraction(
+    content_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Trigger content extraction for a content source.
+
+    Queues a background Celery task to extract content from the source URL,
+    PDF file, or text data. Returns immediately with task information.
+
+    The extraction updates ContentSource.extraction_status and
+    ContentSource.extracted_content asynchronously. Poll
+    GET /content/{content_id}/extraction-status to check progress.
+
+    Args:
+        content_id: UUID of content source to extract
+        current_user: Authenticated user (from JWT token)
+        db: Database session
+
+    Returns:
+        202 Accepted with task_id, content_source_id, and status
+
+    Raises:
+        HTTPException: 404 if content source not found
+        HTTPException: 422 if source_type is not extractable
+        HTTPException: 503 if extraction task cannot be queued
+    """
+    content_source = await get_content_source_by_id(db=db, content_id=content_id)
+
+    if content_source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Content source not found"
+        )
+
+    if content_source.source_type not in ('url', 'pdf', 'text'):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Source type '{content_source.source_type}' does not support extraction"
+        )
+
+    try:
+        from ..tasks.content_extraction import extract_content_task
+        task = extract_content_task.delay(
+            content_source_id=str(content_id),
+            source_type=content_source.source_type,
+        )
+        logger.info(
+            f"Triggered extraction task {task.id} for content source {content_id}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue extraction task for {content_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Extraction service unavailable — please try again later"
+        )
+
+    return {
+        "content_source_id": str(content_id),
+        "task_id": task.id,
+        "status": "extracting",
+        "message": "Content extraction started",
+    }
+
+
+@router.get("/content/{content_id}/extraction-status")
+async def get_extraction_status(
+    content_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+) -> Dict[str, Any]:
+    """
+    Get current extraction status for a content source.
+
+    Returns the extraction_status, word count (if complete), and error details
+    (if failed). Useful for polling from the frontend to show progress.
+
+    Args:
+        content_id: UUID of content source to check
+        current_user: Authenticated user (from JWT token)
+        db: Database session
+
+    Returns:
+        Dictionary with extraction_status, extracted_word_count, error_message
+
+    Raises:
+        HTTPException: 404 if content source not found
+    """
+    content_source = await get_content_source_by_id(db=db, content_id=content_id)
+
+    if content_source is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Content source not found"
+        )
+
+    word_count = None
+    if content_source.extracted_content:
+        word_count = len(content_source.extracted_content.split())
+
+    return {
+        "content_source_id": str(content_id),
+        "extraction_status": content_source.extraction_status,
+        "extracted_word_count": word_count,
+        "error_message": content_source.error_message,
+        "updated_at": content_source.updated_at.isoformat() if content_source.updated_at else None,
+    }

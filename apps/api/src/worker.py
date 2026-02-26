@@ -15,6 +15,7 @@ celery_app = Celery(
         "src.tasks.audio_composition",
         "src.tasks.s3_upload",
         "src.tasks.platform_distribution",
+        "src.tasks.content_extraction",
     ]
 )
 
@@ -46,6 +47,8 @@ celery_app.conf.task_routes = {
     "upload_to_s3": {"queue": "uploads"},
     "src.tasks.s3_upload.*": {"queue": "uploads"},
     "src.tasks.platform_distribution.*": {"queue": "distribution"},
+    "extract_content": {"queue": "content_extraction"},
+    "src.tasks.content_extraction.*": {"queue": "content_extraction"},
 }
 
 # Beat schedule (optional - for periodic tasks)

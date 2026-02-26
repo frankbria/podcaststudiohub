@@ -56,19 +56,36 @@ async def generate_podcast(
         )
 
     # Prepare content data
+    # Prefer extracted_content (from ContentExtractionService) over raw source_data
     urls = []
     file_paths = []
     text_content = []
 
     for source in content_sources:
-        if source.source_type == "url":
-            urls.append(source.source_data.get("url"))
-        elif source.source_type == "youtube":
-            urls.append(source.source_data.get("url"))
-        elif source.source_type == "file":
-            file_paths.append(source.source_data.get("s3_key"))
-        elif source.source_type == "text":
-            text_content.append(source.source_data.get("content"))
+        if source.extraction_status == "complete" and source.extracted_content:
+            # Use pre-extracted text for all extractable source types
+            text_content.append(source.extracted_content)
+            import logging
+            logging.getLogger(__name__).info(
+                f"Using extracted content for source {source.id} "
+                f"({source.source_type}, {len(source.extracted_content)} chars)"
+            )
+        else:
+            # Fall back to raw source_data if extraction hasn't completed
+            if source.extraction_status not in ("complete",):
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Content source {source.id} extraction_status="
+                    f"'{source.extraction_status}' — falling back to source_data"
+                )
+            if source.source_type == "url":
+                urls.append(source.source_data.get("url"))
+            elif source.source_type == "youtube":
+                urls.append(source.source_data.get("url"))
+            elif source.source_type == "file":
+                file_paths.append(source.source_data.get("s3_key"))
+            elif source.source_type == "text":
+                text_content.append(source.source_data.get("content"))
 
     # Start Celery task
     task = generate_podcast_task.delay(

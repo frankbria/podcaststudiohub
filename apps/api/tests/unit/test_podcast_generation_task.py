@@ -91,8 +91,9 @@ def test_task_passes_file_paths_to_generate_podcast():
 
 	with patch.object(generate_podcast_task, 'update_state'), \
 		 patch.dict(sys.modules, mock_modules), \
-		 patch('os.path.getsize', return_value=1024), \
-		 patch('pydub.AudioSegment') as mock_audio:
+		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=1024), \
+		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
+		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
 
 		mock_audio.from_file.return_value = audio_instance
 
@@ -122,8 +123,9 @@ def test_task_passes_text_content_to_generate_podcast():
 
 	with patch.object(generate_podcast_task, 'update_state'), \
 		 patch.dict(sys.modules, mock_modules), \
-		 patch('os.path.getsize', return_value=1024), \
-		 patch('pydub.AudioSegment') as mock_audio:
+		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=1024), \
+		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
+		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
 
 		mock_audio.from_file.return_value = audio_instance
 
@@ -151,8 +153,9 @@ def test_task_no_type_error_with_router_parameter_names():
 
 	with patch.object(generate_podcast_task, 'update_state'), \
 		 patch.dict(sys.modules, mock_modules), \
-		 patch('os.path.getsize', return_value=1024), \
-		 patch('pydub.AudioSegment') as mock_audio:
+		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=1024), \
+		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
+		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
 
 		mock_audio.from_file.return_value = audio_instance
 
@@ -179,8 +182,9 @@ def test_task_returns_success_result():
 
 	with patch.object(generate_podcast_task, 'update_state'), \
 		 patch.dict(sys.modules, mock_modules), \
-		 patch('os.path.getsize', return_value=2048), \
-		 patch('pydub.AudioSegment') as mock_audio:
+		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=2048), \
+		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
+		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
 
 		mock_audio.from_file.return_value = audio_instance
 

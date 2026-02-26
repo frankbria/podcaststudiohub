@@ -23,8 +23,8 @@ def generate_podcast_task(
     self: Task,
     episode_id: str,
     urls: Optional[List[str]] = None,
-    text: Optional[str] = None,
-    pdf_paths: Optional[List[str]] = None,
+    text_content: Optional[str] = None,
+    file_paths: Optional[List[str]] = None,
     image_paths: Optional[List[str]] = None,
     youtube_urls: Optional[List[str]] = None,
     topic: Optional[str] = None,
@@ -42,8 +42,8 @@ def generate_podcast_task(
         self: Celery task instance (for progress updates)
         episode_id: UUID of the episode being generated
         urls: List of URLs to extract content from
-        text: Raw text content
-        pdf_paths: List of PDF file paths
+        text_content: Raw text content
+        file_paths: List of file paths (PDFs, documents, etc.)
         image_paths: List of image file paths
         youtube_urls: List of YouTube URLs
         topic: Topic for content generation (uses web search)
@@ -107,8 +107,8 @@ def generate_podcast_task(
         # Generate the podcast using existing CLI
         result = generate_podcast(
             urls=urls,
-            text=text,
-            file=pdf_paths,
+            text=text_content,
+            file=file_paths,
             image_paths=image_paths,
             youtube_urls=youtube_urls,
             topic=topic,

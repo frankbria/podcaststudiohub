@@ -82,12 +82,17 @@ FAILED_ISSUES=$(jq -r --argjson max "$MAX_ATTEMPTS" '
 ISSUE_NUMBERS=$(echo "$SORTED" | jq -r '.[].number')
 
 SELECTED_NUMBER=""
+SKIP_REASON=""
+TRIED_NUMBERS=""
+SOURCE_JSON="$SORTED"
+
 for NUM in $ISSUE_NUMBERS; do
+	TRIED_NUMBERS="$TRIED_NUMBERS $NUM"
 	# Skip issues that have exceeded max implementation attempts
 	if echo "$FAILED_ISSUES" | grep -qw "$NUM"; then
 		echo "Skipping issue #${NUM}: hit ${MAX_ATTEMPTS} consecutive failures" >&2
-		# Add maintainer-skip label so future runs filter it out early
 		gh issue edit "$NUM" --add-label "maintainer-skip" 2>/dev/null || true
+		SKIP_REASON="exhausted"
 		continue
 	fi
 
@@ -96,6 +101,7 @@ for NUM in $ISSUE_NUMBERS; do
 		--jq "[.[] | select(.headRefName | startswith(\"maintainer/issue-${NUM}\"))]" \
 		2>/dev/null || echo "[]")
 	if [[ "$EXISTING_PR" != "[]" && -n "$EXISTING_PR" ]]; then
+		SKIP_REASON="open_pr"
 		continue
 	fi
 
@@ -103,14 +109,71 @@ for NUM in $ISSUE_NUMBERS; do
 	break
 done
 
+# Cross-phase fallback: if all current-phase candidates were exhausted/skipped,
+# try ALL plan-ready issues across all phases
 if [[ -z "$SELECTED_NUMBER" ]]; then
-	echo '{"issue_number":null,"reason":"All eligible issues already have open PRs"}'
+	echo "Phase $CURRENT_PHASE exhausted, trying cross-phase fallback..." >&2
+	ALL_ISSUES=$(gh issue list \
+		--state open \
+		--label "plan-ready" \
+		--json number,title,labels \
+		--limit 50 2>/dev/null || echo "[]")
+
+	# Filter skip/human-only, exclude already-tried numbers, sort by priority
+	ALL_FILTERED=$(echo "$ALL_ISSUES" | jq '[
+		.[] | select(
+			([.labels[].name] | any(. == "maintainer-skip" or . == "maintainer-human-only")) | not
+		)
+	]')
+	ALL_SORTED=$(echo "$ALL_FILTERED" | jq 'sort_by(
+		if [.labels[].name] | any(startswith("priority-p0")) then 0
+		elif [.labels[].name] | any(startswith("priority-p1")) then 1
+		elif [.labels[].name] | any(startswith("priority-p2")) then 2
+		elif [.labels[].name] | any(startswith("priority-p3")) then 3
+		else 4 end
+	)')
+	ALL_NUMBERS=$(echo "$ALL_SORTED" | jq -r '.[].number')
+
+	for NUM in $ALL_NUMBERS; do
+		# Skip issues already checked in pass 1
+		if echo "$TRIED_NUMBERS" | grep -qw "$NUM"; then
+			continue
+		fi
+		# Skip issues that have exceeded max implementation attempts
+		if echo "$FAILED_ISSUES" | grep -qw "$NUM"; then
+			echo "Skipping issue #${NUM} (cross-phase): hit ${MAX_ATTEMPTS} failures" >&2
+			gh issue edit "$NUM" --add-label "maintainer-skip" 2>/dev/null || true
+			SKIP_REASON="exhausted"
+			continue
+		fi
+		# Check for open PR
+		EXISTING_PR=$(gh pr list --state open --json number,headRefName \
+			--jq "[.[] | select(.headRefName | startswith(\"maintainer/issue-${NUM}\"))]" \
+			2>/dev/null || echo "[]")
+		if [[ "$EXISTING_PR" != "[]" && -n "$EXISTING_PR" ]]; then
+			SKIP_REASON="open_pr"
+			continue
+		fi
+
+		SELECTED_NUMBER="$NUM"
+		SOURCE_JSON="$ALL_SORTED"
+		break
+	done
+fi
+
+if [[ -z "$SELECTED_NUMBER" ]]; then
+	case "$SKIP_REASON" in
+		exhausted) REASON="All plan-ready issues have exhausted max implementation attempts ($MAX_ATTEMPTS)" ;;
+		open_pr)   REASON="All eligible issues already have open PRs" ;;
+		*)         REASON="No eligible plan-ready issues found" ;;
+	esac
+	echo "{\"issue_number\":null,\"reason\":\"$REASON\"}"
 	exit 1
 fi
 
 ISSUE_NUMBER="$SELECTED_NUMBER"
-ISSUE_TITLE=$(echo "$SORTED" | jq -r ".[] | select(.number == $SELECTED_NUMBER) | .title" | tr -d '\n')
-ISSUE_LABELS=$(echo "$SORTED" | jq -r ".[] | select(.number == $SELECTED_NUMBER) | [.labels[].name] | join(\",\")")
+ISSUE_TITLE=$(echo "$SOURCE_JSON" | jq -r ".[] | select(.number == $SELECTED_NUMBER) | .title" | tr -d '\n')
+ISSUE_LABELS=$(echo "$SOURCE_JSON" | jq -r ".[] | select(.number == $SELECTED_NUMBER) | [.labels[].name] | join(\",\")")
 
 # Determine governance tier
 TIER=$("$SCRIPT_DIR/determine-governance-tier.sh" "$ISSUE_NUMBER")

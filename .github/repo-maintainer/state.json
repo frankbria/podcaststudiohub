@@ -31,55 +31,6 @@
   },
   "history": [
     {
-      "issue": 12,
-      "pr": null,
-      "result": "failure",
-      "cost_usd": 1.00,
-      "at": "2026-02-24T02:35:59Z"
-    },
-    {
-      "issue": 12,
-      "pr": null,
-      "result": "failure",
-      "cost_usd": 1.00,
-      "at": "2026-02-24T03:26:17Z"
-    },
-    {
-      "issue": 12,
-      "pr": null,
-      "result": "failure",
-      "cost_usd": 1.00,
-      "at": "2026-02-24T04:41:35Z"
-    },
-    {
-      "issue": 11,
-      "pr": null,
-      "result": "failure",
-      "cost_usd": 1.00,
-      "at": "2026-02-25T05:41:19Z"
-    },
-    {
-      "issue": 11,
-      "pr": null,
-      "result": "failure",
-      "cost_usd": 1.00,
-      "at": "2026-02-25T08:28:53Z"
-    },
-    {
-      "issue": 10,
-      "pr": null,
-      "result": "failure",
-      "cost_usd": 1.00,
-      "at": "2026-02-25T12:29:20Z"
-    },
-    {
-      "issue": 10,
-      "pr": null,
-      "result": "failure",
-      "cost_usd": 1.00,
-      "at": "2026-02-25T14:11:54Z"
-    },
-    {
       "issue": 9,
       "pr": 65,
       "result": "success",

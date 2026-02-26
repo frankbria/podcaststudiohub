@@ -1,11 +1,14 @@
 name: "Repo Maintainer: Documentation"
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - ".github/repo-maintainer/**"
-      - "scripts/repo-maintainer/**"
+  # claude-code-action only supports pull_request, issue_comment, and workflow_dispatch
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for documentation update'
+        required: false
+        type: string
+        default: 'Manual documentation sync'
 
 concurrency:
   group: repo-maintainer-docs

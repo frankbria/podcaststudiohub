@@ -2,9 +2,9 @@
 Async database configuration and session management
 """
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import declarative_base
-from sqlalchemy import text
-from typing import AsyncGenerator, Optional
+from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine, text
+from typing import AsyncGenerator
 from fastapi import Request
 
 from src.config import settings
@@ -26,6 +26,45 @@ AsyncSessionLocal = async_sessionmaker(
     autocommit=False,
     autoflush=False,
 )
+
+# Lazy synchronous engine for Celery tasks (cannot use async sessions in Celery).
+# Deferred so that importing this module doesn't crash when DATABASE_URL isn't
+# a PostgreSQL asyncpg URL (e.g. in test environments using SQLite).
+_sync_engine = None
+_sync_session_factory = None
+
+
+def _get_sync_engine():
+    global _sync_engine
+    if _sync_engine is None:
+        db_url = settings.DATABASE_URL
+        if not db_url.startswith("postgresql+asyncpg://"):
+            raise ValueError(
+                f"DATABASE_URL must use the 'postgresql+asyncpg://' driver prefix, "
+                f"got: {db_url.split('://')[0]}://"
+            )
+        _sync_engine = create_engine(
+            db_url.replace("postgresql+asyncpg://", "postgresql+psycopg://"),
+            echo=settings.DEBUG,
+            pool_pre_ping=True,
+            pool_size=settings.DATABASE_POOL_SIZE,
+            max_overflow=settings.DATABASE_MAX_OVERFLOW,
+        )
+    return _sync_engine
+
+
+def SyncSessionLocal():
+    """Synchronous session factory for Celery tasks — lazily creates the engine."""
+    global _sync_session_factory
+    if _sync_session_factory is None:
+        _sync_session_factory = sessionmaker(
+            bind=_get_sync_engine(),
+            expire_on_commit=False,
+            autocommit=False,
+            autoflush=False,
+        )
+    return _sync_session_factory()
+
 
 # Base class for SQLAlchemy models
 Base = declarative_base()
@@ -60,6 +99,14 @@ async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]
 
             yield session
             await session.commit()
+        except ValueError:
+            # Invalid tenant_id format — treat as auth failure
+            from fastapi import HTTPException, status
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid tenant context",
+            )
         except Exception:
             await session.rollback()
             raise

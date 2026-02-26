@@ -14,6 +14,7 @@ from ..models.episode import Episode
 from ..models.content_source import ContentSource
 from ..models.user import User
 from ..dependencies import get_current_user
+from ..middleware.auth import get_current_user_from_query
 from ..tasks.podcast_generation import generate_podcast_task
 
 router = APIRouter(prefix="/generation", tags=["Generation"])
@@ -97,13 +98,17 @@ async def generate_podcast(
 @router.get("/episodes/{episode_id}/progress")
 async def get_generation_progress_stream(
     episode_id: UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_from_query),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Server-Sent Events (SSE) endpoint for real-time generation progress
 
-    Streams progress updates as they occur during podcast generation
+    Streams progress updates as they occur during podcast generation.
+
+    Authentication: Accepts JWT token via query parameter (?token=<jwt>) to support
+    the browser EventSource API, which cannot send custom headers. Falls back to the
+    standard Authorization header for backward compatibility.
     """
     # Verify episode access
     result = await db.execute(

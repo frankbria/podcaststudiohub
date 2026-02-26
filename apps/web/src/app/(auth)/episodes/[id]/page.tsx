@@ -46,10 +46,12 @@ export default function EpisodePage() {
 
   useEffect(() => {
     if (episode?.generation_status && ["queued", "extracting", "generating", "synthesizing"].includes(episode.generation_status)) {
-      // Start SSE connection for progress updates
-      // Note: EventSource doesn't support custom headers, so we rely on cookie-based auth
+      // EventSource doesn't support custom headers (W3C spec limitation).
+      // Pass JWT token as a query parameter so the backend can authenticate the SSE connection.
+      const token = (session as any)?.accessToken
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ""
       const eventSource = new EventSource(
-        `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress`
+        `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress${tokenParam}`
       )
 
       eventSource.onmessage = (event) => {
@@ -66,9 +68,14 @@ export default function EpisodePage() {
         }
       }
 
+      eventSource.onerror = (error) => {
+        console.error("SSE connection error:", error)
+        eventSource.close()
+      }
+
       return () => eventSource.close()
     }
-  }, [episode?.generation_status])
+  }, [episode?.generation_status, session])
 
   const loadEpisode = async () => {
     try {

@@ -5,10 +5,12 @@ GAP-005: EventSource API cannot send custom headers, so JWT tokens must be
 accepted via query parameters for SSE endpoints.
 """
 import pytest
-from uuid import uuid4
+from uuid import uuid4, UUID as PyUUID
 from datetime import timedelta
+from sqlalchemy import update
 
 from src.services.auth_service import create_jwt_token, create_user
+from src.models.episode import Episode
 
 
 # =============================================================================
@@ -67,31 +69,41 @@ async def episode_with_user(client, registered_user):
 # =============================================================================
 
 @pytest.mark.asyncio
-async def test_progress_stream_with_query_token(client, episode_with_user):
+async def test_progress_stream_with_query_token(client, episode_with_user, test_db):
     """Test that SSE endpoint accepts JWT token in query parameter."""
     episode_id, token, _ = episode_with_user
 
-    # Use streaming mode to get response headers without consuming the infinite SSE body.
-    # The SSE endpoint loops forever until generation_status is "complete"/"failed",
-    # so await client.get() would block indefinitely.
-    async with client.stream(
-        "GET", f"/generation/episodes/{episode_id}/progress?token={token}"
-    ) as response:
-        assert response.status_code == 200
-        assert "text/event-stream" in response.headers.get("content-type", "")
+    # Set episode to "complete" so the SSE stream terminates after one event.
+    # Without this, the endpoint loops forever (while True / sleep 2s) and the
+    # test hangs because httpx reads the full response body.
+    await test_db.execute(
+        update(Episode).where(Episode.id == PyUUID(episode_id)).values(generation_status="complete")
+    )
+    await test_db.flush()
+
+    response = await client.get(
+        f"/generation/episodes/{episode_id}/progress?token={token}"
+    )
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers.get("content-type", "")
 
 
 @pytest.mark.asyncio
-async def test_progress_stream_with_header_token(client, episode_with_user):
+async def test_progress_stream_with_header_token(client, episode_with_user, test_db):
     """Test that SSE endpoint still accepts JWT token in Authorization header (backward compat)."""
     episode_id, token, headers = episode_with_user
 
-    async with client.stream(
-        "GET", f"/generation/episodes/{episode_id}/progress",
+    await test_db.execute(
+        update(Episode).where(Episode.id == PyUUID(episode_id)).values(generation_status="complete")
+    )
+    await test_db.flush()
+
+    response = await client.get(
+        f"/generation/episodes/{episode_id}/progress",
         headers=headers
-    ) as response:
-        assert response.status_code == 200
-        assert "text/event-stream" in response.headers.get("content-type", "")
+    )
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers.get("content-type", "")
 
 
 @pytest.mark.asyncio
@@ -174,12 +186,17 @@ async def test_progress_stream_nonexistent_episode(client, registered_user):
 
 
 @pytest.mark.asyncio
-async def test_progress_stream_query_token_takes_precedence(client, episode_with_user):
+async def test_progress_stream_query_token_takes_precedence(client, episode_with_user, test_db):
     """Test that query param token is used when both query param and header are present."""
     episode_id, token, headers = episode_with_user
 
-    async with client.stream(
-        "GET", f"/generation/episodes/{episode_id}/progress?token={token}",
+    await test_db.execute(
+        update(Episode).where(Episode.id == PyUUID(episode_id)).values(generation_status="complete")
+    )
+    await test_db.flush()
+
+    response = await client.get(
+        f"/generation/episodes/{episode_id}/progress?token={token}",
         headers=headers
-    ) as response:
-        assert response.status_code == 200
+    )
+    assert response.status_code == 200

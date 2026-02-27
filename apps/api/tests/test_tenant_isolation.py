@@ -169,7 +169,7 @@ async def test_tenant_isolation_list_endpoints_filter_by_tenant(client: AsyncCli
         json={
             "name": "User1 Project A",
             "description": "Project A",
-            "podcast_metadata": {"author": "User 1", "language": "en"}
+            "podcast_metadata": {"show_title": "Show A", "author": "User 1", "description": "Desc A"}
         }
     )
     assert resp.status_code == 201
@@ -179,7 +179,7 @@ async def test_tenant_isolation_list_endpoints_filter_by_tenant(client: AsyncCli
         json={
             "name": "User1 Project B",
             "description": "Project B",
-            "podcast_metadata": {"author": "User 1", "language": "en"}
+            "podcast_metadata": {"show_title": "Show B", "author": "User 1", "description": "Desc B"}
         }
     )
     assert resp.status_code == 201
@@ -191,7 +191,7 @@ async def test_tenant_isolation_list_endpoints_filter_by_tenant(client: AsyncCli
         json={
             "name": "User2 Project C",
             "description": "Project C",
-            "podcast_metadata": {"author": "User 2", "language": "en"}
+            "podcast_metadata": {"show_title": "Show C", "author": "User 2", "description": "Desc C"}
         }
     )
     assert resp.status_code == 201

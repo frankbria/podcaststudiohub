@@ -1,7 +1,7 @@
 """JWT authentication middleware for protecting endpoints and extracting user context"""
 
 from typing import Optional
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -173,3 +173,104 @@ async def get_active_user(
     #     )
 
     return current_user
+
+
+async def get_current_user_from_query(
+    token: Optional[str] = Query(None),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """
+    Authenticate user from JWT token in query parameter or Authorization header.
+
+    This dependency is specifically designed for SSE (Server-Sent Events) endpoints.
+    The browser's EventSource API does not support custom headers by the W3C spec,
+    so JWT tokens cannot be sent via the standard Authorization header. Instead,
+    the token is accepted as a URL query parameter: ?token=<jwt>.
+
+    The dependency falls back to the Authorization header for backward compatibility,
+    allowing standard HTTP clients to authenticate with both methods. When both are
+    present, the query parameter token takes precedence.
+
+    Security considerations:
+    - Tokens in query parameters may appear in server logs and browser history.
+      HTTPS must be enforced in production to prevent token interception.
+    - Token expiration (30 minutes) still applies, same as header-based auth.
+    - Use this dependency ONLY for SSE endpoints; standard endpoints should use
+      get_current_user (header-only) for security.
+
+    Args:
+        token: JWT token from query parameter (for SSE/EventSource clients)
+        request: FastAPI request object (used to check Authorization header)
+        db: Database session
+
+    Returns:
+        Authenticated User model instance
+
+    Raises:
+        HTTPException 401: If no token provided, token is invalid, or user not found
+        HTTPException 403: If user account is inactive
+    """
+    # Prefer query param token (SSE use case); fall back to Authorization header
+    jwt_token = token
+    if not jwt_token and request is not None:
+        jwt_token = await extract_token_from_header(request)
+
+    if not jwt_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No authentication token provided",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        # Decode and verify JWT token
+        payload = verify_jwt_token(jwt_token)
+        user_id = payload.get("sub")
+        tenant_id = payload.get("tenant_id")
+
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        # Retrieve user from database
+        result = await db.execute(
+            select(User).where(User.id == UUID(user_id))
+        )
+        user = result.scalar_one_or_none()
+
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Inactive user account"
+            )
+
+        # Store tenant_id from token for RLS context
+        user._tenant_id_from_token = tenant_id
+
+        return user
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

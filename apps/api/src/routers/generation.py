@@ -8,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import asyncio
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 from ..database import get_db
 from ..models.episode import Episode
@@ -65,16 +68,14 @@ async def generate_podcast(
         if source.extraction_status == "complete" and source.extracted_content:
             # Use pre-extracted text for all extractable source types
             text_content.append(source.extracted_content)
-            import logging
-            logging.getLogger(__name__).info(
+            logger.info(
                 f"Using extracted content for source {source.id} "
                 f"({source.source_type}, {len(source.extracted_content)} chars)"
             )
         else:
             # Fall back to raw source_data if extraction hasn't completed
             if source.extraction_status not in ("complete",):
-                import logging
-                logging.getLogger(__name__).warning(
+                logger.warning(
                     f"Content source {source.id} extraction_status="
                     f"'{source.extraction_status}' — falling back to source_data"
                 )

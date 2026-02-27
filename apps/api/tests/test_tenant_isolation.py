@@ -138,81 +138,63 @@ async def test_tenant_isolation_registration_creates_separate_tenants(client: As
 
 
 @pytest.mark.asyncio
-async def test_tenant_isolation_list_endpoints_filter_by_tenant(client: AsyncClient, test_db: AsyncSession):
+async def test_tenant_isolation_list_endpoints_filter_by_tenant(client: AsyncClient):
     """
     Verify list endpoints only return data for the current tenant.
 
     When listing resources (projects), users should only see their
     own tenant's data, not data from other tenants.
     """
-    from datetime import datetime
-    from uuid import uuid4 as _uuid4
+    # Register two users via the API — each gets a separate tenant automatically
+    user1_resp = await client.post("/auth/register", json={
+        "email": f"list_test1_{uuid.uuid4()}@example.com",
+        "password": "SecurePass123!",
+        "full_name": "List Test User 1"
+    })
+    assert user1_resp.status_code == 201
+    token1 = user1_resp.json()["access_token"]
 
-    # Create two users directly in the DB to avoid savepoint lifecycle issues
-    # that occur when using POST /auth/register through the HTTP client.
-    user1 = User(
-        id=_uuid4(),
-        email=f"list_test1_{uuid.uuid4()}@example.com",
-        password_hash=hash_password("SecurePass123!"),
-        full_name="List Test User 1",
-        tenant_id=_uuid4(),
-        is_active=True,
-        is_verified=False,
-        encrypted_api_keys={},
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-    user2 = User(
-        id=_uuid4(),
-        email=f"list_test2_{uuid.uuid4()}@example.com",
-        password_hash=hash_password("SecurePass123!"),
-        full_name="List Test User 2",
-        tenant_id=_uuid4(),
-        is_active=True,
-        is_verified=False,
-        encrypted_api_keys={},
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-    )
-    test_db.add(user1)
-    test_db.add(user2)
-    # Flush so rows are visible within the transaction without releasing the savepoint
-    await test_db.flush()
-
-    # Generate tokens manually — avoids any session commit side effects
-    token1 = create_jwt_token(user1.id, user1.tenant_id, user1.email)
-    token2 = create_jwt_token(user2.id, user2.tenant_id, user2.email)
+    user2_resp = await client.post("/auth/register", json={
+        "email": f"list_test2_{uuid.uuid4()}@example.com",
+        "password": "SecurePass123!",
+        "full_name": "List Test User 2"
+    })
+    assert user2_resp.status_code == 201
+    token2 = user2_resp.json()["access_token"]
 
     # User 1 creates 2 projects
-    await client.post(
+    resp = await client.post(
         "/projects",
         headers={"Authorization": f"Bearer {token1}"},
         json={
-            "title": "User1 Project A",
+            "name": "User1 Project A",
             "description": "Project A",
             "podcast_metadata": {"author": "User 1", "language": "en"}
         }
     )
-    await client.post(
+    assert resp.status_code == 201
+    resp = await client.post(
         "/projects",
         headers={"Authorization": f"Bearer {token1}"},
         json={
-            "title": "User1 Project B",
+            "name": "User1 Project B",
             "description": "Project B",
             "podcast_metadata": {"author": "User 1", "language": "en"}
         }
     )
+    assert resp.status_code == 201
 
     # User 2 creates 1 project
-    await client.post(
+    resp = await client.post(
         "/projects",
         headers={"Authorization": f"Bearer {token2}"},
         json={
-            "title": "User2 Project C",
+            "name": "User2 Project C",
             "description": "Project C",
             "podcast_metadata": {"author": "User 2", "language": "en"}
         }
     )
+    assert resp.status_code == 201
 
     # User 1 lists projects (should see only 2)
     list1_response = await client.get(
@@ -227,7 +209,6 @@ async def test_tenant_isolation_list_endpoints_filter_by_tenant(client: AsyncCli
     user1_projects = user1_data["items"]
     assert len(user1_projects) == 2
 
-    # Projects use 'name' field in the model
     project_names = [p["name"] for p in user1_projects]
     assert "User1 Project A" in project_names
     assert "User1 Project B" in project_names

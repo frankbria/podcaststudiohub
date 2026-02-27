@@ -71,12 +71,14 @@ async def test_progress_stream_with_query_token(client, episode_with_user):
     """Test that SSE endpoint accepts JWT token in query parameter."""
     episode_id, token, _ = episode_with_user
 
-    response = await client.get(
-        f"/generation/episodes/{episode_id}/progress?token={token}"
-    )
-    # Should succeed (200) - connection established, not 401/403
-    assert response.status_code == 200
-    assert "text/event-stream" in response.headers.get("content-type", "")
+    # Use streaming mode to get response headers without consuming the infinite SSE body.
+    # The SSE endpoint loops forever until generation_status is "complete"/"failed",
+    # so await client.get() would block indefinitely.
+    async with client.stream(
+        "GET", f"/generation/episodes/{episode_id}/progress?token={token}"
+    ) as response:
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
 
 
 @pytest.mark.asyncio
@@ -84,12 +86,12 @@ async def test_progress_stream_with_header_token(client, episode_with_user):
     """Test that SSE endpoint still accepts JWT token in Authorization header (backward compat)."""
     episode_id, token, headers = episode_with_user
 
-    response = await client.get(
-        f"/generation/episodes/{episode_id}/progress",
+    async with client.stream(
+        "GET", f"/generation/episodes/{episode_id}/progress",
         headers=headers
-    )
-    assert response.status_code == 200
-    assert "text/event-stream" in response.headers.get("content-type", "")
+    ) as response:
+        assert response.status_code == 200
+        assert "text/event-stream" in response.headers.get("content-type", "")
 
 
 @pytest.mark.asyncio
@@ -172,14 +174,12 @@ async def test_progress_stream_nonexistent_episode(client, registered_user):
 
 
 @pytest.mark.asyncio
-async def test_progress_stream_query_token_takes_precedence(client, episode_with_user, client_second_user=None):
+async def test_progress_stream_query_token_takes_precedence(client, episode_with_user):
     """Test that query param token is used when both query param and header are present."""
     episode_id, token, headers = episode_with_user
 
-    # Both valid token in query param and valid header
-    response = await client.get(
-        f"/generation/episodes/{episode_id}/progress?token={token}",
+    async with client.stream(
+        "GET", f"/generation/episodes/{episode_id}/progress?token={token}",
         headers=headers
-    )
-    # Should succeed since both are valid
-    assert response.status_code == 200
+    ) as response:
+        assert response.status_code == 200

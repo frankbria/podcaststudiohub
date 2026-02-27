@@ -138,29 +138,50 @@ async def test_tenant_isolation_registration_creates_separate_tenants(client: As
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Test DB transaction isolation: users created via HTTP are not visible to get_current_user")
-async def test_tenant_isolation_list_endpoints_filter_by_tenant(client: AsyncClient):
+async def test_tenant_isolation_list_endpoints_filter_by_tenant(client: AsyncClient, test_db: AsyncSession):
     """
     Verify list endpoints only return data for the current tenant.
 
     When listing resources (projects), users should only see their
     own tenant's data, not data from other tenants.
     """
-    # Create two users
-    user1_response = await client.post("/auth/register", json={
-        "email": f"list_test1_{uuid.uuid4()}@example.com",
-        "password": "SecurePass123!",
-        "full_name": "List Test User 1"
-    })
-    token1 = user1_response.json()["access_token"]
-    user1_id = user1_response.json()["user"]["id"]
+    from datetime import datetime
+    from uuid import uuid4 as _uuid4
 
-    user2_response = await client.post("/auth/register", json={
-        "email": f"list_test2_{uuid.uuid4()}@example.com",
-        "password": "SecurePass123!",
-        "full_name": "List Test User 2"
-    })
-    token2 = user2_response.json()["access_token"]
+    # Create two users directly in the DB to avoid savepoint lifecycle issues
+    # that occur when using POST /auth/register through the HTTP client.
+    user1 = User(
+        id=_uuid4(),
+        email=f"list_test1_{uuid.uuid4()}@example.com",
+        password_hash=hash_password("SecurePass123!"),
+        full_name="List Test User 1",
+        tenant_id=_uuid4(),
+        is_active=True,
+        is_verified=False,
+        encrypted_api_keys={},
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    user2 = User(
+        id=_uuid4(),
+        email=f"list_test2_{uuid.uuid4()}@example.com",
+        password_hash=hash_password("SecurePass123!"),
+        full_name="List Test User 2",
+        tenant_id=_uuid4(),
+        is_active=True,
+        is_verified=False,
+        encrypted_api_keys={},
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    test_db.add(user1)
+    test_db.add(user2)
+    # Flush so rows are visible within the transaction without releasing the savepoint
+    await test_db.flush()
+
+    # Generate tokens manually — avoids any session commit side effects
+    token1 = create_jwt_token(user1.id, user1.tenant_id, user1.email)
+    token2 = create_jwt_token(user2.id, user2.tenant_id, user2.email)
 
     # User 1 creates 2 projects
     await client.post(

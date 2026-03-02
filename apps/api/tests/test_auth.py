@@ -394,10 +394,12 @@ async def test_login_inactive_user(client: AsyncClient, test_db: AsyncSession):
         }
     )
 
-    # Get user from database and deactivate
+    # Set tenant context so UPDATE is allowed by RLS, then deactivate
     user_id = UUID(register_response.json()["user"]["id"])
-    from sqlalchemy import select, update
+    tenant_id = register_response.json()["user"]["tenant_id"]
+    from sqlalchemy import select, update, text
 
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
     await test_db.execute(
         update(User)
         .where(User.id == user_id)

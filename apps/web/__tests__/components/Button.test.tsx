@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import * as React from 'react'
 import { Button } from '@/components/ui/button'
 
 describe('Button Component', () => {
@@ -64,5 +65,37 @@ describe('Button Component', () => {
 
     const button = screen.getByRole('button')
     expect(button).toHaveClass(customClass)
+  })
+
+  it('renders secondary variant', () => {
+    render(<Button variant="secondary">Secondary</Button>)
+    expect(screen.getByRole('button')).toBeInTheDocument()
+  })
+
+  it('renders ghost variant', () => {
+    render(<Button variant="ghost">Ghost</Button>)
+    expect(screen.getByRole('button')).toBeInTheDocument()
+  })
+
+  it('renders link variant', () => {
+    render(<Button variant="link">Link</Button>)
+    expect(screen.getByRole('button')).toBeInTheDocument()
+  })
+
+  it('renders icon size', () => {
+    render(<Button size="icon" aria-label="icon-btn">X</Button>)
+    expect(screen.getByRole('button', { name: /icon-btn/i })).toBeInTheDocument()
+  })
+
+  it('renders as child element when asChild is true', () => {
+    render(
+      <Button asChild>
+        <a href="/home">Go Home</a>
+      </Button>
+    )
+    // asChild renders the child element (anchor) directly
+    const link = screen.getByRole('link', { name: /go home/i })
+    expect(link).toBeInTheDocument()
+    expect(link.tagName).toBe('A')
   })
 })

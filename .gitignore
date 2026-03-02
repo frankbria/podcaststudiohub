@@ -59,6 +59,8 @@ lib64/
 
 # Exception: Allow Next.js lib directory for shadcn/ui components
 !apps/web/src/lib/
+# Exception: Allow frontend unit test lib directory
+!apps/web/__tests__/lib/
 parts/
 sdist/
 var/

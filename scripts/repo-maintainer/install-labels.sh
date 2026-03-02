@@ -35,4 +35,16 @@ gh label create "breaking-change" --color "B60205" --description "Contains break
 gh label create "security" --color "B60205" --description "Security-related change" --force
 gh label create "architecture" --color "D93F0B" --description "Architectural change" --force
 
+# PR review labels (used by pr-review.lock.yml)
+gh label create "review-approved" --color "0E8A16" --description "PR review passed" --force
+gh label create "review-changes-requested" --color "D93F0B" --description "PR review requested changes" --force
+gh label create "security-concern" --color "B60205" --description "Security concern found in review" --force
+
+# Review completion labels (used by rm-review.yml)
+gh label create "review-round-1" --color "C5DEF5" --description "Review round 1 completed" --force
+gh label create "review-round-2" --color "BFD4F2" --description "Review round 2 completed" --force
+gh label create "review-round-3" --color "A2C4E0" --description "Review round 3 completed (max)" --force
+gh label create "maintainer-needs-human" --color "E4E669" --description "Auto-review failed, needs human" --force
+gh label create "ready-to-merge" --color "0E8A16" --description "All checks passed, ready for human merge" --force
+
 echo "All labels created successfully."

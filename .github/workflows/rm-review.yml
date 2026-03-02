@@ -1,0 +1,593 @@
+name: "Repo Maintainer: PR Review Completion"
+
+on:
+  workflow_run:
+    workflows: ["PR Review Agent"]
+    types: [completed]
+  schedule:
+    # Twice-daily sweep, offset from rm-loop's */4 schedule
+    - cron: "0 2,14 * * *"
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Force process a specific PR number"
+        required: false
+        type: number
+
+concurrency:
+  group: repo-maintainer-review
+  cancel-in-progress: false
+
+env:
+  CONFIG_PATH: .github/repo-maintainer/config.yml
+  STATE_PATH: .github/repo-maintainer/state.json
+  SCRIPTS_PATH: scripts/repo-maintainer
+
+jobs:
+  # ── Job 1: Circuit Breaker & PR Selection ──────────
+  select-pr:
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.select.outputs.pr_number }}
+      tier: ${{ steps.select.outputs.tier }}
+      round: ${{ steps.select.outputs.round }}
+      linked_issue: ${{ steps.select.outputs.linked_issue }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Check circuit breakers
+        id: breaker
+        run: |
+          RESULT=$(bash ${{ env.SCRIPTS_PATH }}/check-circuit-breakers.sh 2>&1) || {
+            REASON=$(echo "$RESULT" | jq -r '.reason // "unknown"')
+            echo "::notice::Circuit breaker tripped: $REASON"
+            echo "should_run=false" >> $GITHUB_OUTPUT
+            exit 0
+          }
+          echo "should_run=true" >> $GITHUB_OUTPUT
+
+      - name: Select PR to review
+        id: select
+        if: steps.breaker.outputs.should_run == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash ${{ env.SCRIPTS_PATH }}/select-review-pr.sh \
+            "${{ inputs.pr_number || '' }}"
+
+  # ── Job 2: Fix Review Feedback ─────────────────────
+  fix-reviews:
+    needs: select-pr
+    if: >-
+      needs.select-pr.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+    outputs:
+      result: ${{ steps.post-check.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout PR branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ needs.select-pr.outputs.pr_number }}
+
+      - name: Fix review feedback with Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            You are the Repo Maintainer agent addressing review feedback on PR #${{ needs.select-pr.outputs.pr_number }}.
+            This is review round ${{ needs.select-pr.outputs.round }} of a maximum 3 rounds.
+
+            ## Step 1: Understand Context
+
+            1. Read CLAUDE.md for project conventions
+            2. Read the PR description: `gh pr view ${{ needs.select-pr.outputs.pr_number }}`
+            3. Understand what this PR does before looking at feedback
+
+            ## Step 2: Fetch All Review Feedback
+
+            Run these commands to gather ALL feedback:
+
+            ```bash
+            REPO="${{ github.repository }}"
+            PR=${{ needs.select-pr.outputs.pr_number }}
+
+            # Inline code review comments
+            gh api "repos/${REPO}/pulls/${PR}/comments" \
+              --jq '.[] | {id, path, line, body, user: .user.login, created_at}'
+
+            # PR reviews (approve/request-changes/comment)
+            gh api "repos/${REPO}/pulls/${PR}/reviews" \
+              --jq '.[] | {id, body, user: .user.login, state, submitted_at}'
+
+            # General conversation comments
+            gh pr view "$PR" --json comments \
+              --jq '.comments[] | {body, author: .author.login, createdAt}'
+            ```
+
+            ## Step 3: Categorize Feedback
+
+            For each piece of feedback, classify as:
+            - **Critical** (must fix): Security issues, bugs, broken tests, logic errors
+            - **Suggestion** (evaluate): Code quality improvements, better patterns
+            - **Nitpick** (skip unless trivially correct): Style preferences, naming opinions
+
+            Focus on the MOST RECENT review feedback. Ignore items that reference code
+            already changed in subsequent commits.
+
+            ## Step 4: Fix Issues
+
+            For each critical item and each worthwhile suggestion:
+            1. Read the specific file and surrounding code context
+            2. Verify the feedback is technically correct before implementing
+            3. Make the fix with minimal scope (only change what's needed)
+            4. Commit with: `git commit -m "fix: address review — <short description>"`
+
+            After all fixes, run the test suite:
+            - Python (if changed): `cd apps/api && uv run pytest`
+            - TypeScript (if changed): `cd apps/web && npm test`
+            - Linting: `cd apps/api && uv run ruff check .` and `cd apps/web && npm run lint`
+
+            Fix any test or lint failures introduced by your changes.
+
+            ## Step 5: Push Changes
+
+            ```bash
+            git push origin HEAD
+            ```
+
+            ## Step 6: Comment on PR
+
+            Post a summary comment on the PR:
+            ```bash
+            gh pr comment ${{ needs.select-pr.outputs.pr_number }} --body "## Review Round ${{ needs.select-pr.outputs.round }} — Feedback Addressed
+
+            ### Fixed
+            - [list each fix with file path and brief description]
+
+            ### Acknowledged (no change needed)
+            - [list items where the current code is correct, with explanation]
+
+            ### Deferred
+            - [list items deferred to future work, with justification]
+
+            ---
+            *Automated by repo-maintainer (review round ${{ needs.select-pr.outputs.round }}/3)*"
+            ```
+
+            ## Rules
+            - Do NOT merge the PR — merging is handled by a separate step
+            - Do NOT modify: deployment/*, .env*, docker-compose*, .github/repo-maintainer/*
+            - Keep changes minimal — only address the specific feedback
+            - If tests fail after 2 fix attempts, document the failure in the PR comment
+            - Follow existing code patterns (tabs for indentation, PEP 8, etc.)
+          claude_args: '--model sonnet --allowedTools "Bash,Read,Write,Edit,Glob,Grep" --max-turns 75'
+
+      - name: Update round label
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          ROUND="${{ needs.select-pr.outputs.round }}"
+          gh pr edit "$PR" --add-label "review-round-${ROUND}" 2>/dev/null || true
+          gh pr edit "$PR" --remove-label "review-changes-requested" 2>/dev/null || true
+
+      - name: Check post-fix status
+        id: post-check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          # Check if Claude pushed any commits
+          BRANCH=$(gh pr view "$PR" --json headRefName --jq '.headRefName')
+          REMOTE_SHA=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
+          LOCAL_SHA=$(git rev-parse HEAD)
+          if [[ "$REMOTE_SHA" != "$LOCAL_SHA" ]]; then
+            echo "result=pushed" >> $GITHUB_OUTPUT
+          else
+            echo "result=no-changes" >> $GITHUB_OUTPUT
+          fi
+
+  # ── Job 3: Deploy and Verify on Demo VPS ───────────
+  deploy-and-verify:
+    needs: [select-pr, fix-reviews]
+    if: >-
+      needs.fix-reviews.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      verification_passed: ${{ steps.parse-results.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEMO_VPS_SSH_KEY }}
+          SSH_HOST: ${{ vars.DEMO_VPS_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/demo_key
+          chmod 600 ~/.ssh/demo_key
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy PR branch to demo VPS
+        env:
+          SSH_HOST: ${{ vars.DEMO_VPS_HOST }}
+          SSH_USER: ${{ secrets.DEMO_VPS_USER }}
+          DEMO_PATH: ${{ vars.DEMO_VPS_PATH }}
+          PR_NUMBER: ${{ needs.select-pr.outputs.pr_number }}
+        run: |
+          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" << DEPLOY_EOF
+            set -euo pipefail
+            export NVM_DIR="\$HOME/.nvm"
+            [ -s "\$NVM_DIR/nvm.sh" ] && . "\$NVM_DIR/nvm.sh"
+            export PATH="\$HOME/.cargo/bin:\$PATH"
+
+            cd "$DEMO_PATH"
+
+            # Fetch latest and checkout PR branch
+            git fetch origin
+            gh pr checkout "$PR_NUMBER" --force
+
+            # Install API dependencies
+            cd apps/api
+            uv sync
+            uv run alembic upgrade head 2>/dev/null || echo "Migration warning (non-fatal)"
+            cd ../..
+
+            # Install frontend dependencies and build
+            cd apps/web
+            npm ci
+            npm run build 2>/dev/null || echo "Build warning (non-fatal)"
+            cd ../..
+
+            # Start demo services (clean slate)
+            pm2 delete demo-api demo-web demo-celery 2>/dev/null || true
+
+            cd apps/api
+            PORT=8200 uv run uvicorn src.main:app --host 0.0.0.0 --port 8200 &
+            UVICORN_PID=\$!
+            pm2 start uv --name demo-api -- run uvicorn src.main:app --host 0.0.0.0 --port 8200
+            cd ../..
+
+            cd apps/web
+            PORT=3200 pm2 start npm --name demo-web -- start
+            cd ../..
+
+            cd apps/api
+            pm2 start uv --name demo-celery -- run celery -A src.worker:celery_app worker --loglevel=info
+            cd ../..
+
+            # Wait for services to start
+            sleep 10
+
+            # Health checks
+            API_STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8200/health 2>/dev/null || echo "000")
+            WEB_STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3200 2>/dev/null || echo "000")
+            echo "API status: \$API_STATUS, Web status: \$WEB_STATUS"
+
+            if [[ "\$API_STATUS" != "200" ]]; then
+              echo "WARNING: API health check returned \$API_STATUS"
+            fi
+          DEPLOY_EOF
+
+      - name: Run Claude Code verification on demo VPS
+        env:
+          SSH_HOST: ${{ vars.DEMO_VPS_HOST }}
+          SSH_USER: ${{ secrets.DEMO_VPS_USER }}
+          DEMO_PATH: ${{ vars.DEMO_VPS_PATH }}
+          PR_NUMBER: ${{ needs.select-pr.outputs.pr_number }}
+          LINKED_ISSUE: ${{ needs.select-pr.outputs.linked_issue }}
+        run: |
+          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" << 'VERIFY_EOF'
+            set -euo pipefail
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+            export PATH="$HOME/.cargo/bin:$PATH"
+
+            RESULTS_FILE="/tmp/verification-results.json"
+
+            claude -p "You are verifying PR #${PR_NUMBER} for the podcaststudiohub project.
+            The linked issue is #${LINKED_ISSUE}.
+
+            ## Instructions
+
+            1. Read the linked issue to understand acceptance criteria:
+               gh issue view ${LINKED_ISSUE}
+
+            2. The services are running at:
+               - API: http://localhost:8200
+               - Web: http://localhost:3200
+
+            3. For each acceptance criterion from the issue:
+               - Test it using curl for API endpoints
+               - Use agent-browser for UI verification if applicable
+               - Record PASS or FAIL with brief evidence
+
+            4. Also run a basic smoke test:
+               - API health: curl http://localhost:8200/health
+               - Frontend loads: curl -s http://localhost:3200 | head -20
+               - No console errors in frontend
+
+            5. Write your results as JSON to ${RESULTS_FILE}:
+               {
+                 \"pr\": ${PR_NUMBER},
+                 \"criteria\": [
+                   {\"name\": \"criterion description\", \"status\": \"pass\", \"evidence\": \"brief evidence\"},
+                   ...
+                 ],
+                 \"smoke_test\": {\"api_health\": true, \"frontend_loads\": true},
+                 \"overall\": \"pass\"
+               }
+
+            Set overall to 'fail' if ANY criterion fails or smoke test fails.
+            " --model sonnet --max-turns 50 2>/dev/null || true
+
+            # Output results
+            if [ -f "$RESULTS_FILE" ]; then
+              cat "$RESULTS_FILE"
+            else
+              echo '{"pr": 0, "criteria": [], "smoke_test": {"api_health": false, "frontend_loads": false}, "overall": "fail", "error": "No results file generated"}'
+            fi
+          VERIFY_EOF
+          # Save results locally
+          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" \
+            "cat /tmp/verification-results.json 2>/dev/null || echo '{\"overall\":\"fail\"}'" \
+            > /tmp/verification-results.json
+
+      - name: Cleanup demo VPS
+        if: always()
+        env:
+          SSH_HOST: ${{ vars.DEMO_VPS_HOST }}
+          SSH_USER: ${{ secrets.DEMO_VPS_USER }}
+          DEMO_PATH: ${{ vars.DEMO_VPS_PATH }}
+        run: |
+          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" << CLEANUP_EOF || true
+            pm2 delete demo-api demo-web demo-celery 2>/dev/null || true
+            cd "$DEMO_PATH" && git checkout main && git clean -fd 2>/dev/null || true
+          CLEANUP_EOF
+
+      - name: Parse verification results
+        id: parse-results
+        run: |
+          if [ -f /tmp/verification-results.json ]; then
+            OVERALL=$(jq -r '.overall // "fail"' /tmp/verification-results.json)
+            echo "Verification result: $OVERALL"
+            cat /tmp/verification-results.json | jq .
+            if [[ "$OVERALL" == "pass" ]]; then
+              echo "passed=true" >> $GITHUB_OUTPUT
+            else
+              echo "passed=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "No verification results found"
+            echo "passed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post verification report on PR
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ needs.select-pr.outputs.pr_number }}
+        run: |
+          PASSED="${{ steps.parse-results.outputs.passed }}"
+          if [ -f /tmp/verification-results.json ]; then
+            CRITERIA=$(jq -r '.criteria[] | "- **\(.name)**: \(.status) — \(.evidence)"' /tmp/verification-results.json 2>/dev/null || echo "- No criteria tested")
+            SMOKE=$(jq -r '"API: \(.smoke_test.api_health), Frontend: \(.smoke_test.frontend_loads)"' /tmp/verification-results.json 2>/dev/null || echo "Unknown")
+          else
+            CRITERIA="- Verification did not produce results"
+            SMOKE="Unknown"
+          fi
+
+          if [[ "$PASSED" == "true" ]]; then
+            ICON="Passed"
+          else
+            ICON="Failed"
+          fi
+
+          gh pr comment "$PR_NUMBER" --body "## Demo Verification: ${ICON}
+
+          ### Acceptance Criteria
+          ${CRITERIA}
+
+          ### Smoke Test
+          ${SMOKE}
+
+          ---
+          *Verified on demo VPS by repo-maintainer*"
+
+      - name: Cleanup SSH
+        if: always()
+        run: rm -f ~/.ssh/demo_key
+
+  # ── Job 4: Auto-Merge (T0 only) ────────────────────
+  auto-merge:
+    needs: [select-pr, fix-reviews, deploy-and-verify]
+    if: >-
+      needs.select-pr.outputs.tier == 'T0' &&
+      needs.deploy-and-verify.outputs.verification_passed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for blockers
+        id: blockers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+
+          # Check protected paths
+          FILES=$(gh pr diff "$PR" --name-only)
+          BLOCKED=false
+          for PATTERN in 'deployment/' '.env' 'docker-compose' '.github/repo-maintainer/'; do
+            if echo "$FILES" | grep -q "$PATTERN"; then
+              echo "::warning::PR touches protected path: $PATTERN"
+              BLOCKED=true
+              break
+            fi
+          done
+
+          # Check security-concern label
+          LABELS=$(gh pr view "$PR" --json labels --jq '[.labels[].name] | join(",")')
+          if echo "$LABELS" | grep -q "security-concern"; then
+            echo "::warning::PR has security-concern label"
+            BLOCKED=true
+          fi
+
+          echo "blocked=$BLOCKED" >> $GITHUB_OUTPUT
+
+      - name: Wait for CI checks
+        if: steps.blockers.outputs.blocked == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          echo "Waiting for CI checks on PR #$PR..."
+          gh pr checks "$PR" --watch --fail-fast || {
+            echo "::warning::CI checks failed for PR #$PR"
+            exit 1
+          }
+
+      - name: Squash merge
+        if: steps.blockers.outputs.blocked == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          ISSUE="${{ needs.select-pr.outputs.linked_issue }}"
+          ROUND="${{ needs.select-pr.outputs.round }}"
+
+          CLOSE_REF=""
+          if [[ -n "$ISSUE" && "$ISSUE" != "null" && "$ISSUE" != "" ]]; then
+            CLOSE_REF="Closes #${ISSUE}"
+          fi
+
+          gh pr merge "$PR" --squash --body "$(cat <<EOF
+          Review feedback addressed and verification passed.
+
+          ${CLOSE_REF}
+
+          ---
+          *Auto-merged by repo-maintainer (T0, review round ${ROUND})*
+          EOF
+          )"
+          echo "::notice::PR #$PR auto-merged"
+
+  # ── Job 5: Notify Human (T1+) ──────────────────────
+  notify-human:
+    needs: [select-pr, fix-reviews, deploy-and-verify]
+    if: >-
+      needs.select-pr.outputs.tier != 'T0' &&
+      needs.deploy-and-verify.outputs.verification_passed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Label and notify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          TIER="${{ needs.select-pr.outputs.tier }}"
+          ROUND="${{ needs.select-pr.outputs.round }}"
+
+          gh pr edit "$PR" --add-label "ready-to-merge"
+
+          gh pr comment "$PR" --body "$(cat <<EOF
+          ## Ready for Human Review
+
+          Review feedback addressed (round ${ROUND}/3) and demo verification **passed**.
+          This is a **${TIER}** PR — auto-merge is not enabled.
+
+          ### Next Steps
+          1. Review the latest changes
+          2. Optionally run the full demo locally:
+             \`claude -p "/completing-pr-reviews #${PR}"\`
+          3. Approve and merge when satisfied
+
+          ---
+          *Automated by repo-maintainer (${TIER})*
+          EOF
+          )"
+
+  # ── Job 6: Escalate on Failure ─────────────────────
+  escalate:
+    needs: [select-pr, fix-reviews, deploy-and-verify]
+    if: >-
+      always() &&
+      needs.select-pr.outputs.pr_number != '' &&
+      (needs.fix-reviews.result == 'failure' ||
+       needs.deploy-and-verify.result == 'failure' ||
+       needs.deploy-and-verify.outputs.verification_passed == 'false' ||
+       needs.select-pr.outputs.round == '3')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Escalate to human
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          ROUND="${{ needs.select-pr.outputs.round }}"
+          FIX_RESULT="${{ needs.fix-reviews.result }}"
+          VERIFY_RESULT="${{ needs.deploy-and-verify.result }}"
+          VERIFY_PASSED="${{ needs.deploy-and-verify.outputs.verification_passed }}"
+
+          # Determine reason
+          if [[ "$FIX_RESULT" == "failure" ]]; then
+            REASON="Claude Code failed to address review feedback"
+          elif [[ "$VERIFY_RESULT" == "failure" ]]; then
+            REASON="Demo deployment or verification failed"
+          elif [[ "$VERIFY_PASSED" == "false" ]]; then
+            REASON="Demo verification did not pass acceptance criteria"
+          elif [[ "$ROUND" == "3" ]]; then
+            REASON="Maximum review rounds (3) reached"
+          else
+            REASON="Unknown failure"
+          fi
+
+          gh pr edit "$PR" --add-label "maintainer-needs-human"
+
+          gh pr comment "$PR" --body "$(cat <<EOF
+          ## Automated Review Resolution Failed
+
+          **Reason:** ${REASON}
+          **Round:** ${ROUND}/3
+
+          ### How to proceed
+          1. Review the remaining feedback and verification results on this PR
+          2. Fix issues manually, OR run locally:
+             \`claude -p "/completing-pr-reviews #${PR}"\`
+          3. Remove the \`maintainer-needs-human\` label when resolved
+
+          ---
+          *Escalated by repo-maintainer*
+          EOF
+          )"

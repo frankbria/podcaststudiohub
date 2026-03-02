@@ -5,23 +5,26 @@
 # VPS used by rm-review.yml to deploy PR branches and run automated verification
 # via Claude Code + agent-browser.
 #
+# Safe to run on an existing box — skips components that are already installed
+# and never overwrites existing config files (.env, SSH keys, etc.).
+#
 # Prerequisites:
-#   - Fresh Ubuntu 24.04 LTS VPS (2 vCPU, 4GB RAM recommended)
+#   - Ubuntu 22.04+ or 24.04 LTS VPS (2 vCPU, 4GB RAM recommended)
 #   - Root or sudo access
 #   - Internet connectivity
 #
 # After running this script, configure GitHub secrets/variables:
-#   Secret: DEMO_VPS_SSH_KEY  — contents of /home/demo/.ssh/github_actions_key (private)
-#   Secret: DEMO_VPS_USER     — "demo" (or your chosen username)
+#   Secret: DEMO_VPS_SSH_KEY  — contents of /home/$USER/.ssh/github_actions_key (private)
+#   Secret: DEMO_VPS_USER     — your username
 #   Variable: DEMO_VPS_HOST   — VPS IP or hostname
 #   Variable: DEMO_VPS_PATH   — "/srv/demo/repo"
 set -euo pipefail
 
-DEMO_USER="${DEMO_USER:-demo}"
+DEMO_USER="${DEMO_USER:-$(whoami)}"
 DEMO_PATH="/srv/demo"
 REPO_URL="https://github.com/frankbria/podcaststudiohub.git"
 
-echo "=== Demo VPS Setup ==="
+echo "=== Demo VPS Setup (idempotent) ==="
 echo "User: $DEMO_USER"
 echo "Path: $DEMO_PATH"
 
@@ -53,24 +56,44 @@ fi
 
 # ── 3. Node.js via nvm ───────────────────────────────
 echo ""
-echo "--- Installing Node.js 20 via nvm ---"
-sudo -u "$DEMO_USER" bash -c '
-	curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-	export NVM_DIR="$HOME/.nvm"
-	[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-	nvm install 20
-	nvm alias default 20
-	npm install -g pm2
-'
+echo "--- Checking Node.js ---"
+if sudo -u "$DEMO_USER" bash -c 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; command -v node' &>/dev/null; then
+	echo "Node.js already installed, skipping nvm setup"
+	sudo -u "$DEMO_USER" bash -c '
+		export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+		echo "  node $(node --version), npm $(npm --version)"
+		command -v pm2 &>/dev/null || npm install -g pm2
+	'
+else
+	echo "Installing Node.js 20 via nvm..."
+	sudo -u "$DEMO_USER" bash -c '
+		curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+		export NVM_DIR="$HOME/.nvm"
+		[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+		nvm install 20
+		nvm alias default 20
+		npm install -g pm2
+	'
+fi
 
 # ── 4. Python 3.12 + uv ──────────────────────────────
 echo ""
-echo "--- Installing Python 3.12 + uv ---"
-sudo apt-get install -y python3.12 python3.12-venv python3.12-dev
-sudo -u "$DEMO_USER" bash -c '
-	curl -LsSf https://astral.sh/uv/install.sh | sh
-	echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
-'
+echo "--- Checking Python + uv ---"
+if command -v python3.12 &>/dev/null; then
+	echo "Python 3.12 already installed"
+else
+	echo "Installing Python 3.12..."
+	sudo apt-get install -y python3.12 python3.12-venv python3.12-dev
+fi
+if sudo -u "$DEMO_USER" bash -c 'export PATH="$HOME/.cargo/bin:$PATH"; command -v uv' &>/dev/null; then
+	echo "uv already installed"
+else
+	echo "Installing uv..."
+	sudo -u "$DEMO_USER" bash -c '
+		curl -LsSf https://astral.sh/uv/install.sh | sh
+		grep -q "cargo/bin" ~/.bashrc 2>/dev/null || echo "export PATH=\"\$HOME/.cargo/bin:\$PATH\"" >> ~/.bashrc
+	'
+fi
 
 # ── 5. PostgreSQL demo database ──────────────────────
 echo ""
@@ -81,32 +104,53 @@ sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE podcastfy_demo TO dem
 
 # ── 6. Claude Code CLI ───────────────────────────────
 echo ""
-echo "--- Installing Claude Code CLI ---"
-sudo -u "$DEMO_USER" bash -c '
-	export NVM_DIR="$HOME/.nvm"
-	[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-	npm install -g @anthropic-ai/claude-code
-'
+echo "--- Checking Claude Code CLI ---"
+if sudo -u "$DEMO_USER" bash -c 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; command -v claude' &>/dev/null; then
+	echo "Claude Code already installed:"
+	sudo -u "$DEMO_USER" bash -c 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; claude --version 2>/dev/null || echo "  (version check unavailable)"'
+else
+	echo "Installing Claude Code CLI..."
+	sudo -u "$DEMO_USER" bash -c '
+		export NVM_DIR="$HOME/.nvm"
+		[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+		npm install -g @anthropic-ai/claude-code
+	'
+fi
 
 # ── 7. Playwright / agent-browser ─────────────────────
 echo ""
-echo "--- Installing Playwright + agent-browser ---"
+echo "--- Checking Playwright + agent-browser ---"
+if sudo -u "$DEMO_USER" bash -c 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; command -v agent-browser' &>/dev/null; then
+	echo "agent-browser already installed"
+else
+	echo "Installing agent-browser..."
+	sudo -u "$DEMO_USER" bash -c '
+		export NVM_DIR="$HOME/.nvm"
+		[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+		npm install -g agent-browser
+	'
+fi
+# Ensure Playwright browsers are installed (safe to re-run)
 sudo -u "$DEMO_USER" bash -c '
 	export NVM_DIR="$HOME/.nvm"
 	[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-	npm install -g agent-browser
-	npx playwright install --with-deps chromium
+	npx playwright install --with-deps chromium 2>/dev/null || echo "Playwright browsers already installed"
 '
 
 # ── 8. GitHub CLI ─────────────────────────────────────
 echo ""
-echo "--- Installing GitHub CLI ---"
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-	| sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-	| sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-sudo apt-get update
-sudo apt-get install -y gh
+echo "--- Checking GitHub CLI ---"
+if command -v gh &>/dev/null; then
+	echo "GitHub CLI already installed: $(gh --version | head -1)"
+else
+	echo "Installing GitHub CLI..."
+	curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+		| sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+	echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+		| sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+	sudo apt-get update
+	sudo apt-get install -y gh
+fi
 
 # ── 9. SSH key for GitHub Actions ─────────────────────
 echo ""
@@ -143,9 +187,13 @@ sudo -u "$DEMO_USER" bash -c "
 
 # ── 11. Environment file ─────────────────────────────
 echo ""
-echo "--- Creating environment template ---"
-sudo -u "$DEMO_USER" bash -c "
-	cat > $DEMO_PATH/.env.demo << 'ENVEOF'
+echo "--- Checking environment file ---"
+if [ -f "$DEMO_PATH/.env.demo" ]; then
+	echo "Environment file already exists at $DEMO_PATH/.env.demo — not overwriting"
+else
+	echo "Creating environment template..."
+	sudo -u "$DEMO_USER" bash -c "
+		cat > $DEMO_PATH/.env.demo << 'ENVEOF'
 # Demo VPS environment — fill in API keys
 DATABASE_URL=postgresql+asyncpg://demo_app:demo_password@localhost:5432/podcastfy_demo
 SECRET_KEY=demo-secret-key-change-me
@@ -161,12 +209,20 @@ ANTHROPIC_API_KEY=
 API_PORT=8200
 FRONTEND_PORT=3200
 ENVEOF
-	echo 'Created $DEMO_PATH/.env.demo — edit to add API keys'
-"
+		echo 'Created $DEMO_PATH/.env.demo — edit to add API keys'
+	"
+fi
 
 # ── 12. PM2 ecosystem config for demo services ───────
 echo ""
-echo "--- Creating PM2 ecosystem config ---"
+echo "--- Checking PM2 ecosystem config ---"
+if [ -f "$DEMO_PATH/ecosystem.demo.config.js" ]; then
+	echo "PM2 config already exists at $DEMO_PATH/ecosystem.demo.config.js — not overwriting"
+else
+	echo "Creating PM2 ecosystem config..."
+fi
+# Only write if it doesn't exist (the heredoc is inside the guard above)
+if [ ! -f "$DEMO_PATH/ecosystem.demo.config.js" ]; then
 sudo -u "$DEMO_USER" bash -c "
 	cat > $DEMO_PATH/ecosystem.demo.config.js << 'PM2EOF'
 module.exports = {
@@ -201,15 +257,18 @@ module.exports = {
 };
 PM2EOF
 "
+fi
 
 echo ""
 echo "=== Setup Complete ==="
 echo ""
 echo "Next steps:"
-echo "  1. Edit $DEMO_PATH/.env.demo with actual API keys"
-echo "  2. Add the SSH private key (printed above) as GitHub secret: DEMO_VPS_SSH_KEY"
-echo "  3. Add GitHub secrets/variables:"
+echo "  1. If new: edit $DEMO_PATH/.env.demo with actual API keys"
+echo "  2. If new SSH key was generated: add it as GitHub secret DEMO_VPS_SSH_KEY"
+echo "  3. Add GitHub secrets/variables (if not already set):"
 echo "     - Secret: DEMO_VPS_USER = $DEMO_USER"
 echo "     - Variable: DEMO_VPS_HOST = <this server's IP>"
 echo "     - Variable: DEMO_VPS_PATH = $DEMO_PATH/repo"
 echo "  4. Test: ssh $DEMO_USER@<host> 'claude --version'"
+echo ""
+echo "Components that were skipped (already installed) are safe to re-check."

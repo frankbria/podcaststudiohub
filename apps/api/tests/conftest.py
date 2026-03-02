@@ -14,8 +14,10 @@ from src.config import settings
 
 
 # Test database URL (use PostgreSQL test database)
-# This uses the same database but with table cleanup between tests
-TEST_DATABASE_URL = "postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy"
+# Must use the non-superuser podcastfy_app role so that FORCE ROW LEVEL SECURITY
+# is respected and tenant isolation tests are meaningful.
+# The podcastfy_app role is provisioned by migration 003_force_rls.py.
+TEST_DATABASE_URL = "postgresql+asyncpg://podcastfy_app:podcastfy_app_password@localhost:5432/podcastfy"
 
 
 @pytest.fixture(scope="session")

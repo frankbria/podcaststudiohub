@@ -45,7 +45,6 @@ async def create_project(
 	)
 	db.add(project)
 	await db.commit()
-	await db.refresh(project)
 	return project
 
 
@@ -135,7 +134,6 @@ async def update_project(
 		setattr(project, field, value)
 
 	await db.commit()
-	await db.refresh(project)
 	return project
 
 
@@ -159,5 +157,4 @@ async def archive_project(
 	"""
 	project.is_archived = True
 	await db.commit()
-	await db.refresh(project)
 	return project

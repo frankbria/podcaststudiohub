@@ -58,7 +58,6 @@ async def create_episode(
 	)
 	db.add(episode)
 	await db.commit()
-	await db.refresh(episode)
 	return episode
 
 
@@ -156,7 +155,6 @@ async def update_episode(
 		setattr(episode, field, value)
 
 	await db.commit()
-	await db.refresh(episode)
 	return episode
 
 
@@ -204,5 +202,4 @@ async def update_generation_status(
 		episode.generation_progress = progress_data
 
 	await db.commit()
-	await db.refresh(episode)
 	return episode

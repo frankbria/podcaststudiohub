@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import bcrypt
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException
 
@@ -164,7 +164,6 @@ async def create_user(
 
         session.add(user)
         await session.commit()
-        await session.refresh(user)
 
         return user
 
@@ -215,7 +214,8 @@ async def authenticate_user(
     if not user.is_active:
         return None
 
-    # Update last login timestamp
+    # Set tenant context so the UPDATE is allowed by RLS, then update last_login
+    await session.execute(text(f"SET LOCAL app.tenant_id = '{user.tenant_id}'"))
     user.last_login = datetime.utcnow()
     await session.commit()
 

@@ -394,10 +394,12 @@ async def test_login_inactive_user(client: AsyncClient, test_db: AsyncSession):
         }
     )
 
-    # Get user from database and deactivate
+    # Set tenant context so UPDATE is allowed by RLS, then deactivate
     user_id = UUID(register_response.json()["user"]["id"])
-    from sqlalchemy import select, update
+    tenant_id = register_response.json()["user"]["tenant_id"]
+    from sqlalchemy import select, update, text
 
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
     await test_db.execute(
         update(User)
         .where(User.id == user_id)
@@ -465,8 +467,10 @@ async def test_middleware_user_deleted_after_token_issued(client: AsyncClient, t
     token = register_response.json()["access_token"]
     user_id = UUID(register_response.json()["user"]["id"])
 
-    # Delete the user from database
-    from sqlalchemy import delete
+    # Set tenant context so DELETE is allowed by RLS, then delete the user
+    from sqlalchemy import delete, text
+    tenant_id = register_response.json()["user"]["tenant_id"]
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
     await test_db.execute(
         delete(User).where(User.id == user_id)
     )
@@ -497,8 +501,10 @@ async def test_middleware_inactive_user_via_get_me(client: AsyncClient, test_db:
     token = register_response.json()["access_token"]
     user_id = UUID(register_response.json()["user"]["id"])
 
-    # Deactivate the user
-    from sqlalchemy import update
+    # Set tenant context so UPDATE is allowed by RLS, then deactivate the user
+    from sqlalchemy import update, text
+    tenant_id = register_response.json()["user"]["tenant_id"]
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
     await test_db.execute(
         update(User)
         .where(User.id == user_id)

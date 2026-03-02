@@ -138,10 +138,6 @@ async def test_tenant_isolation_registration_creates_separate_tenants(client: As
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    reason="RLS bypassed: CI database user is a superuser, which skips ROW LEVEL SECURITY. "
-           "Fix requires ALTER TABLE ... FORCE ROW LEVEL SECURITY or a non-superuser DB role."
-)
 async def test_tenant_isolation_list_endpoints_filter_by_tenant(client: AsyncClient):
     """
     Verify list endpoints only return data for the current tenant.

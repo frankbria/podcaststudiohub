@@ -87,7 +87,8 @@ jobs:
           TIER=$(echo "$RESULT" | jq -r '.tier // "T1"')
           TITLE=$(echo "$RESULT" | jq -r '.title // ""')
           if [[ -z "$ISSUE" || "$ISSUE" == "null" ]]; then
-            echo "::notice::No eligible issues found"
+            REASON=$(echo "$RESULT" | jq -r '.reason // "No eligible issues found"')
+            echo "::notice::Idle: $REASON"
             echo "issue_number=" >> $GITHUB_OUTPUT
           else
             echo "issue_number=$ISSUE" >> $GITHUB_OUTPUT

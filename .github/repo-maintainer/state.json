@@ -22,8 +22,8 @@
     "consecutive_successes": 6
   },
   "phases": {
-    "current_phase": "phase-1",
-    "completed_phases": []
+    "current_phase": "phase-2",
+    "completed_phases": ["phase-1"]
   },
   "feedback": {
     "consecutive_rejected_prs": 0,

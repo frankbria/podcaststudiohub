@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # select-next-issue.sh — Selects the next issue to implement based on phase + priority.
 # Outputs JSON: { "issue_number": N, "title": "...", "tier": "T0"|"T1"|"T2"|"T3" }
-# Exit code 1 if no eligible issues found.
+# Exits 0 with issue_number=null if no eligible issues found.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,7 +46,7 @@ fi
 
 if [[ "$ISSUES" == "[]" || -z "$ISSUES" ]]; then
 	echo '{"issue_number":null,"reason":"No eligible issues found with plan-ready label"}'
-	exit 1
+	exit 0
 fi
 
 # Filter out skip/human-only issues and issues with open maintainer PRs
@@ -168,7 +168,7 @@ if [[ -z "$SELECTED_NUMBER" ]]; then
 		*)         REASON="No eligible plan-ready issues found" ;;
 	esac
 	echo "{\"issue_number\":null,\"reason\":\"$REASON\"}"
-	exit 1
+	exit 0
 fi
 
 ISSUE_NUMBER="$SELECTED_NUMBER"

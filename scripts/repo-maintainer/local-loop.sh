@@ -40,13 +40,15 @@ echo "=== Issue Selection ==="
 if [[ -n "$FORCE_ISSUE" ]]; then
 	ISSUE_RESULT=$("$SCRIPT_DIR/select-next-issue.sh" "$FORCE_ISSUE")
 else
-	ISSUE_RESULT=$("$SCRIPT_DIR/select-next-issue.sh") || {
-		echo "No eligible issues found."
-		exit 0
-	}
+	ISSUE_RESULT=$("$SCRIPT_DIR/select-next-issue.sh")
 fi
 
-ISSUE_NUMBER=$(echo "$ISSUE_RESULT" | jq -r '.issue_number')
+ISSUE_NUMBER=$(echo "$ISSUE_RESULT" | jq -r '.issue_number // empty')
+if [[ -z "$ISSUE_NUMBER" || "$ISSUE_NUMBER" == "null" ]]; then
+	REASON=$(echo "$ISSUE_RESULT" | jq -r '.reason // "No eligible issues found"')
+	echo "Idle: $REASON"
+	exit 0
+fi
 ISSUE_TITLE=$(echo "$ISSUE_RESULT" | jq -r '.title')
 TIER=$(echo "$ISSUE_RESULT" | jq -r '.tier')
 

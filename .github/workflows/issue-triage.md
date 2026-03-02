@@ -34,9 +34,9 @@ safe-outputs:
       - security
       - breaking-change
       - architecture
-    max: 6
+    max: 50
   add-comment:
-    max: 2
+    max: 50
   assign-to-user:
     allowed: [frankbria]
     max: 1
@@ -50,7 +50,7 @@ safe-outputs:
 
 **Issue event trigger**: When triggered by a new issue being opened or transferred, triage only that issue.
 
-**Manual dispatch trigger**: When triggered via workflow_dispatch, fetch ALL open issues that have no labels yet (unlabeled), and triage each one. Skip issues that already have labels assigned.
+**Manual dispatch trigger**: When triggered via workflow_dispatch, fetch ALL open issues that are missing the "plan-ready" label, and triage each one. This includes both unlabeled issues (full triage) and already-labeled issues that need an implementation plan (plan-only pass). For issues that already have classification labels (priority, phase, type), skip to step 5 (Implementation Plan) — do not re-classify or re-label them. Only add the "plan-ready" label and an implementation plan comment.
 
 ## Context
 

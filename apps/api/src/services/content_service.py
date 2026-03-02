@@ -58,7 +58,6 @@ async def add_content_source(
     )
     db.add(content_source)
     await db.commit()
-    await db.refresh(content_source)
     return content_source
 
 
@@ -148,7 +147,6 @@ async def update_content_source(
         setattr(content_source, field, value)
 
     await db.commit()
-    await db.refresh(content_source)
     return content_source
 
 

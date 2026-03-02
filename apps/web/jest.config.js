@@ -14,9 +14,11 @@ const config = {
   // Test environment
   testEnvironment: 'jest-environment-jsdom',
 
-  // Module name mapping for path aliases
+  // Module name mapping for path aliases and stubs for packages not installed in test env
   moduleNameMapper: {
     '^@/(.*)$': '<rootDir>/src/$1',
+    '^@radix-ui/react-progress$': '<rootDir>/__mocks__/@radix-ui/react-progress.tsx',
+    '^@radix-ui/react-select$': '<rootDir>/__mocks__/@radix-ui/react-select.tsx',
   },
 
   // Coverage collection settings
@@ -31,16 +33,15 @@ const config = {
     '!src/types/**', // Exclude type definitions
   ],
 
-  // Coverage thresholds - disabled until test coverage improves
-  // Current coverage: ~7%. Re-enable when coverage reaches 50%+
-  // coverageThreshold: {
-  //   global: {
-  //     branches: 80,
-  //     functions: 80,
-  //     lines: 80,
-  //     statements: 80,
-  //   },
-  // },
+  // Coverage thresholds — enforced at 80% across all metrics
+  coverageThreshold: {
+    global: {
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      statements: 80,
+    },
+  },
 
   // Coverage reporters
   coverageReporters: ['lcov', 'html', 'text', 'json-summary'],

@@ -62,6 +62,16 @@ def upgrade() -> None:
 		# Enforce RLS even for the table owner / superuser connections
 		op.execute(f'ALTER TABLE {table} FORCE ROW LEVEL SECURITY')
 
+	# The users table requires an additional permissive SELECT policy because
+	# authentication (login, token verification) must look up users by email or
+	# ID before any tenant context exists.  Other tables don't need this because
+	# they are only accessed through authenticated endpoints.
+	op.execute("""
+		CREATE POLICY users_auth_lookup ON users
+			FOR SELECT
+			USING (true)
+	""")
+
 	# -------------------------------------------------------------------------
 	# Provision the non-superuser application role
 	# -------------------------------------------------------------------------
@@ -93,6 +103,8 @@ def downgrade() -> None:
 	op.execute('REVOKE CONNECT ON DATABASE podcastfy FROM podcastfy_app')
 
 	op.execute('DROP ROLE IF EXISTS podcastfy_app')
+
+	op.execute('DROP POLICY IF EXISTS users_auth_lookup ON users')
 
 	for table in TABLES:
 		# Remove FORCE and drop updated policies

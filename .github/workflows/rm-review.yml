@@ -258,17 +258,24 @@ jobs:
             npm run build 2>/dev/null || echo "Build warning (non-fatal)"
             cd ../..
 
+            # Link .env.demo so the API app picks up config via Pydantic Settings
+            DEMO_ENV="\$(dirname "$DEMO_PATH")/.env.demo"
+            if [ -f "\$DEMO_ENV" ]; then
+              ln -sf "\$DEMO_ENV" apps/api/.env
+              echo "Linked \$DEMO_ENV -> apps/api/.env"
+            else
+              echo "WARNING: \$DEMO_ENV not found — API may fail to start"
+            fi
+
             # Start demo services (clean slate)
             pm2 delete demo-api demo-web demo-celery 2>/dev/null || true
 
             cd apps/api
-            PORT=8200 uv run uvicorn src.main:app --host 0.0.0.0 --port 8200 &
-            UVICORN_PID=\$!
             pm2 start uv --name demo-api -- run uvicorn src.main:app --host 0.0.0.0 --port 8200
             cd ../..
 
             cd apps/web
-            PORT=3200 pm2 start npm --name demo-web -- start
+            PORT=3200 NEXT_PUBLIC_API_URL=http://localhost:8200 pm2 start npm --name demo-web -- start
             cd ../..
 
             cd apps/api

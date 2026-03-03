@@ -1,6 +1,8 @@
 """
 Comprehensive test suite for content source API endpoints.
 
+Includes integration tests for source data validation (GAP-015).
+
 Tests cover:
 - CRUD operations for all three source types (URL, PDF, text)
 - Episode relationship validation (invalid episode_id)
@@ -13,6 +15,7 @@ Tests cover:
 
 import pytest
 from uuid import uuid4
+from unittest.mock import AsyncMock, MagicMock, patch
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,11 +109,16 @@ async def url_content_source(client, episode_and_auth):
         }
     }
 
-    response = await client.post(
-        f"/episodes/{episode_id}/content",
-        headers=headers,
-        json=content_data
-    )
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
 
     assert response.status_code == 201
     return response.json(), headers
@@ -149,7 +157,7 @@ async def text_content_source(client, episode_and_auth):
         "episode_id": episode_id,
         "source_type": "text",
         "source_data": {
-            "content": "This is raw text content for the podcast"
+            "content": "This is a valid text sample for the podcast episode content source testing"
         }
     }
 
@@ -181,11 +189,16 @@ async def test_create_url_content_source(client, episode_and_auth):
         }
     }
 
-    response = await client.post(
-        f"/episodes/{episode_id}/content",
-        headers=headers,
-        json=content_data
-    )
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
 
     assert response.status_code == 201
     data = response.json()
@@ -261,11 +274,16 @@ async def test_list_content_sources(client, episode_and_auth):
     sources = [
         {"episode_id": episode_id, "source_type": "url", "source_data": {"url": "https://example1.com", "title": "Article 1"}},
         {"episode_id": episode_id, "source_type": "pdf", "source_data": {"filename": "doc1.pdf", "s3_key": "uploads/doc1.pdf"}},
-        {"episode_id": episode_id, "source_type": "text", "source_data": {"content": "Text content 1"}},
+        {"episode_id": episode_id, "source_type": "text", "source_data": {"content": "This is valid text content for the podcast episode source item one"}},
     ]
 
-    for source in sources:
-        await client.post(f"/episodes/{episode_id}/content", headers=headers, json=source)
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        for source in sources:
+            await client.post(f"/episodes/{episode_id}/content", headers=headers, json=source)
 
     # List content sources
     response = await client.get(f"/episodes/{episode_id}/content", headers=headers)
@@ -605,11 +623,16 @@ async def test_content_source_initial_status_pending(client, episode_and_auth):
         }
     }
 
-    response = await client.post(
-        f"/episodes/{episode_id}/content",
-        headers=headers,
-        json=content_data
-    )
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
 
     assert response.status_code == 201
     data = response.json()
@@ -657,19 +680,24 @@ async def test_list_content_sources_pagination(client, episode_and_auth):
     episode_id, headers = episode_and_auth
 
     # Create 5 content sources
-    for i in range(5):
-        await client.post(
-            f"/episodes/{episode_id}/content",
-            headers=headers,
-            json={
-                "episode_id": episode_id,
-                "source_type": "url",
-                "source_data": {
-                    "url": f"https://example{i}.com",
-                    "title": f"Article {i}"
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        for i in range(5):
+            await client.post(
+                f"/episodes/{episode_id}/content",
+                headers=headers,
+                json={
+                    "episode_id": episode_id,
+                    "source_type": "url",
+                    "source_data": {
+                        "url": f"https://example{i}.com",
+                        "title": f"Article {i}"
+                    }
                 }
-            }
-        )
+            )
 
     # Get page 1 with page_size=2
     response = await client.get(
@@ -699,7 +727,7 @@ async def test_list_content_sources_second_page(client, episode_and_auth):
             json={
                 "episode_id": episode_id,
                 "source_type": "text",
-                "source_data": {"content": f"Content {i}"}
+                "source_data": {"content": f"This is valid text content for the podcast episode source item number {i}"}
             }
         )
 
@@ -815,3 +843,289 @@ async def test_content_source_tenant_isolation(client, url_content_source):
     the database-level RLS policies ensure tenant isolation.
     """
     pass
+
+
+# ============================================================================
+# SOURCE DATA VALIDATION TESTS (GAP-015)
+# ============================================================================
+
+def _mock_http_200():
+    """Return a context-manager mock that yields a 200 HEAD response."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.head = AsyncMock(return_value=mock_response)
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_create_url_content_source_invalid_scheme(client, episode_and_auth):
+    """URL with non-http/https scheme should return 422."""
+    episode_id, headers = episode_and_auth
+
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "url",
+        "source_data": {
+            "url": "ftp://example.com/file",
+            "title": "FTP Article"
+        }
+    }
+
+    response = await client.post(
+        f"/episodes/{episode_id}/content",
+        headers=headers,
+        json=content_data
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "http" in detail.lower() or "scheme" in detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_create_url_content_source_no_scheme(client, episode_and_auth):
+    """URL without scheme should return 422."""
+    episode_id, headers = episode_and_auth
+
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "url",
+        "source_data": {
+            "url": "example.com/article",
+            "title": "Article"
+        }
+    }
+
+    response = await client.post(
+        f"/episodes/{episode_id}/content",
+        headers=headers,
+        json=content_data
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_create_url_content_source_unreachable(client, episode_and_auth):
+    """URL that returns 404 should return 422 with descriptive error."""
+    episode_id, headers = episode_and_auth
+
+    mock_response = MagicMock()
+    mock_response.status_code = 404
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.head = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        content_data = {
+            "episode_id": episode_id,
+            "source_type": "url",
+            "source_data": {
+                "url": "https://example.com/missing",
+                "title": "Missing Page"
+            }
+        }
+
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
+
+    assert response.status_code == 422
+    assert "404" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_url_content_source_timeout(client, episode_and_auth):
+    """URL that times out should return 422 with timeout message."""
+    import httpx as _httpx
+    episode_id, headers = episode_and_auth
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.head = AsyncMock(side_effect=_httpx.TimeoutException("timeout"))
+
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        content_data = {
+            "episode_id": episode_id,
+            "source_type": "url",
+            "source_data": {
+                "url": "https://slow.example.com",
+                "title": "Slow Site"
+            }
+        }
+
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
+
+    assert response.status_code == 422
+    assert "timed out" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_create_url_content_source_valid_passes(client, episode_and_auth):
+    """Valid URL returning 200 should create content source successfully."""
+    episode_id, headers = episode_and_auth
+
+    mock_client = _mock_http_200()
+
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        content_data = {
+            "episode_id": episode_id,
+            "source_type": "url",
+            "source_data": {
+                "url": "https://example.com/article",
+                "title": "Valid Article"
+            }
+        }
+
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
+
+    assert response.status_code == 201
+    assert response.json()["source_type"] == "url"
+
+
+@pytest.mark.asyncio
+async def test_create_text_content_source_too_short(client, episode_and_auth):
+    """Text content shorter than 50 chars should return 422."""
+    episode_id, headers = episode_and_auth
+
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "text",
+        "source_data": {
+            "content": "Too short"
+        }
+    }
+
+    response = await client.post(
+        f"/episodes/{episode_id}/content",
+        headers=headers,
+        json=content_data
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "50" in detail or "short" in detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_create_text_content_source_too_long(client, episode_and_auth):
+    """Text content exceeding 50000 chars should return 422."""
+    episode_id, headers = episode_and_auth
+
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "text",
+        "source_data": {
+            "content": "word " * 15_000  # ~75000 chars
+        }
+    }
+
+    response = await client.post(
+        f"/episodes/{episode_id}/content",
+        headers=headers,
+        json=content_data
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "50000" in detail or "long" in detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_create_text_content_source_valid_passes(client, episode_and_auth):
+    """Valid text content (50+ chars, 10+ words) should create successfully."""
+    episode_id, headers = episode_and_auth
+
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "text",
+        "source_data": {
+            "content": "word " * 20  # 100 chars, 20 words — well above limits
+        }
+    }
+
+    response = await client.post(
+        f"/episodes/{episode_id}/content",
+        headers=headers,
+        json=content_data
+    )
+
+    assert response.status_code == 201
+    assert response.json()["source_type"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_create_text_content_source_too_few_words(client, episode_and_auth):
+    """Text with <10 words (even if >= 50 chars) should return 422."""
+    episode_id, headers = episode_and_auth
+
+    # 5 long words, > 50 chars total
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "text",
+        "source_data": {
+            "content": "superlongword " * 5
+        }
+    }
+
+    response = await client.post(
+        f"/episodes/{episode_id}/content",
+        headers=headers,
+        json=content_data
+    )
+
+    assert response.status_code == 422
+    assert "word" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_validation_error_response_format(client, episode_and_auth):
+    """422 error response should include a 'detail' field with meaningful text."""
+    episode_id, headers = episode_and_auth
+
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "url",
+        "source_data": {
+            "url": "ftp://bad-scheme.com",
+            "title": "Bad"
+        }
+    }
+
+    response = await client.post(
+        f"/episodes/{episode_id}/content",
+        headers=headers,
+        json=content_data
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert "detail" in body
+    assert isinstance(body["detail"], str)
+    assert len(body["detail"]) > 10  # Non-trivial message

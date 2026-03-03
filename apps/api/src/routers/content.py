@@ -30,6 +30,11 @@ from ..services.content_service import (
     update_content_source,
     delete_content_source
 )
+from ..services.source_validator_service import (
+    SourceValidatorService,
+    URLValidationError,
+    TextValidationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,19 @@ async def create_content_source(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Episode not found"
+        )
+
+    # Validate source data semantics (GAP-015)
+    validator = SourceValidatorService()
+    try:
+        await validator.validate_by_type(
+            source_type=content_data.source_type,
+            source_data=content_data.source_data,
+        )
+    except (URLValidationError, TextValidationError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
         )
 
     content_source = await add_content_source(

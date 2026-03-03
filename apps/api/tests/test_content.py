@@ -109,11 +109,16 @@ async def url_content_source(client, episode_and_auth):
         }
     }
 
-    response = await client.post(
-        f"/episodes/{episode_id}/content",
-        headers=headers,
-        json=content_data
-    )
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
 
     assert response.status_code == 201
     return response.json(), headers
@@ -152,7 +157,7 @@ async def text_content_source(client, episode_and_auth):
         "episode_id": episode_id,
         "source_type": "text",
         "source_data": {
-            "content": "This is raw text content for the podcast"
+            "content": "This is a valid text sample for the podcast episode content source testing"
         }
     }
 
@@ -184,11 +189,16 @@ async def test_create_url_content_source(client, episode_and_auth):
         }
     }
 
-    response = await client.post(
-        f"/episodes/{episode_id}/content",
-        headers=headers,
-        json=content_data
-    )
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
 
     assert response.status_code == 201
     data = response.json()
@@ -264,11 +274,16 @@ async def test_list_content_sources(client, episode_and_auth):
     sources = [
         {"episode_id": episode_id, "source_type": "url", "source_data": {"url": "https://example1.com", "title": "Article 1"}},
         {"episode_id": episode_id, "source_type": "pdf", "source_data": {"filename": "doc1.pdf", "s3_key": "uploads/doc1.pdf"}},
-        {"episode_id": episode_id, "source_type": "text", "source_data": {"content": "Text content 1"}},
+        {"episode_id": episode_id, "source_type": "text", "source_data": {"content": "This is valid text content for the podcast episode source item one"}},
     ]
 
-    for source in sources:
-        await client.post(f"/episodes/{episode_id}/content", headers=headers, json=source)
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        for source in sources:
+            await client.post(f"/episodes/{episode_id}/content", headers=headers, json=source)
 
     # List content sources
     response = await client.get(f"/episodes/{episode_id}/content", headers=headers)
@@ -608,11 +623,16 @@ async def test_content_source_initial_status_pending(client, episode_and_auth):
         }
     }
 
-    response = await client.post(
-        f"/episodes/{episode_id}/content",
-        headers=headers,
-        json=content_data
-    )
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
 
     assert response.status_code == 201
     data = response.json()
@@ -660,19 +680,24 @@ async def test_list_content_sources_pagination(client, episode_and_auth):
     episode_id, headers = episode_and_auth
 
     # Create 5 content sources
-    for i in range(5):
-        await client.post(
-            f"/episodes/{episode_id}/content",
-            headers=headers,
-            json={
-                "episode_id": episode_id,
-                "source_type": "url",
-                "source_data": {
-                    "url": f"https://example{i}.com",
-                    "title": f"Article {i}"
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        for i in range(5):
+            await client.post(
+                f"/episodes/{episode_id}/content",
+                headers=headers,
+                json={
+                    "episode_id": episode_id,
+                    "source_type": "url",
+                    "source_data": {
+                        "url": f"https://example{i}.com",
+                        "title": f"Article {i}"
+                    }
                 }
-            }
-        )
+            )
 
     # Get page 1 with page_size=2
     response = await client.get(
@@ -702,7 +727,7 @@ async def test_list_content_sources_second_page(client, episode_and_auth):
             json={
                 "episode_id": episode_id,
                 "source_type": "text",
-                "source_data": {"content": f"Content {i}"}
+                "source_data": {"content": f"This is valid text content for the podcast episode source item number {i}"}
             }
         )
 

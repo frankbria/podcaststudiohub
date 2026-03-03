@@ -103,10 +103,12 @@ sudo -u postgres psql -c "CREATE DATABASE podcastfy_demo OWNER demo_app;" 2>/dev
 sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE podcastfy_demo TO demo_app;" 2>/dev/null || true
 
 # ── 6. Claude Code CLI ───────────────────────────────
+# Claude Code authenticates via OAuth (logged in on this box).
+# No ANTHROPIC_API_KEY needed — the existing OAuth session is used.
 echo ""
 echo "--- Checking Claude Code CLI ---"
 if sudo -u "$DEMO_USER" bash -c 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; command -v claude' &>/dev/null; then
-	echo "Claude Code already installed:"
+	echo "Claude Code already installed (using existing OAuth session):"
 	sudo -u "$DEMO_USER" bash -c 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"; claude --version 2>/dev/null || echo "  (version check unavailable)"'
 else
 	echo "Installing Claude Code CLI..."
@@ -115,6 +117,8 @@ else
 		[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 		npm install -g @anthropic-ai/claude-code
 	'
+	echo ""
+	echo "IMPORTANT: Run 'claude' interactively to complete OAuth login before using in CI."
 fi
 
 # ── 7. Playwright / agent-browser ─────────────────────
@@ -194,7 +198,8 @@ else
 	echo "Creating environment template..."
 	sudo -u "$DEMO_USER" bash -c "
 		cat > $DEMO_PATH/.env.demo << 'ENVEOF'
-# Demo VPS environment — fill in API keys
+# Demo VPS environment — app service configuration
+# Claude Code uses OAuth (logged in via 'claude' CLI), no API key needed here.
 DATABASE_URL=postgresql+asyncpg://demo_app:demo_password@localhost:5432/podcastfy_demo
 SECRET_KEY=demo-secret-key-change-me
 ENCRYPTION_KEY=demo-encryption-key-00000000
@@ -202,14 +207,11 @@ JWT_SECRET_KEY=demo-jwt-secret-change-me
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/0
 
-# Claude Code (set your actual key)
-ANTHROPIC_API_KEY=
-
 # Demo service ports (offset from dev to avoid conflicts)
 API_PORT=8200
 FRONTEND_PORT=3200
 ENVEOF
-		echo 'Created $DEMO_PATH/.env.demo — edit to add API keys'
+		echo 'Created $DEMO_PATH/.env.demo — edit secrets above'
 	"
 fi
 

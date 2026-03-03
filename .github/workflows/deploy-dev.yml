@@ -214,7 +214,10 @@ jobs:
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/
 
           # Install dependencies on server
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && npm ci"
+          # Uses npm install (not npm ci) because the VPS has only the frontend
+          # directory, not the full monorepo. The workspace-scoped lockfile at
+          # the repo root can't be used in isolation.
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && npm install"
 
           # Create .env.production with runtime environment variables (needed for build)
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXT_PUBLIC_API_URL=$API_URL' > $SERVER_PATH/frontend/.env.production"

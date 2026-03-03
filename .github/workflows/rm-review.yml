@@ -270,17 +270,14 @@ jobs:
             # Start demo services (clean slate)
             pm2 delete demo-api demo-web demo-celery 2>/dev/null || true
 
-            cd apps/api
-            pm2 start uv --name demo-api -- run uvicorn src.main:app --host 0.0.0.0 --port 8200
-            cd ../..
+            pm2 start uv --name demo-api --cwd "$DEMO_PATH/apps/api" \
+              -- run uvicorn src.main:app --host 0.0.0.0 --port 8200
 
-            cd apps/web
-            PORT=3200 NEXT_PUBLIC_API_URL=http://localhost:8200 pm2 start npm --name demo-web -- start
-            cd ../..
+            PORT=3200 NEXT_PUBLIC_API_URL=http://localhost:8200 \
+              pm2 start npm --name demo-web --cwd "$DEMO_PATH/apps/web" -- start
 
-            cd apps/api
-            pm2 start uv --name demo-celery -- run celery -A src.worker:celery_app worker --loglevel=info
-            cd ../..
+            pm2 start uv --name demo-celery --cwd "$DEMO_PATH/apps/api" \
+              -- run celery -A src.worker:celery_app worker --loglevel=info
 
             # Wait for services to start
             sleep 10

@@ -5,8 +5,6 @@ Provides helpers for validating audio file formats, sizes, and extracting
 metadata such as duration, file format, and generating S3 keys.
 """
 
-import os
-import uuid
 from pathlib import Path
 from typing import Optional
 

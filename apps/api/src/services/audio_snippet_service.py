@@ -25,7 +25,6 @@ from ..utils.audio_utils import (
 	generate_s3_key,
 	get_content_type,
 	MAX_FILE_SIZE_BYTES,
-	MIN_FILE_SIZE_BYTES,
 )
 
 

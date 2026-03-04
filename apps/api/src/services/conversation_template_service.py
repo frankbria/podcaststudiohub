@@ -155,17 +155,9 @@ async def delete_conversation_template(
 	"""
 	Delete a conversation template.
 
-	Checks referential integrity before deletion:
-	- Returns (False, message) if template is referenced by active episodes
-	- Returns (False, message) if template is set as default_template_id in a project
-	- Returns (True, None) if deletion is safe
-
 	Args:
 		db: Database session
 		template: Template instance to delete
-
-	Returns:
-		Tuple of (success: bool, error_message: Optional[str])
 	"""
 	await db.delete(template)
 	await db.commit()

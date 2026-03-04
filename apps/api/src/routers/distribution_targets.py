@@ -8,10 +8,13 @@ isolation via RLS.
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.ext.asyncio import AsyncSession
+import urllib.parse
 from typing import Optional
 from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..database import get_db
@@ -87,7 +90,6 @@ async def spotify_authorize(
 	state = generate_oauth_state(str(current_user.id))
 
 	# Build Spotify authorization URL
-	import urllib.parse
 	params = urllib.parse.urlencode({
 		"client_id": client_id,
 		"response_type": "code",
@@ -177,17 +179,15 @@ async def spotify_callback(
 		show_info = {"id": "", "name": ""}
 
 	# Look up user from DB to get tenant_id
-	from ..models import User as UserModel
-	from sqlalchemy import select
 	user_result = await db.execute(
-		select(UserModel).where(UserModel.id == UUID(user_id_str))
+		select(User).where(User.id == UUID(user_id_str))
 	)
 	db_user = user_result.scalar_one_or_none()
 
 	if not db_user:
 		raise HTTPException(
 			status_code=status.HTTP_400_BAD_REQUEST,
-			detail="User not found"
+			detail="User not found",
 		)
 
 	# Create distribution target

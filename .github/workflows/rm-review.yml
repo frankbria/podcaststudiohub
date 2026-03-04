@@ -5,8 +5,8 @@ on:
     workflows: ["PR Review Agent"]
     types: [completed]
   schedule:
-    # Twice-daily sweep, offset from rm-loop's */4 schedule
-    - cron: "0 2,14 * * *"
+    # Every 2 hours, offset from rm-loop's */4 schedule by 1 hour
+    - cron: "0 1,3,5,7,9,11,13,15,17,19,21,23 * * *"
   workflow_dispatch:
     inputs:
       pr_number:
@@ -35,21 +35,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools
-        run: |
-          sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-
       - name: Check circuit breakers
         id: breaker
         run: |
-          RESULT=$(bash ${{ env.SCRIPTS_PATH }}/check-circuit-breakers.sh 2>&1) || {
-            REASON=$(echo "$RESULT" | jq -r '.reason // "unknown"')
-            echo "::notice::Circuit breaker tripped: $REASON"
+          # Review workflow uses a lighter check than the implementation loop:
+          # only pause and budget matter, not PR count or cooldown (reviews
+          # don't create PRs and should process the backlog quickly).
+          STATE="${{ env.STATE_PATH }}"
+          PAUSED=$(jq -r '.loop.paused // false' "$STATE")
+          if [[ "$PAUSED" == "true" ]]; then
+            echo "::notice::Circuit breaker: loop is paused"
             echo "should_run=false" >> $GITHUB_OUTPUT
             exit 0
-          }
+          fi
           echo "should_run=true" >> $GITHUB_OUTPUT
 
       - name: Select PR to review

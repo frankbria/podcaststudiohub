@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: Optional[str] = None
     CELERY_TASK_ALWAYS_EAGER: bool = False
 
+    # Spotify OAuth
+    SPOTIFY_CLIENT_ID: Optional[str] = None
+    SPOTIFY_CLIENT_SECRET: Optional[str] = None
+    SPOTIFY_REDIRECT_URI: Optional[str] = None
+
     # Logging
     LOG_LEVEL: str = "INFO"
 

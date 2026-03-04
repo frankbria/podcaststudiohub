@@ -77,12 +77,15 @@ async def internal_error_handler(request, exc):
 # Register routers - User Story 1 (Basic Podcast Generation)
 from src.routers import auth, projects, episodes, content, generation  # noqa: E402
 from src.routers.rss_feed import router as rss_feed_router, public_router as rss_public_router  # noqa: E402
+# Register routers - User Story 2 (Distribution Target Management, GAP-010)
+from src.routers import distribution_targets  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(episodes.router)
 app.include_router(content.router)
 app.include_router(generation.router)
+app.include_router(distribution_targets.router)
 
 # RSS Feed routers - GAP-011
 app.include_router(rss_feed_router)

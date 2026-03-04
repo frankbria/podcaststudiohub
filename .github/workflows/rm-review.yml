@@ -88,6 +88,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          allowed_bots: "claude[bot],github-actions[bot]"
           prompt: |
             You are the Repo Maintainer agent addressing review feedback on PR #${{ needs.select-pr.outputs.pr_number }}.
             This is review round ${{ needs.select-pr.outputs.round }} of a maximum 3 rounds.
@@ -298,21 +299,21 @@ jobs:
           PR_NUMBER: ${{ needs.select-pr.outputs.pr_number }}
           LINKED_ISSUE: ${{ needs.select-pr.outputs.linked_issue }}
         run: |
-          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" << 'VERIFY_EOF'
+          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" << VERIFY_EOF
             set -euo pipefail
-            export NVM_DIR="$HOME/.nvm"
-            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-            export PATH="$HOME/.cargo/bin:$PATH"
+            export NVM_DIR="\$HOME/.nvm"
+            [ -s "\$NVM_DIR/nvm.sh" ] && . "\$NVM_DIR/nvm.sh"
+            export PATH="\$HOME/.cargo/bin:\$PATH"
 
             RESULTS_FILE="/tmp/verification-results.json"
 
             claude -p "You are verifying PR #${PR_NUMBER} for the podcaststudiohub project.
-            The linked issue is #${LINKED_ISSUE}.
+            The linked issue is #${LINKED_ISSUE:-none}.
 
             ## Instructions
 
             1. Read the linked issue to understand acceptance criteria:
-               gh issue view ${LINKED_ISSUE}
+               gh issue view ${LINKED_ISSUE:-0}
 
             2. The services are running at:
                - API: http://localhost:8200
@@ -328,7 +329,7 @@ jobs:
                - Frontend loads: curl -s http://localhost:3200 | head -20
                - No console errors in frontend
 
-            5. Write your results as JSON to ${RESULTS_FILE}:
+            5. Write your results as JSON to \$RESULTS_FILE:
                {
                  \"pr\": ${PR_NUMBER},
                  \"criteria\": [
@@ -343,8 +344,8 @@ jobs:
             " --model sonnet --max-turns 50 2>/dev/null || true
 
             # Output results
-            if [ -f "$RESULTS_FILE" ]; then
-              cat "$RESULTS_FILE"
+            if [ -f "\$RESULTS_FILE" ]; then
+              cat "\$RESULTS_FILE"
             else
               echo '{"pr": 0, "criteria": [], "smoke_test": {"api_health": false, "frontend_loads": false}, "overall": "fail", "error": "No results file generated"}'
             fi

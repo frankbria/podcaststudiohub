@@ -6,7 +6,8 @@ status filtering, and generation management. All endpoints require authenticatio
 and automatically enforce tenant isolation via RLS.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 from typing import Optional
@@ -27,6 +28,8 @@ from ..services.episode_service import (
 	update_episode,
 	delete_episode
 )
+from ..services.storage_service import StorageService
+from ..utils.download_utils import get_episode_filename, parse_range_header, iter_s3_body
 
 router = APIRouter(prefix="/episodes", tags=["episodes"])
 
@@ -219,3 +222,112 @@ async def delete_episode_endpoint(
 
 	await delete_episode(db=db, episode=episode)
 	return None  # 204 No Content
+
+
+@router.get("/{episode_id}/download", response_class=StreamingResponse)
+async def download_episode_audio(
+	episode_id: UUID,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db),
+	range: Optional[str] = Header(None)
+) -> StreamingResponse:
+	"""
+	Download podcast audio file with streaming and resume support.
+
+	Streams audio from S3 directly to the client. Supports HTTP Range
+	requests (RFC 7233) for resume capability.
+
+	Returns proper Content-Disposition, Content-Type, Accept-Ranges,
+	and Cache-Control headers for browser download.
+
+	Args:
+		episode_id: UUID of episode to download.
+		current_user: Authenticated user (from JWT token).
+		db: Database session.
+		range: Optional HTTP Range header (e.g., "bytes=0-1023").
+
+	Returns:
+		StreamingResponse (200 OK or 206 Partial Content) with audio file.
+
+	Raises:
+		HTTPException: 404 if episode not found.
+		HTTPException: 403 if episode not complete or audio file missing.
+		HTTPException: 416 if Range header is invalid or out of bounds.
+	"""
+	episode = await get_episode_by_id(db=db, episode_id=episode_id)
+
+	if episode is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail="Episode not found"
+		)
+
+	if episode.generation_status != "complete":
+		raise HTTPException(
+			status_code=status.HTTP_403_FORBIDDEN,
+			detail=f"Episode not ready for download. Status: {episode.generation_status}"
+		)
+
+	if not episode.s3_key:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail="Episode audio file not found in storage"
+		)
+
+	storage = StorageService()
+
+	# Get file metadata from S3
+	head_response = storage.s3_client.head_object(
+		Bucket=storage.bucket_name,
+		Key=episode.s3_key
+	)
+	total_size = head_response["ContentLength"]
+
+	filename = get_episode_filename(episode)
+	http_status = 200
+	start_byte = 0
+	content_length = total_size
+	extra_headers = {}
+
+	if range:
+		# Parse range header - return 416 on invalid range
+		try:
+			start_byte, end_byte = parse_range_header(range, total_size)
+		except ValueError:
+			raise HTTPException(
+				status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+				detail="Invalid Range header",
+				headers={"Content-Range": f"bytes */{total_size}"}
+			)
+
+		http_status = 206
+		content_length = end_byte - start_byte + 1
+		extra_headers["Content-Range"] = f"bytes {start_byte}-{end_byte}/{total_size}"
+
+		s3_response = storage.s3_client.get_object(
+			Bucket=storage.bucket_name,
+			Key=episode.s3_key,
+			Range=f"bytes={start_byte}-{end_byte}"
+		)
+	else:
+		s3_response = storage.s3_client.get_object(
+			Bucket=storage.bucket_name,
+			Key=episode.s3_key
+		)
+
+	body = s3_response["Body"]
+
+	response_headers = {
+		"Content-Disposition": f'attachment; filename="{filename}"',
+		"Content-Length": str(content_length),
+		"Accept-Ranges": "bytes",
+		"Cache-Control": "private, max-age=31536000",
+		**extra_headers
+	}
+
+	return StreamingResponse(
+		content=iter_s3_body(body),
+		status_code=http_status,
+		headers=response_headers,
+		media_type="audio/mpeg"
+	)

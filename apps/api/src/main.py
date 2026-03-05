@@ -52,9 +52,15 @@ async def health_check():
 @app.exception_handler(404)
 async def not_found_handler(request, exc):
     """Custom 404 handler"""
+    # Preserve the detail from HTTPException raised by route handlers.
+    # Starlette uses detail="Not Found" for unmatched routes; remap that to
+    # our user-facing message so endpoint-raised 404s pass their own detail.
+    detail = getattr(exc, 'detail', 'Endpoint not found')
+    if detail == "Not Found":
+        detail = "Endpoint not found"
     return JSONResponse(
         status_code=404,
-        content={"detail": "Endpoint not found"}
+        content={"detail": detail}
     )
 
 

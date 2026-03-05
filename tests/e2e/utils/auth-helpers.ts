@@ -36,8 +36,8 @@ export async function signUp(page: Page, user: TestUser) {
   await page.fill('input[type="password"]', user.password);
   await page.click('button[type="submit"]');
 
-  // Should redirect to login page
-  await expect(page).toHaveURL(/\/login/);
+  // Wait for navigation after signup completes
+  await page.waitForURL(/\/login/, { timeout: 10000 });
 }
 
 /**

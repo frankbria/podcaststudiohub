@@ -46,6 +46,7 @@ jobs:
   test:
     name: Run Playwright Tests
     runs-on: ubuntu-latest
+    environment: development
     timeout-minutes: 60
 
     strategy:

@@ -7,6 +7,9 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
 
+  /* Register shared test user and save auth state before all tests */
+  globalSetup: './tests/e2e/global-setup.ts',
+
   /* Run tests in files in parallel */
   fullyParallel: true,
 
@@ -30,6 +33,9 @@ export default defineConfig({
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
     baseURL: process.env.BASE_URL || 'https://dev.podcaststudiohub.me',
+
+    /* Pre-authenticated session from global-setup */
+    storageState: 'tests/e2e/.auth/user.json',
 
     /* Collect trace when retrying the failed test */
     trace: 'on-first-retry',

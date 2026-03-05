@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { signUpAndLogin } from '../utils/auth-helpers';
+import { ensureLoggedIn } from '../utils/auth-helpers';
 import { createProject } from '../utils/project-helpers';
 import { createEpisode } from '../utils/episode-helpers';
 
 test.describe('Navigation and UX Flows', () => {
 	test.describe('Main Navigation', () => {
 		test('should display main navigation menu when logged in', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			await page.goto('/dashboard');
 
 			// Main nav should be visible
@@ -14,7 +14,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should navigate to dashboard from nav menu', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			await createProject(page, project);
 
@@ -25,7 +25,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should show user menu in navigation', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			await page.goto('/dashboard');
 
 			// User menu should exist (avatar, name, or dropdown)
@@ -35,7 +35,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should highlight active navigation item', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			await page.goto('/dashboard');
 
 			// Dashboard link should be highlighted/active
@@ -50,7 +50,7 @@ test.describe('Navigation and UX Flows', () => {
 
 	test.describe('Breadcrumb Navigation', () => {
 		test('should show breadcrumb on project page', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -61,7 +61,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should show breadcrumb on episode page', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -75,7 +75,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should navigate via breadcrumb to dashboard', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -87,7 +87,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should navigate via breadcrumb to project', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -103,7 +103,7 @@ test.describe('Navigation and UX Flows', () => {
 
 	test.describe('Browser Navigation', () => {
 		test('should support browser back button', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -120,7 +120,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should support browser forward button', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -134,7 +134,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should maintain state after back/forward navigation', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -150,7 +150,7 @@ test.describe('Navigation and UX Flows', () => {
 
 	test.describe('Deep Linking', () => {
 		test('should support direct URL to project', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -159,7 +159,7 @@ test.describe('Navigation and UX Flows', () => {
 			const logoutButton = page.locator('button:has-text("Logout"), button:has-text("Sign out")').first();
 			await logoutButton.click();
 
-			const user = await signUpAndLogin(page);
+			const user = await ensureLoggedIn(page);
 
 			// Create project for new user
 			const newProject = { title: `New Project ${Date.now()}` };
@@ -171,7 +171,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should support direct URL to episode', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -196,7 +196,7 @@ test.describe('Navigation and UX Flows', () => {
 
 	test.describe('Loading States', () => {
 		test('should show loading state during navigation', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -218,7 +218,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should not show stale data during navigation', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project1 = { title: `Project A ${Date.now()}` };
 			const project2 = { title: `Project B ${Date.now() + 1}` };
 
@@ -240,7 +240,7 @@ test.describe('Navigation and UX Flows', () => {
 
 	test.describe('Empty States', () => {
 		test('should show helpful empty state on dashboard with no projects', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			await page.goto('/dashboard');
 
 			// Should show empty state with call to action
@@ -249,7 +249,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should show empty state on project with no episodes', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Empty Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -259,7 +259,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should show empty state on episode with no content', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -273,7 +273,7 @@ test.describe('Navigation and UX Flows', () => {
 
 	test.describe('Error Pages', () => {
 		test('should show 404 for non-existent project', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 
 			// Navigate to non-existent project
 			await page.goto('/projects/non-existent-id-12345');
@@ -283,7 +283,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should show 404 for non-existent episode', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 
 			// Navigate to non-existent episode
 			await page.goto('/episodes/non-existent-id-12345');
@@ -293,7 +293,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should provide way to return from error page', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 
 			await page.goto('/projects/non-existent-id');
 
@@ -306,7 +306,7 @@ test.describe('Navigation and UX Flows', () => {
 
 	test.describe('Keyboard Navigation', () => {
 		test('should support tab navigation through dashboard', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			await createProject(page, project);
 
@@ -325,7 +325,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should support Enter key to activate links', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -343,7 +343,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should support Escape key to close modals', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			await page.goto('/dashboard');
 
 			// Open create project modal
@@ -365,7 +365,7 @@ test.describe('Navigation and UX Flows', () => {
 			// Set mobile viewport
 			await page.setViewportSize({ width: 375, height: 667 });
 
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			await page.goto('/dashboard');
 
 			// Mobile menu button should be visible
@@ -377,7 +377,7 @@ test.describe('Navigation and UX Flows', () => {
 		test('should toggle mobile menu', async ({ page }) => {
 			await page.setViewportSize({ width: 375, height: 667 });
 
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			await page.goto('/dashboard');
 
 			// Click menu button
@@ -398,7 +398,7 @@ test.describe('Navigation and UX Flows', () => {
 
 	test.describe('Search and Filtering', () => {
 		test('should show search if available', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 
 			// Create multiple projects
 			for (let i = 0; i < 5; i++) {
@@ -421,7 +421,7 @@ test.describe('Navigation and UX Flows', () => {
 
 	test.describe('URL Structure', () => {
 		test('should use clean URLs without hash routing', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			await page.goto('/dashboard');
 
 			// URL should not contain # (hash)
@@ -429,7 +429,7 @@ test.describe('Navigation and UX Flows', () => {
 		});
 
 		test('should use semantic URL paths', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 

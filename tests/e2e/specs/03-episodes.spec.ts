@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { signUpAndLogin } from '../utils/auth-helpers';
+import { ensureLoggedIn } from '../utils/auth-helpers';
 import { createProject } from '../utils/project-helpers';
 import { createEpisode } from '../utils/episode-helpers';
 
 test.describe('Episode Management', () => {
 	test.describe('Create Episode', () => {
 		test('should display create episode button on project page', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Test Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -14,7 +14,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should create episode with title only', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -27,7 +27,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should create episode with title and description', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -56,7 +56,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should show validation error for empty title', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -72,7 +72,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should create multiple episodes in project', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -91,7 +91,7 @@ test.describe('Episode Management', () => {
 
 	test.describe('View Episode', () => {
 		test('should display episode details', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -106,7 +106,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should display empty state when no content sources', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -120,7 +120,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should navigate to episode from project page', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -139,7 +139,7 @@ test.describe('Episode Management', () => {
 
 	test.describe('Edit Episode', () => {
 		test('should update episode title', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -162,7 +162,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should update episode description', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -187,7 +187,7 @@ test.describe('Episode Management', () => {
 
 	test.describe('Delete Episode', () => {
 		test('should delete episode', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -209,7 +209,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should show confirmation dialog before delete', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -227,7 +227,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should cancel delete operation', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -249,7 +249,7 @@ test.describe('Episode Management', () => {
 
 	test.describe('Episode List in Project', () => {
 		test('should display all episodes in project', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -272,7 +272,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should show episode count in project', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 
@@ -292,7 +292,7 @@ test.describe('Episode Management', () => {
 	test.describe('Episode Access Control', () => {
 		test('should not allow access to other user episodes', async ({ page }) => {
 			// User A creates episode
-			const userA = await signUpAndLogin(page);
+			const userA = await ensureLoggedIn(page);
 			const project = { title: `Private Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Private Episode ${Date.now()}` };
@@ -304,7 +304,7 @@ test.describe('Episode Management', () => {
 			await logoutButton.click();
 
 			// User B tries to access
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			await page.goto(`/episodes/${episodeId}`);
 
 			// Should show error
@@ -316,7 +316,7 @@ test.describe('Episode Management', () => {
 
 	test.describe('Episode Navigation', () => {
 		test('should navigate back to project from episode', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -330,7 +330,7 @@ test.describe('Episode Management', () => {
 		});
 
 		test('should show breadcrumb navigation', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Breadcrumb Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Breadcrumb Episode ${Date.now()}` };
@@ -345,7 +345,7 @@ test.describe('Episode Management', () => {
 
 	test.describe('Episode Status', () => {
 		test('should show draft status for new episode', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Draft Episode ${Date.now()}` };

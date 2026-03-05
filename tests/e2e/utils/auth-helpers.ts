@@ -49,8 +49,8 @@ export async function login(page: Page, email: string, password: string) {
   await page.fill('input[type="password"]', password);
   await page.click('button[type="submit"]');
 
-  // Should redirect to dashboard
-  await expect(page).toHaveURL(/\/dashboard/);
+  // Wait for redirect to dashboard
+  await page.waitForURL(/\/dashboard/, { timeout: 15000 });
 }
 
 /**
@@ -73,6 +73,15 @@ export async function signUpAndLogin(page: Page): Promise<TestUser> {
   await signUp(page, user);
   await login(page, user.email, user.password);
   return user;
+}
+
+/**
+ * Navigate to dashboard using pre-authenticated storageState.
+ * Use this in non-auth tests instead of signUpAndLogin().
+ */
+export async function ensureLoggedIn(page: Page) {
+  await page.goto('/dashboard');
+  await page.waitForURL(/\/dashboard/, { timeout: 15000 });
 }
 
 /**

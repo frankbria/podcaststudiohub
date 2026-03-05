@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { generateTestUser, signUp, login, logout } from '../utils/auth-helpers';
 
+// Auth tests must start unauthenticated — override the shared storageState
+test.use({ storageState: { cookies: [], origins: [] } });
+
 test.describe('Authentication', () => {
   test.describe('Sign Up', () => {
     test('should display signup form', async ({ page }) => {

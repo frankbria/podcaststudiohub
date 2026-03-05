@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { signUpAndLogin } from '../utils/auth-helpers';
+import { ensureLoggedIn } from '../utils/auth-helpers';
 import { createProject } from '../utils/project-helpers';
 import { createEpisode, addContentSource, deleteContentSource } from '../utils/episode-helpers';
 
 test.describe('Content Source Management', () => {
 	test.describe('Add URL Content', () => {
 		test('should display add content button', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -16,7 +16,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should add URL content source', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -34,7 +34,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should validate URL format', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -54,7 +54,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should add multiple URL sources', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -77,7 +77,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should add YouTube URL', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -97,7 +97,7 @@ test.describe('Content Source Management', () => {
 
 	test.describe('Add Text Content', () => {
 		test('should add text content source', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -115,7 +115,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should validate text content not empty', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -139,7 +139,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should add long text content', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -157,7 +157,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should add multiple text sources', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -180,7 +180,7 @@ test.describe('Content Source Management', () => {
 
 	test.describe('Mixed Content Sources', () => {
 		test('should add both URL and text sources', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -204,7 +204,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should show content source count', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -222,7 +222,7 @@ test.describe('Content Source Management', () => {
 
 	test.describe('Edit Content Source', () => {
 		test('should edit URL content source', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -250,7 +250,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should edit text content source', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -280,7 +280,7 @@ test.describe('Content Source Management', () => {
 
 	test.describe('Delete Content Source', () => {
 		test('should delete URL content source', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -297,7 +297,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should delete text content source', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -316,7 +316,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should show confirmation before delete', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -335,7 +335,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should cancel delete operation', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -356,7 +356,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should delete specific source from multiple', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -379,7 +379,7 @@ test.describe('Content Source Management', () => {
 
 	test.describe('Content Source Display', () => {
 		test('should show content type indicator', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -392,7 +392,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should truncate long URLs in display', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -406,7 +406,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should show text preview', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -422,7 +422,7 @@ test.describe('Content Source Management', () => {
 
 	test.describe('Content Source Validation', () => {
 		test('should prevent duplicate URLs', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };
@@ -443,7 +443,7 @@ test.describe('Content Source Management', () => {
 		});
 
 		test('should require at least one content source for generation', async ({ page }) => {
-			await signUpAndLogin(page);
+			await ensureLoggedIn(page);
 			const project = { title: `Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
 			const episode = { title: `Episode ${Date.now()}` };

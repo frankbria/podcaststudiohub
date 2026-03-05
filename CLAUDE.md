@@ -70,29 +70,24 @@ Input Sources → Content Extraction → LLM Generation → TTS Conversion → A
 
 ### Environment Setup
 ```bash
-# Using Poetry (preferred)
-poetry install
-
-# Using uv (alternative)
-uv pip install -r requirements.txt
+# Using uv (preferred)
+uv venv
+uv sync
 
 # Install ffmpeg (required for audio processing)
-pip install ffmpeg  # or use system package manager
+# Use system package manager (apt, brew, etc.)
 ```
 
 ### Testing
 ```bash
 # Run all tests in parallel
-poetry run pytest -n auto
-
-# Run all tests with pytest directly
-pytest -n auto
+uv run pytest -n auto
 
 # Run specific test file
-poetry run pytest tests/test_client.py
+uv run pytest tests/test_client.py
 
 # Run single test
-poetry run pytest tests/test_client.py::test_function_name
+uv run pytest tests/test_client.py::test_function_name
 ```
 
 ### Code Quality
@@ -211,31 +206,26 @@ GOOGLE_CLOUD_CREDENTIALS=<path> # For Google Cloud TTS
 
 ## Dependency Management
 
-**Primary tool:** Poetry (pyproject.toml)
+**Primary tool:** uv (pyproject.toml)
 
 **Adding dependencies:**
 ```bash
-poetry add <package>
-poetry export -f requirements.txt --output requirements.txt --without-hashes
+uv add <package>
 ```
 
 **Removing dependencies:**
 ```bash
-poetry remove <package>
-poetry export -f requirements.txt --output requirements.txt --without-hashes
+uv remove <package>
 ```
-
-**Alternative:** Contributors can use `uv` and update requirements.txt
 
 ## Pre-Pull Request Checklist
 
 1. **Dependencies**: If added/removed packages:
-   - `poetry add/remove <package>`
-   - `poetry export -f requirements.txt --output requirements.txt --without-hashes`
+   - `uv add/remove <package>`
 
 2. **Testing**:
    - Add tests in `tests/*.py` for user-facing changes
-   - Run locally: `poetry run pytest`
+   - Run locally: `uv run pytest`
    - CI runs tests automatically - verify they pass
 
 3. **Code quality**:
@@ -390,7 +380,7 @@ data/                          # Runtime data
 2. **API key issues**: Ensure `.env` file is in project root
 3. **TTS limits**: OpenAI has 25MB limit per request, may need chunking
 4. **Tabs vs spaces**: This project uses tabs for indentation
-5. **Requirements sync**: Always export requirements.txt after poetry changes
+5. **Dependencies**: Use `uv add/remove` for package management
 6. **Long content**: Use `--longform` flag for content >10 minutes
 7. **Local LLM**: Requires Llamafile setup, see usage/local_llm.md
 

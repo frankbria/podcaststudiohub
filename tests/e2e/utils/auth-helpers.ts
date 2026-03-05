@@ -37,7 +37,7 @@ export async function signUp(page: Page, user: TestUser) {
   await page.click('button[type="submit"]');
 
   // Wait for navigation after signup completes
-  await page.waitForURL(/\/login/, { timeout: 15000 });
+  await page.waitForURL(/\/login/, { timeout: 10000 });
 }
 
 /**

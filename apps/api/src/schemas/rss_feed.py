@@ -1,13 +1,14 @@
 """
 RSS Feed schemas for request/response validation.
 
-Defines Pydantic models for RSS Feed management endpoints.
+Defines Pydantic models for RSS Feed management endpoints and
+RSS feed validation against podcast directories.
 """
 
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional, List
 
 
 class RSSFeedResponse(BaseModel):
@@ -46,4 +47,47 @@ class RSSFeedUpdate(BaseModel):
 	podcast_metadata: PodcastMetadataUpdate = Field(
 		...,
 		description="Podcast metadata fields to update (triggers feed regeneration)"
+	)
+
+
+# --- RSS Feed Validation Schemas ---
+
+
+class ValidationError(BaseModel):
+	"""Single validation error or warning."""
+
+	field: str = Field(..., description="XML field path, e.g. 'itunes:image', 'enclosure/@type'")
+	level: Literal['error', 'warning'] = Field(
+		...,
+		description="'error' blocks submission, 'warning' is advisory"
+	)
+	message: str = Field(..., description="User-friendly error message")
+	details: Optional[str] = Field(None, description="Technical details for troubleshooting")
+	examples: Optional[List[str]] = Field(None, description="Examples of correct format")
+
+
+class DirectoryValidationResult(BaseModel):
+	"""Validation results for one podcast directory."""
+
+	directory: Literal['apple_podcasts', 'spotify', 'google_podcasts']
+	valid: bool = Field(..., description="True if no errors (warnings allowed)")
+	errors: List[ValidationError] = Field(default_factory=list)
+	warnings: List[ValidationError] = Field(default_factory=list)
+	checked_at: datetime
+
+
+class ValidationStatusUpdate(BaseModel):
+	"""Complete validation results for all directories.
+
+	This structure is stored in RSSFeed.validation_status JSONB field
+	and returned from the validation endpoints.
+	"""
+
+	last_validated_at: datetime
+	apple_podcasts: DirectoryValidationResult
+	spotify: DirectoryValidationResult
+	google_podcasts: DirectoryValidationResult
+	is_valid_for_all: bool = Field(
+		...,
+		description="True if all three directories have valid=True"
 	)

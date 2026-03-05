@@ -69,13 +69,14 @@ async def internal_error_handler(request, exc):
 
 
 # Register routers - User Story 1 (Basic Podcast Generation)
-from src.routers import auth, projects, episodes, content, generation
+from src.routers import auth, projects, episodes, content, generation, tts_config
 
 app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(episodes.router)
 app.include_router(content.router)
 app.include_router(generation.router)
+app.include_router(tts_config.router)
 
 
 if __name__ == "__main__":

@@ -57,8 +57,8 @@ class DistributionTarget(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
-    user = relationship("User")
-    project = relationship("Project")
+    user = relationship("User", back_populates="distribution_targets")
+    project = relationship("Project", back_populates="distribution_targets")
 
     def __repr__(self) -> str:
         return f"<DistributionTarget(id={self.id}, type={self.target_type}, active={self.is_active})>"

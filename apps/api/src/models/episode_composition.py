@@ -58,8 +58,8 @@ class EpisodeComposition(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
-    episode = relationship("Episode")
-    layout = relationship("EpisodeLayout")
+    episode = relationship("Episode", back_populates="composition")
+    layout = relationship("EpisodeLayout", back_populates="compositions")
 
     def __repr__(self) -> str:
         return f"<EpisodeComposition(id={self.id}, episode_id={self.episode_id}, status={self.composition_status})>"

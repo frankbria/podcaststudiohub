@@ -50,7 +50,8 @@ class ConversationTemplate(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
-    user = relationship("User")
+    user = relationship("User", back_populates="templates")
+    episodes = relationship("Episode", back_populates="template", foreign_keys="Episode.template_id")
 
     def __repr__(self) -> str:
         return f"<ConversationTemplate(id={self.id}, name={self.name})>"

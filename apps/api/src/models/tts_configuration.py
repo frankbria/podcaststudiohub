@@ -63,7 +63,8 @@ class TTSConfiguration(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
-    user = relationship("User")
+    user = relationship("User", back_populates="tts_configs")
+    episodes = relationship("Episode", back_populates="tts_config", foreign_keys="Episode.tts_config_id")
 
     def __repr__(self) -> str:
         return f"<TTSConfiguration(id={self.id}, name={self.name}, provider={self.provider})>"

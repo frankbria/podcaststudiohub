@@ -41,6 +41,12 @@ class User(Base):
 
     # Relationships
     projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
+    episodes = relationship("Episode", back_populates="user", cascade="all, delete-orphan")
+    tts_configs = relationship("TTSConfiguration", back_populates="user", cascade="all, delete-orphan")
+    templates = relationship("ConversationTemplate", back_populates="user", cascade="all, delete-orphan")
+    distribution_targets = relationship("DistributionTarget", back_populates="user", cascade="all, delete-orphan")
+    audio_snippets = relationship("AudioSnippet", back_populates="user", cascade="all, delete-orphan")
+    episode_layouts = relationship("EpisodeLayout", back_populates="user", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, email={self.email})>"

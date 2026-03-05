@@ -55,6 +55,10 @@ class Project(Base):
     episodes = relationship("Episode", back_populates="project", cascade="all, delete-orphan")
     default_tts_config = relationship("TTSConfiguration", foreign_keys=[default_tts_config_id])
     default_template = relationship("ConversationTemplate", foreign_keys=[default_template_id])
+    distribution_targets = relationship("DistributionTarget", back_populates="project")
+    audio_snippets = relationship("AudioSnippet", back_populates="project")
+    episode_layouts = relationship("EpisodeLayout", back_populates="project")
+    rss_feed = relationship("RSSFeed", back_populates="project", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         return f"<Project(id={self.id}, name={self.name})>"

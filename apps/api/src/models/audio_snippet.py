@@ -43,8 +43,8 @@ class AudioSnippet(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
-    user = relationship("User")
-    project = relationship("Project")
+    user = relationship("User", back_populates="audio_snippets")
+    project = relationship("Project", back_populates="audio_snippets")
 
     def __repr__(self) -> str:
         return f"<AudioSnippet(id={self.id}, name={self.name}, type={self.snippet_type})>"

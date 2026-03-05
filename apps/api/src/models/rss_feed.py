@@ -43,7 +43,7 @@ class RSSFeed(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
-    project = relationship("Project")
+    project = relationship("Project", back_populates="rss_feed")
 
     def __repr__(self) -> str:
         return f"<RSSFeed(id={self.id}, project_id={self.project_id})>"

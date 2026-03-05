@@ -61,8 +61,9 @@ class EpisodeLayout(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
-    user = relationship("User")
-    project = relationship("Project")
+    user = relationship("User", back_populates="episode_layouts")
+    project = relationship("Project", back_populates="episode_layouts")
+    compositions = relationship("EpisodeComposition", back_populates="layout")
 
     def __repr__(self) -> str:
         return f"<EpisodeLayout(id={self.id}, name={self.name})>"

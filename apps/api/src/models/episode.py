@@ -71,11 +71,12 @@ class Episode(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
     # Relationships
-    user = relationship("User")
+    user = relationship("User", back_populates="episodes")
     project = relationship("Project", back_populates="episodes")
     content_sources = relationship("ContentSource", back_populates="episode", cascade="all, delete-orphan")
-    tts_config = relationship("TTSConfiguration", foreign_keys=[tts_config_id])
-    template = relationship("ConversationTemplate", foreign_keys=[template_id])
+    tts_config = relationship("TTSConfiguration", back_populates="episodes", foreign_keys=[tts_config_id])
+    template = relationship("ConversationTemplate", back_populates="episodes", foreign_keys=[template_id])
+    composition = relationship("EpisodeComposition", back_populates="episode", uselist=False, cascade="all, delete-orphan")
 
     def __repr__(self) -> str:
         title = self.episode_metadata.get('title', 'Untitled') if self.episode_metadata else 'Untitled'

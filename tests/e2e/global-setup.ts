@@ -1,11 +1,22 @@
 import { chromium, type FullConfig } from '@playwright/test';
+import { mkdirSync } from 'fs';
+import { dirname } from 'path';
 
-const E2E_TEST_EMAIL = process.env.E2E_TEST_EMAIL || 'e2e-shared@test.internal';
-const E2E_TEST_PASSWORD = process.env.E2E_TEST_PASSWORD || 'E2eTestPass123!';
-const E2E_TEST_NAME = 'E2E Shared User';
 const AUTH_STATE_PATH = 'tests/e2e/.auth/user.json';
 
 async function globalSetup(config: FullConfig) {
+  const E2E_TEST_EMAIL = process.env.E2E_TEST_EMAIL;
+  const E2E_TEST_PASSWORD = process.env.E2E_TEST_PASSWORD;
+
+  if (!E2E_TEST_EMAIL || !E2E_TEST_PASSWORD) {
+    throw new Error(
+      'E2E_TEST_EMAIL and E2E_TEST_PASSWORD must be set. ' +
+      'In CI these come from GitHub Secrets. Locally, add them to a .env file or export them.'
+    );
+  }
+
+  mkdirSync(dirname(AUTH_STATE_PATH), { recursive: true });
+
   const baseURL = config.projects[0].use.baseURL || 'https://dev.podcaststudiohub.me';
   const apiURL = process.env.NEXT_PUBLIC_API_URL || `${baseURL}/api`;
 
@@ -17,7 +28,7 @@ async function globalSetup(config: FullConfig) {
       body: JSON.stringify({
         email: E2E_TEST_EMAIL,
         password: E2E_TEST_PASSWORD,
-        full_name: E2E_TEST_NAME,
+        full_name: 'E2E Test User',
       }),
     });
 

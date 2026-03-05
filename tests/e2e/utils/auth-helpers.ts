@@ -79,9 +79,16 @@ export async function signUpAndLogin(page: Page): Promise<TestUser> {
  * Navigate to dashboard using pre-authenticated storageState.
  * Use this in non-auth tests instead of signUpAndLogin().
  */
-export async function ensureLoggedIn(page: Page) {
+export async function ensureLoggedIn(page: Page): Promise<TestUser> {
   await page.goto('/dashboard');
+  if (page.url().includes('/login')) {
+    throw new Error('ensureLoggedIn failed: storageState session is invalid or expired');
+  }
   await page.waitForURL(/\/dashboard/, { timeout: 15000 });
+  return {
+    email: process.env.E2E_TEST_EMAIL || '',
+    password: process.env.E2E_TEST_PASSWORD || '',
+  };
 }
 
 /**

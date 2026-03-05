@@ -62,6 +62,14 @@ class Episode(Base):
     # }
     generation_progress = Column(JSONB, nullable=False, default=dict)
 
+    # Celery task tracking fields
+    # task_id: Celery task UUID — used to query status, cancel, or retry the task
+    task_id = Column(Text, nullable=True, index=True)
+    # task_started_at: when the task was submitted to the Celery broker
+    task_started_at = Column(DateTime, nullable=True)
+    # task_completed_at: when the task finished (success or failure)
+    task_completed_at = Column(DateTime, nullable=True)
+
     # Configuration overrides
     tts_config_id = Column(UUID(as_uuid=True), ForeignKey("tts_configurations.id", ondelete="SET NULL"), nullable=True)
     template_id = Column(UUID(as_uuid=True), ForeignKey("conversation_templates.id", ondelete="SET NULL"), nullable=True)

@@ -143,6 +143,9 @@ class EpisodeResponse(BaseModel):
 	episode_metadata: dict
 	generation_status: str
 	generation_progress: dict
+	task_id: Optional[str] = None
+	task_started_at: Optional[datetime] = None
+	task_completed_at: Optional[datetime] = None
 	file_path: Optional[str]
 	s3_key: Optional[str]
 	s3_url: Optional[str]

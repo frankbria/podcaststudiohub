@@ -93,10 +93,13 @@ class LayoutConfig(BaseModel):
 				f"Layout must contain exactly one main_content segment, found: {len(main_content_segments)}"
 			)
 
-		# Validate order values are unique
-		orders = [s.order for s in self.segments]
-		if len(orders) != len(set(orders)):
-			raise ValueError("Segment order values must be unique")
+		# Validate order values are unique and consecutive starting from 1
+		orders = sorted([s.order for s in self.segments])
+		expected = list(range(1, len(self.segments) + 1))
+		if orders != expected:
+			raise ValueError(
+				f"Segment ordering must be consecutive 1-{len(self.segments)}, got: {orders}"
+			)
 
 		return self
 

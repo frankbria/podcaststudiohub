@@ -18,10 +18,10 @@ class EpisodeCreate(BaseModel):
 		...,
 		description="Project this episode belongs to"
 	)
-	episode_number: int = Field(
-		...,
+	episode_number: Optional[int] = Field(
+		None,
 		ge=1,
-		description="Episode number in sequence"
+		description="Episode number in sequence (auto-assigned if not provided)"
 	)
 	episode_metadata: dict = Field(
 		...,
@@ -139,7 +139,7 @@ class EpisodeResponse(BaseModel):
 	project_id: UUID
 	user_id: UUID
 	tenant_id: UUID
-	episode_number: Optional[int]
+	episode_number: int
 	episode_metadata: dict
 	generation_status: str
 	generation_progress: dict

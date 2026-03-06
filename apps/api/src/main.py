@@ -79,6 +79,8 @@ from src.routers import auth, projects, episodes, content, generation, episode_l
 from src.routers.rss_feed import router as rss_feed_router, public_router as rss_public_router  # noqa: E402
 # Register routers - User Story 2 (Distribution Target Management, GAP-010)
 from src.routers import distribution_targets  # noqa: E402
+# Register routers - Quality Metrics, GAP-014
+from src.routers import quality_metrics  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(projects.router)
@@ -89,6 +91,7 @@ app.include_router(distribution_targets.router)
 app.include_router(episode_layouts.router)
 app.include_router(audio_snippets.router)
 app.include_router(conversation_templates.router)
+app.include_router(quality_metrics.router)
 
 # RSS Feed routers - GAP-011
 app.include_router(rss_feed_router)

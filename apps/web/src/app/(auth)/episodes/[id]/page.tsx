@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ProgressConnectionStatus } from "@/components/ProgressConnectionStatus"
+import { useProgressTracking } from "@/hooks/useProgressTracking"
 
 interface Episode {
   id: string
@@ -35,7 +37,15 @@ export default function EpisodePage() {
   const [textContent, setTextContent] = useState("")
   const [sourceType, setSourceType] = useState<"url" | "text">("url")
   const [generating, setGenerating] = useState(false)
-  const [progress, setProgress] = useState(0)
+
+  const activeStatus = episode?.generation_status ?? ""
+  const { progress, connectionStatus } = useProgressTracking({
+    episodeId: params.id as string,
+    initialStatus: activeStatus,
+    apiUrl: process.env.NEXT_PUBLIC_API_URL ?? "",
+    authToken: (session as any)?.accessToken,
+    onComplete: () => loadEpisode(),
+  })
 
   useEffect(() => {
     if (session) {
@@ -43,39 +53,6 @@ export default function EpisodePage() {
       loadContentSources()
     }
   }, [session, params.id])
-
-  useEffect(() => {
-    if (episode?.generation_status && ["queued", "extracting", "generating", "synthesizing"].includes(episode.generation_status)) {
-      // EventSource doesn't support custom headers (W3C spec limitation).
-      // Pass JWT token as a query parameter so the backend can authenticate the SSE connection.
-      const token = (session as any)?.accessToken
-      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ""
-      const eventSource = new EventSource(
-        `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress${tokenParam}`
-      )
-
-      eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data)
-        setEpisode((prev) => prev ? { ...prev, generation_status: data.status, generation_progress: data.progress } : null)
-
-        if (data.progress?.progress) {
-          setProgress(data.progress.progress)
-        }
-
-        if (data.status === "complete" || data.status === "failed") {
-          eventSource.close()
-          loadEpisode() // Reload to get audio URL
-        }
-      }
-
-      eventSource.onerror = (error) => {
-        console.error("SSE connection error:", error)
-        eventSource.close()
-      }
-
-      return () => eventSource.close()
-    }
-  }, [episode?.generation_status, session])
 
   const loadEpisode = async () => {
     try {
@@ -202,14 +179,15 @@ export default function EpisodePage() {
           </CardHeader>
           <CardContent>
             {episode?.generation_status && ["queued", "extracting", "generating", "synthesizing"].includes(episode.generation_status) && (
-              <div className="mb-4">
+              <div className="mb-4 space-y-2">
                 <div className="w-full bg-gray-200 rounded-full h-2.5">
                   <div
                     className="bg-blue-600 h-2.5 rounded-full transition-all"
                     style={{ width: `${progress}%` }}
                   ></div>
                 </div>
-                <p className="text-sm text-gray-600 mt-1">{progress}% complete</p>
+                <p className="text-sm text-gray-600">{progress}% complete</p>
+                <ProgressConnectionStatus status={connectionStatus} />
               </div>
             )}
 

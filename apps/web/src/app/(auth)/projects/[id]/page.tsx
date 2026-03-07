@@ -3,10 +3,13 @@
 import { useState, useEffect } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { episodeSchema, type EpisodeFormData } from "@/lib/validation"
 
 interface Episode {
   id: string
@@ -30,7 +33,17 @@ export default function ProjectPage() {
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [newEpisodeTitle, setNewEpisodeTitle] = useState("")
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isValid },
+    reset,
+  } = useForm<EpisodeFormData>({
+    resolver: zodResolver(episodeSchema),
+    mode: "onBlur",
+  })
 
   useEffect(() => {
     if (session) {
@@ -75,7 +88,8 @@ export default function ProjectPage() {
     }
   }
 
-  const createEpisode = async () => {
+  const createEpisode = async (data: EpisodeFormData) => {
+    setIsSubmitting(true)
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`, {
         method: "POST",
@@ -85,20 +99,27 @@ export default function ProjectPage() {
         },
         body: JSON.stringify({
           project_id: params.id,
-          title: newEpisodeTitle,
+          title: data.title,
         }),
       })
 
       if (response.ok) {
         const episode = await response.json()
         setShowCreateDialog(false)
-        setNewEpisodeTitle("")
+        reset()
         // Navigate to episode page to add content and generate
         router.push(`/episodes/${episode.id}`)
       }
     } catch (error) {
       console.error("Failed to create episode:", error)
+    } finally {
+      setIsSubmitting(false)
     }
+  }
+
+  const handleDialogOpenChange = (open: boolean) => {
+    setShowCreateDialog(open)
+    if (!open) reset()
   }
 
   const getStatusBadge = (status: string) => {
@@ -171,7 +192,7 @@ export default function ProjectPage() {
           )}
         </div>
 
-        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <Dialog open={showCreateDialog} onOpenChange={handleDialogOpenChange}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create New Episode</DialogTitle>
@@ -179,21 +200,30 @@ export default function ProjectPage() {
                 Create a new podcast episode
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 mt-4">
+            <form onSubmit={handleSubmit(createEpisode)} className="space-y-4 mt-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Episode Title
+                <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-1">
+                  Episode Title <span className="text-red-500">*</span>
                 </label>
                 <Input
-                  value={newEpisodeTitle}
-                  onChange={(e) => setNewEpisodeTitle(e.target.value)}
+                  id="title"
                   placeholder="Episode 1: Introduction"
+                  aria-invalid={errors.title ? "true" : "false"}
+                  className={errors.title ? "border-red-500" : ""}
+                  {...register("title")}
                 />
+                {errors.title && (
+                  <p className="text-red-500 text-sm mt-1">{errors.title.message}</p>
+                )}
               </div>
-              <Button onClick={createEpisode} className="w-full">
-                Create Episode
+              <Button
+                type="submit"
+                disabled={isSubmitting || !isValid}
+                className="w-full"
+              >
+                {isSubmitting ? "Creating..." : "Create Episode"}
               </Button>
-            </div>
+            </form>
           </DialogContent>
         </Dialog>
       </div>

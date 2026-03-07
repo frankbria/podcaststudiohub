@@ -203,13 +203,20 @@ export default function EpisodePage() {
           <CardContent>
             {episode?.generation_status && ["queued", "extracting", "generating", "synthesizing"].includes(episode.generation_status) && (
               <div className="mb-4">
-                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                <div
+                  className="w-full bg-gray-200 rounded-full h-2.5"
+                  role="progressbar"
+                  aria-valuenow={progress}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="Generation progress"
+                >
                   <div
                     className="bg-blue-600 h-2.5 rounded-full transition-all"
                     style={{ width: `${progress}%` }}
                   ></div>
                 </div>
-                <p className="text-sm text-gray-600 mt-1">{progress}% complete</p>
+                <p className="text-sm text-gray-600 mt-1" aria-live="polite">{progress}% complete</p>
               </div>
             )}
 
@@ -271,16 +278,18 @@ export default function EpisodePage() {
               <DialogDescription>Add content to generate your podcast from</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
-              <div className="flex gap-2">
+              <div role="group" aria-label="Content source type" className="flex gap-2">
                 <Button
                   variant={sourceType === "url" ? "default" : "outline"}
                   onClick={() => setSourceType("url")}
+                  aria-pressed={sourceType === "url"}
                 >
                   URL
                 </Button>
                 <Button
                   variant={sourceType === "text" ? "default" : "outline"}
                   onClick={() => setSourceType("text")}
+                  aria-pressed={sourceType === "text"}
                 >
                   Text
                 </Button>
@@ -288,25 +297,29 @@ export default function EpisodePage() {
 
               {sourceType === "url" ? (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="content-url" className="block text-sm font-medium text-gray-700 mb-1">
                     URL
                   </label>
                   <Input
+                    id="content-url"
                     value={contentUrl}
                     onChange={(e) => setContentUrl(e.target.value)}
                     placeholder="https://example.com/article"
+                    aria-required="true"
                   />
                 </div>
               ) : (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label htmlFor="content-text" className="block text-sm font-medium text-gray-700 mb-1">
                     Text Content
                   </label>
                   <textarea
+                    id="content-text"
                     className="w-full h-32 p-2 border rounded"
                     value={textContent}
                     onChange={(e) => setTextContent(e.target.value)}
                     placeholder="Enter your content here..."
+                    aria-required="true"
                   />
                 </div>
               )}

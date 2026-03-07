@@ -99,8 +99,17 @@ export default function DashboardPage() {
           {projects.map((project) => (
             <Card
               key={project.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
+              className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              role="button"
+              tabIndex={0}
+              aria-label={`Open project: ${project.title}`}
               onClick={() => router.push(`/projects/${project.id}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  router.push(`/projects/${project.id}`)
+                }
+              }}
             >
               <CardHeader>
                 <CardTitle>{project.title}</CardTitle>
@@ -138,20 +147,23 @@ export default function DashboardPage() {
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="project-title" className="block text-sm font-medium text-gray-700 mb-1">
                   Project Title
                 </label>
                 <Input
+                  id="project-title"
                   value={newProjectTitle}
                   onChange={(e) => setNewProjectTitle(e.target.value)}
                   placeholder="My Podcast"
+                  aria-required="true"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="project-description" className="block text-sm font-medium text-gray-700 mb-1">
                   Description
                 </label>
                 <Input
+                  id="project-description"
                   value={newProjectDescription}
                   onChange={(e) => setNewProjectDescription(e.target.value)}
                   placeholder="A brief description of your podcast"

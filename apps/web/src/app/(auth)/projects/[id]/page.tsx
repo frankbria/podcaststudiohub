@@ -144,8 +144,17 @@ export default function ProjectPage() {
           {episodes.map((episode) => (
             <Card
               key={episode.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
+              className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              role="button"
+              tabIndex={0}
+              aria-label={`Open episode: ${episode.title}`}
               onClick={() => router.push(`/episodes/${episode.id}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  router.push(`/episodes/${episode.id}`)
+                }
+              }}
             >
               <CardHeader>
                 <div className="flex justify-between items-start">
@@ -181,13 +190,15 @@ export default function ProjectPage() {
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="episode-title" className="block text-sm font-medium text-gray-700 mb-1">
                   Episode Title
                 </label>
                 <Input
+                  id="episode-title"
                   value={newEpisodeTitle}
                   onChange={(e) => setNewEpisodeTitle(e.target.value)}
                   placeholder="Episode 1: Introduction"
+                  aria-required="true"
                 />
               </div>
               <Button onClick={createEpisode} className="w-full">

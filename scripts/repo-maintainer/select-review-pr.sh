@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# select-review-pr.sh — Selects a maintainer PR needing review fixes.
+# select-review-pr.sh - Selects a maintainer PR needing review processing.
 # Usage: select-review-pr.sh [force_pr_number]
 # Outputs to $GITHUB_OUTPUT: pr_number, tier, round, linked_issue
 # Exits 0 with pr_number="" if no eligible PRs found.
@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 CONFIG="$REPO_ROOT/.github/repo-maintainer/config.yml"
 
-# ── Helpers ───────────────────────────────────────────
+# -- Helpers --
 
 # Determine governance tier for a PR via its linked issue
 get_tier_for_pr() {
@@ -56,7 +56,7 @@ output() {
 	echo "$key=$val" >&2
 }
 
-# ── Force mode ────────────────────────────────────────
+# -- Force mode --
 
 if [[ -n "$FORCE_PR" ]]; then
 	TIER=$(get_tier_for_pr "$FORCE_PR")
@@ -70,51 +70,30 @@ if [[ -n "$FORCE_PR" ]]; then
 	exit 0
 fi
 
-# ── Auto-select ──────────────────────────────────────
+# -- Auto-select --
 
-# Find open maintainer PRs with review-changes-requested label
+# Find ALL open maintainer PRs (1-to-1: process whatever is open)
 PRS=$(gh pr list --state open \
-	--label "review-changes-requested" \
 	--json number,headRefName,labels,createdAt \
 	--limit 20 2>/dev/null || echo "[]")
 
 # Filter to maintainer/ branches only
 PRS=$(echo "$PRS" | jq '[.[] | select(.headRefName | startswith("maintainer/"))]')
 
-# Exclude security-concern and maintainer-needs-human
+# Exclude maintainer-needs-human (already escalated, waiting for human)
 PRS=$(echo "$PRS" | jq '[.[] | select(
-	([.labels[].name] | any(. == "security-concern" or . == "maintainer-needs-human")) | not
+	([.labels[].name] | any(. == "maintainer-needs-human")) | not
 )]')
 
-# Exclude PRs that have already hit max rounds (review-round-3)
-PRS=$(echo "$PRS" | jq '[.[] | select(
-	([.labels[].name] | any(. == "review-round-3")) | not
-)]')
-
-# Sort by creation date (oldest first — FIFO)
+# Sort by creation date (oldest first - FIFO)
 PRS=$(echo "$PRS" | jq 'sort_by(.createdAt)')
 
 SELECTED=$(echo "$PRS" | jq -r '.[0].number // empty')
 
 if [[ -z "$SELECTED" || "$SELECTED" == "null" ]]; then
-	# Also check for PRs with review-approved that are T0 and can be auto-merged
-	APPROVED_PRS=$(gh pr list --state open \
-		--label "review-approved" \
-		--json number,headRefName,labels,createdAt \
-		--limit 20 2>/dev/null || echo "[]")
-
-	APPROVED_PRS=$(echo "$APPROVED_PRS" | jq '[.[] | select(.headRefName | startswith("maintainer/"))]')
-	APPROVED_PRS=$(echo "$APPROVED_PRS" | jq '[.[] | select(
-		([.labels[].name] | any(. == "security-concern" or . == "maintainer-needs-human" or . == "ready-to-merge")) | not
-	)]')
-	APPROVED_PRS=$(echo "$APPROVED_PRS" | jq 'sort_by(.createdAt)')
-	SELECTED=$(echo "$APPROVED_PRS" | jq -r '.[0].number // empty')
-
-	if [[ -z "$SELECTED" || "$SELECTED" == "null" ]]; then
-		echo "::notice::No maintainer PRs need review processing"
-		output "pr_number" ""
-		exit 0
-	fi
+	echo "::notice::No maintainer PRs need review processing"
+	output "pr_number" ""
+	exit 0
 fi
 
 TIER=$(get_tier_for_pr "$SELECTED")

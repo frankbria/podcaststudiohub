@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { DownloadButton } from "@/components/DownloadButton"
 
 interface Episode {
   id: string
@@ -214,10 +215,17 @@ export default function EpisodePage() {
             )}
 
             {episode?.audio_url && (
-              <div className="mt-4">
+              <div className="mt-4 space-y-3">
                 <audio controls className="w-full">
                   <source src={episode.audio_url} type="audio/mpeg" />
                 </audio>
+                <div className="flex gap-2">
+                  <DownloadButton
+                    audioUrl={episode.audio_url}
+                    episodeTitle={episode.title}
+                    isLoading={generating}
+                  />
+                </div>
               </div>
             )}
           </CardContent>

@@ -7,7 +7,7 @@ Defines Pydantic models for RSS Feed management endpoints.
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 
 class RSSFeedResponse(BaseModel):
@@ -47,3 +47,37 @@ class RSSFeedUpdate(BaseModel):
 		...,
 		description="Podcast metadata fields to update (triggers feed regeneration)"
 	)
+
+
+# ============================================================================
+# Validation schemas
+# ============================================================================
+
+class ValidationError(BaseModel):
+	"""Single validation error or warning."""
+
+	field: str
+	level: Literal["error", "warning"]
+	message: str
+	details: Optional[str] = None
+	examples: Optional[list[str]] = None
+
+
+class DirectoryValidationResult(BaseModel):
+	"""Validation results for one podcast directory."""
+
+	directory: Literal["apple_podcasts", "spotify", "google_podcasts"]
+	valid: bool
+	errors: list[ValidationError]
+	warnings: list[ValidationError]
+	checked_at: datetime
+
+
+class ValidationStatusResponse(BaseModel):
+	"""Complete validation results for all directories."""
+
+	last_validated_at: datetime
+	apple_podcasts: DirectoryValidationResult
+	spotify: DirectoryValidationResult
+	google_podcasts: DirectoryValidationResult
+	is_valid_for_all: bool

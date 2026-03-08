@@ -14,8 +14,9 @@ from uuid import UUID
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models import User
-from ..schemas.rss_feed import RSSFeedResponse, RSSFeedUpdate
+from ..schemas.rss_feed import RSSFeedResponse, RSSFeedUpdate, ValidationStatusResponse
 from ..services.rss_generation_service import RSSGenerationService
+from ..services.rss_validation_service import RSSValidationService
 from ..services.project_service import get_project_by_id
 
 # Authenticated management endpoints nested under /projects
@@ -28,6 +29,11 @@ public_router = APIRouter(tags=["rss-feed"])
 def get_rss_service() -> RSSGenerationService:
 	"""Dependency: return a shared RSSGenerationService instance."""
 	return RSSGenerationService()
+
+
+def get_rss_validation_service() -> RSSValidationService:
+	"""Dependency: return a shared RSSValidationService instance."""
+	return RSSValidationService()
 
 
 # ============================================================================
@@ -204,6 +210,131 @@ async def update_rss_feed(
 		)
 
 	return rss_feed
+
+
+# ============================================================================
+# VALIDATION ENDPOINTS (authenticated, under /projects)
+# ============================================================================
+
+@router.post(
+	"/projects/{project_id}/rss-feed/validate",
+	response_model=ValidationStatusResponse,
+	status_code=status.HTTP_200_OK,
+)
+async def validate_rss_feed(
+	project_id: UUID,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db),
+	rss_service: RSSGenerationService = Depends(get_rss_service),
+	validation_service: RSSValidationService = Depends(get_rss_validation_service),
+):
+	"""
+	Validate RSS feed against Apple Podcasts, Spotify, and Google Podcasts requirements.
+
+	Fetches the existing RSS feed XML from S3 and validates it against all
+	three directory requirements. Results are stored in RSSFeed.validation_status.
+
+	Args:
+		project_id: UUID of the project to validate
+		current_user: Authenticated user (from JWT token)
+		db: Database session
+		rss_service: RSS generation service
+		validation_service: RSS validation service
+
+	Returns:
+		ValidationStatusResponse with per-directory results
+
+	Raises:
+		HTTPException 404: If project or feed not found
+		HTTPException 422: If RSS XML is malformed
+	"""
+	# Verify project exists (RLS ensures tenant isolation)
+	project = await get_project_by_id(db, project_id)
+	if project is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail=f"Project {project_id} not found",
+		)
+
+	# Fetch existing feed
+	rss_feed = await rss_service.get_rss_feed(db, project_id)
+	if rss_feed is None or not rss_feed.s3_key:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail=f"RSS feed not found. Generate feed first with POST /projects/{project_id}/rss-feed/generate",
+		)
+
+	# Download RSS XML from S3
+	try:
+		xml_bytes = await _fetch_rss_from_s3(rss_service, rss_feed.s3_key)
+		rss_content = xml_bytes.decode("utf-8")
+	except Exception as e:
+		raise HTTPException(
+			status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+			detail=f"Failed to fetch RSS feed from storage: {str(e)}",
+		)
+
+	# Run validation
+	try:
+		result = await validation_service.validate_rss_feed(
+			db=db,
+			project_id=project_id,
+			rss_content=rss_content,
+		)
+	except ValueError as e:
+		raise HTTPException(
+			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			detail=str(e),
+		)
+
+	return result
+
+
+@router.get(
+	"/projects/{project_id}/rss-feed/validation",
+	response_model=ValidationStatusResponse,
+)
+async def get_rss_validation_status(
+	project_id: UUID,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db),
+	rss_service: RSSGenerationService = Depends(get_rss_service),
+	validation_service: RSSValidationService = Depends(get_rss_validation_service),
+):
+	"""
+	Get the most recent validation results for a project's RSS feed.
+
+	Returns the last stored validation results without re-running validation.
+
+	Args:
+		project_id: UUID of the project
+		current_user: Authenticated user (from JWT token)
+		db: Database session
+		rss_service: RSS generation service
+		validation_service: RSS validation service
+
+	Returns:
+		ValidationStatusResponse with stored results
+
+	Raises:
+		HTTPException 404: If project not found or feed never validated
+	"""
+	# Verify project exists (RLS ensures tenant isolation)
+	project = await get_project_by_id(db, project_id)
+	if project is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail=f"Project {project_id} not found",
+		)
+
+	result = await validation_service.get_validation_status(db, project_id)
+	if result is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail=f"No validation results found. Call POST /projects/{project_id}/rss-feed/validate first",
+		)
+
+	return result
 
 
 # ============================================================================

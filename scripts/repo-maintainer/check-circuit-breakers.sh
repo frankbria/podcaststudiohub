@@ -58,6 +58,15 @@ skip() {
 	exit 1
 }
 
+# 0. Open maintainer PRs? (1-to-1 enforcement: finish current before starting next)
+if command -v gh &>/dev/null; then
+	OPEN_MAINTAINER_PRS=$(gh pr list --state open --json headRefName \
+		--jq '[.[] | select(.headRefName | startswith("maintainer/"))] | length' 2>/dev/null || echo "0")
+	if [[ "$OPEN_MAINTAINER_PRS" -gt 0 ]]; then
+		skip "Open maintainer PR exists ($OPEN_MAINTAINER_PRS) — finish or refile before starting next"
+	fi
+fi
+
 # 1. Paused?
 if [[ "$PAUSED" == "true" ]]; then
 	skip "Loop is paused"

@@ -19,7 +19,7 @@ from ..database import get_db
 from ..dependencies import get_current_user
 from ..models.user import User
 from ..schemas.rss_feed import ValidationStatusUpdate
-from ..services.rss_validation_service import RSSValidationService
+from ..services.rss_validation_service import RSSFetchError, RSSValidationService
 
 logger = logging.getLogger(__name__)
 
@@ -64,18 +64,20 @@ async def validate_rss_feed(
 		result = await service.validate_rss_feed(
 			db=db,
 			project_id=project_id,
+			tenant_id=current_user.tenant_id,
 			rss_content=body.rss_content,
 		)
 		return result
+	except RSSFetchError as exc:
+		logger.error("RSS feed fetch failed for project %s: %s", project_id, exc)
+		raise HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail=str(exc),
+		)
 	except ValueError as exc:
 		msg = str(exc)
-		if "not found" in msg.lower() or "unavailable" in msg.lower():
-			raise HTTPException(
-				status_code=status.HTTP_404_NOT_FOUND,
-				detail=msg,
-			)
 		raise HTTPException(
-			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			status_code=status.HTTP_404_NOT_FOUND,
 			detail=msg,
 		)
 	except ET.ParseError as exc:
@@ -110,7 +112,11 @@ async def get_rss_validation(
 	"""
 	service = RSSValidationService()
 	try:
-		result = await service.get_validation_status(db=db, project_id=project_id)
+		result = await service.get_validation_status(
+			db=db,
+			project_id=project_id,
+			tenant_id=current_user.tenant_id,
+		)
 		return result
 	except ValueError as exc:
 		raise HTTPException(

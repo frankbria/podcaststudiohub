@@ -13,6 +13,7 @@ Validation checks:
 - GUID uniqueness across episodes
 """
 
+import asyncio
 import io
 import logging
 import xml.etree.ElementTree as ET
@@ -21,7 +22,8 @@ from email.utils import parsedate_to_datetime
 from typing import Optional
 from uuid import UUID
 
-import requests
+import defusedxml.ElementTree as defused_ET
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +35,15 @@ from ..schemas.rss_feed import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class RSSFetchError(Exception):
+	"""Raised when the RSS feed cannot be fetched from a remote source.
+
+	Distinct from ValueError so routers can map it to a 503 response
+	rather than treating it as a client validation error (422).
+	"""
+
 
 # XML namespace map used in RSS feeds
 RSS_NAMESPACES = {
@@ -71,6 +82,7 @@ class RSSValidationService:
 		self,
 		db: AsyncSession,
 		project_id: UUID,
+		tenant_id: UUID,
 		rss_content: Optional[str] = None,
 	) -> ValidationStatusUpdate:
 		"""
@@ -83,6 +95,7 @@ class RSSValidationService:
 		Args:
 			db: Database session
 			project_id: UUID of the project
+			tenant_id: UUID of the current user's tenant for ownership check
 			rss_content: Optional RSS XML content to validate directly
 
 		Returns:
@@ -90,9 +103,10 @@ class RSSValidationService:
 
 		Raises:
 			ValueError: If RSSFeed not found or content unavailable
+			RSSFetchError: If the feed cannot be fetched from the remote source
 			ET.ParseError: If RSS content is not valid XML
 		"""
-		rss_feed = await self._get_rss_feed(db, project_id)
+		rss_feed = await self._get_rss_feed(db, project_id, tenant_id)
 
 		if rss_content is None:
 			rss_content = await self._fetch_rss_content(rss_feed)
@@ -128,6 +142,7 @@ class RSSValidationService:
 		self,
 		db: AsyncSession,
 		project_id: UUID,
+		tenant_id: UUID,
 	) -> ValidationStatusUpdate:
 		"""
 		Return the last stored validation results for a project's RSS feed.
@@ -135,6 +150,7 @@ class RSSValidationService:
 		Args:
 			db: Database session
 			project_id: UUID of the project
+			tenant_id: UUID of the current user's tenant for ownership check
 
 		Returns:
 			ValidationStatusUpdate previously stored
@@ -142,7 +158,7 @@ class RSSValidationService:
 		Raises:
 			ValueError: If RSSFeed not found or never validated
 		"""
-		rss_feed = await self._get_rss_feed(db, project_id)
+		rss_feed = await self._get_rss_feed(db, project_id, tenant_id)
 
 		if not rss_feed.validation_status:
 			raise ValueError("No validation results found. Call validate first.")
@@ -153,10 +169,17 @@ class RSSValidationService:
 	# Internal helpers
 	# ------------------------------------------------------------------
 
-	async def _get_rss_feed(self, db: AsyncSession, project_id: UUID) -> RSSFeed:
-		"""Fetch RSSFeed record for project or raise ValueError."""
+	async def _get_rss_feed(self, db: AsyncSession, project_id: UUID, tenant_id: UUID) -> RSSFeed:
+		"""Fetch RSSFeed record for project or raise ValueError.
+
+		Filters by both project_id and tenant_id to enforce tenant isolation
+		in addition to the database-level RLS policies.
+		"""
 		result = await db.execute(
-			select(RSSFeed).where(RSSFeed.project_id == project_id)
+			select(RSSFeed).where(
+				RSSFeed.project_id == project_id,
+				RSSFeed.tenant_id == tenant_id,
+			)
 		)
 		rss_feed = result.scalar_one_or_none()
 		if rss_feed is None:
@@ -174,34 +197,44 @@ class RSSValidationService:
 		falls back to S3 via rss_feed.s3_key. Tests patch this method.
 
 		Raises:
-			ValueError: If no content source is available or fetch fails
+			ValueError: If no content source is available
+			RSSFetchError: If the remote fetch fails (network or S3 error)
 		"""
 		if rss_feed.public_url:
 			try:
-				response = requests.get(rss_feed.public_url, timeout=10)
-				response.raise_for_status()
-				return response.text
-			except requests.RequestException as exc:
-				raise ValueError(
+				async with httpx.AsyncClient(timeout=10.0) as client:
+					response = await client.get(rss_feed.public_url)
+					response.raise_for_status()
+					return response.text
+			except httpx.HTTPError as exc:
+				raise RSSFetchError(
 					f"Failed to fetch RSS feed from {rss_feed.public_url}: {exc}"
 				) from exc
 
 		if rss_feed.s3_key:
 			# S3 fetch via boto3 (lazy import to avoid breaking tests without AWS)
+			# Wrapped in asyncio.to_thread to avoid blocking the event loop
 			try:
 				import boto3  # noqa: PLC0415
 				from ..config import settings  # noqa: PLC0415
 
-				s3 = boto3.client(
-					"s3",
-					aws_access_key_id=getattr(settings, "AWS_ACCESS_KEY_ID", None),
-					aws_secret_access_key=getattr(settings, "AWS_SECRET_ACCESS_KEY", None),
-				)
+				s3_key = rss_feed.s3_key
+				aws_key_id = getattr(settings, "AWS_ACCESS_KEY_ID", None)
+				aws_secret = getattr(settings, "AWS_SECRET_ACCESS_KEY", None)
 				bucket = getattr(settings, "S3_BUCKET_NAME", None)
-				obj = s3.get_object(Bucket=bucket, Key=rss_feed.s3_key)
-				return obj["Body"].read().decode("utf-8")
+
+				def _s3_fetch() -> str:
+					s3 = boto3.client(
+						"s3",
+						aws_access_key_id=aws_key_id,
+						aws_secret_access_key=aws_secret,
+					)
+					obj = s3.get_object(Bucket=bucket, Key=s3_key)
+					return obj["Body"].read().decode("utf-8")
+
+				return await asyncio.to_thread(_s3_fetch)
 			except Exception as exc:
-				raise ValueError(
+				raise RSSFetchError(
 					f"Failed to fetch RSS feed from S3 key {rss_feed.s3_key}: {exc}"
 				) from exc
 
@@ -213,15 +246,18 @@ class RSSValidationService:
 		"""
 		Parse RSS XML and return the root element.
 
+		Uses defusedxml to prevent XML entity expansion (billion-laughs) attacks
+		when parsing untrusted RSS content from external URLs or user input.
+
 		Raises:
 			ET.ParseError: If content is not valid XML
 		"""
-		# Register namespaces so they round-trip cleanly
+		# Register namespaces so they round-trip cleanly (standard ET only)
 		for prefix, uri in RSS_NAMESPACES.items():
 			ET.register_namespace(prefix, uri)
 
 		try:
-			return ET.fromstring(rss_content)
+			return defused_ET.fromstring(rss_content)
 		except ET.ParseError as exc:
 			raise ET.ParseError(f"Invalid RSS XML: {exc}") from exc
 
@@ -280,12 +316,16 @@ class RSSValidationService:
 				examples=["<itunes:image href='https://example.com/artwork.jpg'/>"],
 			))
 		else:
-			image_errors = await self._validate_image(
+			image_results = await self._validate_image(
 				image_url,
 				min_dim=APPLE_MIN_IMAGE_DIM,
 				max_size_kb=APPLE_MAX_IMAGE_SIZE_KB,
 			)
-			errors.extend(image_errors)
+			for img_err in image_results:
+				if img_err.level == "warning":
+					warnings.append(img_err)
+				else:
+					errors.append(img_err)
 
 		# itunes:category
 		category_elem = channel.find(f"{{{itunes}}}category")
@@ -296,14 +336,39 @@ class RSSValidationService:
 				message="Missing required <itunes:category text='...'> element",
 				examples=["<itunes:category text='Technology'/>"],
 			))
+		else:
+			category_text = category_elem.get("text", "")
+			if category_text not in APPLE_VALID_CATEGORIES:
+				errors.append(ValidationError(
+					field="itunes:category",
+					level="error",
+					message=(
+						f"Unknown itunes:category value '{category_text}'. "
+						"Must be a valid Apple Podcasts category."
+					),
+					details=f"Found: {category_text}",
+					examples=sorted(APPLE_VALID_CATEGORIES)[:3],
+				))
 
 		# itunes:explicit
-		if self._text(channel, f"{{{itunes}}}explicit") is None:
+		explicit_text = self._text(channel, f"{{{itunes}}}explicit")
+		if explicit_text is None:
 			errors.append(ValidationError(
 				field="itunes:explicit",
 				level="error",
 				message="Missing required <itunes:explicit> element",
 				examples=["<itunes:explicit>false</itunes:explicit>"],
+			))
+		elif explicit_text.lower() not in {"yes", "no", "clean", "true", "false"}:
+			errors.append(ValidationError(
+				field="itunes:explicit",
+				level="error",
+				message=(
+					f"Invalid itunes:explicit value '{explicit_text}'. "
+					"Must be 'yes', 'no', or 'clean'."
+				),
+				details=f"Found: {explicit_text}",
+				examples=["<itunes:explicit>no</itunes:explicit>"],
 			))
 
 		# Episode-level checks
@@ -381,11 +446,12 @@ class RSSValidationService:
 					details=f"Found: {enc_type}",
 					examples=["<enclosure type='audio/mpeg' .../>"],
 				))
-			if not enc_length:
+			if not enc_length or not enc_length.isdigit() or int(enc_length) < 0:
 				errors.append(ValidationError(
 					field="item/enclosure/@length",
 					level="error",
-					message=f"Episode '{title}' enclosure missing length attribute",
+					message=f"Episode '{title}' enclosure length must be a non-negative integer",
+					examples=["<enclosure length='12345678' .../>"],
 				))
 
 		# pubDate
@@ -487,12 +553,16 @@ class RSSValidationService:
 				examples=["<itunes:image href='https://example.com/artwork.jpg'/>"],
 			))
 		else:
-			image_errors = await self._validate_image(
+			image_results = await self._validate_image(
 				image_url,
 				min_dim=SPOTIFY_MIN_IMAGE_DIM,
 				max_size_kb=SPOTIFY_MAX_IMAGE_SIZE_MB * 1024,
 			)
-			errors.extend(image_errors)
+			for img_err in image_results:
+				if img_err.level == "warning":
+					warnings.append(img_err)
+				else:
+					errors.append(img_err)
 
 		# Encoding check: look for non-UTF-8 declaration
 		# (XML parser already normalises this, but check xml declaration via feed root)
@@ -584,8 +654,20 @@ class RSSValidationService:
 				message=f"Episode '{title}' missing <enclosure> element",
 			))
 		else:
+			enc_url = enclosure.get("url", "")
 			enc_type = enclosure.get("type", "")
 			enc_length = enclosure.get("length", "")
+
+			if not enc_url or not enc_url.startswith(("http://", "https://")):
+				errors.append(ValidationError(
+					field="item/enclosure/@url",
+					level="error",
+					message=(
+						f"Episode '{title}' enclosure url is missing or not a valid "
+						"HTTP/HTTPS URL"
+					),
+					examples=["<enclosure url='https://example.com/ep.mp3' .../>"],
+				))
 
 			if enc_type not in SPOTIFY_VALID_AUDIO_TYPES:
 				errors.append(ValidationError(
@@ -696,8 +778,9 @@ class RSSValidationService:
 
 		# Episode-level checks
 		items = channel.findall("item")
+		guids: list[str] = []
 		for item in items:
-			item_errors = self._validate_google_episode(item)
+			item_errors = self._validate_google_episode(item, guids)
 			errors.extend(item_errors)
 
 		return DirectoryValidationResult(
@@ -708,7 +791,11 @@ class RSSValidationService:
 			checked_at=checked_at,
 		)
 
-	def _validate_google_episode(self, item: ET.Element) -> list[ValidationError]:
+	def _validate_google_episode(
+		self,
+		item: ET.Element,
+		guids: list[str],
+	) -> list[ValidationError]:
 		"""Validate a single episode against Google Podcasts requirements."""
 		errors: list[ValidationError] = []
 		title = self._text(item, "title") or "<unknown>"
@@ -721,20 +808,65 @@ class RSSValidationService:
 					message=f"Episode '{title}' missing <{field}>",
 				))
 
-		if not self._text(item, "pubDate"):
+		# pubDate: must be present and RFC 2822-compliant
+		pub_date_str = self._text(item, "pubDate")
+		if not pub_date_str:
 			errors.append(ValidationError(
 				field="item/pubDate",
 				level="error",
 				message=f"Episode '{title}' missing <pubDate>",
+				examples=["<pubDate>Mon, 18 Dec 2025 10:45:30 +0000</pubDate>"],
+			))
+		elif not self._is_valid_rfc2822(pub_date_str):
+			errors.append(ValidationError(
+				field="item/pubDate",
+				level="error",
+				message=f"Episode '{title}' pubDate is not valid RFC 2822 format",
+				details=f"Found: {pub_date_str}",
+				examples=["<pubDate>Mon, 18 Dec 2025 10:45:30 +0000</pubDate>"],
 			))
 
-		if item.find("enclosure") is None:
+		# enclosure: must be present with valid url, numeric length, and type
+		enclosure = item.find("enclosure")
+		if enclosure is None:
 			errors.append(ValidationError(
 				field="item/enclosure",
 				level="error",
 				message=f"Episode '{title}' missing <enclosure> element",
 			))
+		else:
+			enc_url = enclosure.get("url", "")
+			enc_length = enclosure.get("length", "")
+			enc_type = enclosure.get("type", "")
 
+			if not enc_url or not enc_url.startswith(("http://", "https://")):
+				errors.append(ValidationError(
+					field="item/enclosure/@url",
+					level="error",
+					message=(
+						f"Episode '{title}' enclosure url is missing or not a valid "
+						"HTTP/HTTPS URL"
+					),
+					examples=["<enclosure url='https://example.com/ep.mp3' .../>"],
+				))
+
+			if not enc_length or not enc_length.isdigit() or int(enc_length) < 0:
+				errors.append(ValidationError(
+					field="item/enclosure/@length",
+					level="error",
+					message=f"Episode '{title}' enclosure length must be a non-negative integer",
+					examples=["<enclosure length='12345678' .../>"],
+				))
+
+			if not enc_type:
+				errors.append(ValidationError(
+					field="item/enclosure/@type",
+					level="error",
+					message=f"Episode '{title}' enclosure missing type attribute",
+					examples=["<enclosure type='audio/mpeg' .../>"],
+				))
+
+		# guid: must be present and unique
 		guid_elem = item.find("guid")
 		if guid_elem is None or not guid_elem.text:
 			errors.append(ValidationError(
@@ -742,6 +874,16 @@ class RSSValidationService:
 				level="error",
 				message=f"Episode '{title}' missing <guid>",
 			))
+		else:
+			guid_val = guid_elem.text.strip()
+			if guid_val in guids:
+				errors.append(ValidationError(
+					field="item/guid",
+					level="error",
+					message=f"Duplicate GUID '{guid_val}' found. Google Podcasts requires unique GUIDs.",
+				))
+			else:
+				guids.append(guid_val)
 
 		return errors
 
@@ -759,68 +901,95 @@ class RSSValidationService:
 		Validate podcast artwork image.
 
 		Checks URL accessibility, format (JPG/PNG), dimensions, and file size.
-		Network errors are reported as warnings rather than errors to avoid
-		blocking validation when images are temporarily unavailable.
+		Streams the response body to avoid buffering multi-gigabyte files from
+		untrusted RSS artwork URLs — aborts as soon as cumulative size exceeds
+		max_size_kb. Network errors are reported as warnings rather than errors
+		to avoid blocking validation when images are temporarily unavailable.
 		"""
 		errors: list[ValidationError] = []
+		max_bytes = max_size_kb * 1024
 
 		try:
-			response = requests.get(image_url, timeout=10)
-			if response.status_code != 200:
-				errors.append(ValidationError(
-					field="itunes:image",
-					level="error",
-					message=f"Artwork URL returned HTTP {response.status_code}",
-					details=f"URL: {image_url}",
-				))
-				return errors
+			async with httpx.AsyncClient(timeout=10.0) as client:
+				async with client.stream("GET", image_url) as response:
+					if response.status_code != 200:
+						errors.append(ValidationError(
+							field="itunes:image",
+							level="error",
+							message=f"Artwork URL returned HTTP {response.status_code}",
+							details=f"URL: {image_url}",
+						))
+						return errors
 
-			content_type = response.headers.get("content-type", "").lower()
-			if "jpeg" not in content_type and "jpg" not in content_type and "png" not in content_type:
-				errors.append(ValidationError(
-					field="itunes:image",
-					level="error",
-					message=f"Artwork must be JPG or PNG. Found content-type: {content_type}",
-					details=f"URL: {image_url}",
-					examples=["image/jpeg", "image/png"],
-				))
+					content_type = response.headers.get("content-type", "").lower()
+					if "jpeg" not in content_type and "jpg" not in content_type and "png" not in content_type:
+						errors.append(ValidationError(
+							field="itunes:image",
+							level="error",
+							message=f"Artwork must be JPG or PNG. Found content-type: {content_type}",
+							details=f"URL: {image_url}",
+							examples=["image/jpeg", "image/png"],
+						))
 
-			size_kb = len(response.content) / 1024
-			if size_kb > max_size_kb:
-				errors.append(ValidationError(
-					field="itunes:image",
-					level="error",
-					message=(
-						f"Artwork file size {size_kb:.0f} KB exceeds maximum {max_size_kb} KB"
-					),
-					details=f"URL: {image_url}",
-				))
+					# Check Content-Length header for early abort before reading body
+					content_length_header = response.headers.get("content-length")
+					if content_length_header is not None:
+						try:
+							declared_bytes = int(content_length_header)
+							if declared_bytes > max_bytes:
+								errors.append(ValidationError(
+									field="itunes:image",
+									level="error",
+									message=(
+										f"Artwork file size {declared_bytes // 1024} KB exceeds "
+										f"maximum {max_size_kb} KB"
+									),
+									details=f"URL: {image_url}",
+								))
+								return errors
+						except ValueError:
+							pass  # Ignore malformed Content-Length header
 
-			# Check dimensions with Pillow
-			try:
-				from PIL import Image  # noqa: PLC0415
+					# Stream body in chunks; abort if cumulative size exceeds limit
+					body = b""
+					async for chunk in response.aiter_bytes(chunk_size=8192):
+						body += chunk
+						if len(body) > max_bytes:
+							errors.append(ValidationError(
+								field="itunes:image",
+								level="error",
+								message=(
+									f"Artwork file size exceeds maximum {max_size_kb} KB"
+								),
+								details=f"URL: {image_url}",
+							))
+							return errors
 
-				img = Image.open(io.BytesIO(response.content))
-				width, height = img.size
-				if width < min_dim or height < min_dim:
-					errors.append(ValidationError(
-						field="itunes:image",
-						level="error",
-						message=(
-							f"Artwork dimensions {width}x{height}px are below the minimum "
-							f"{min_dim}x{min_dim}px requirement"
-						),
-						details=f"URL: {image_url}",
-					))
-			except Exception as pil_exc:
-				errors.append(ValidationError(
-					field="itunes:image",
-					level="error",
-					message="Could not read image dimensions",
-					details=str(pil_exc),
-				))
+					# Check dimensions with Pillow
+					try:
+						from PIL import Image  # noqa: PLC0415
 
-		except requests.RequestException as exc:
+						img = Image.open(io.BytesIO(body))
+						width, height = img.size
+						if width < min_dim or height < min_dim:
+							errors.append(ValidationError(
+								field="itunes:image",
+								level="error",
+								message=(
+									f"Artwork dimensions {width}x{height}px are below the minimum "
+									f"{min_dim}x{min_dim}px requirement"
+								),
+								details=f"URL: {image_url}",
+							))
+					except Exception as pil_exc:
+						errors.append(ValidationError(
+							field="itunes:image",
+							level="error",
+							message="Could not read image dimensions",
+							details=str(pil_exc),
+						))
+
+		except httpx.RequestError as exc:
 			errors.append(ValidationError(
 				field="itunes:image",
 				level="warning",

@@ -52,12 +52,49 @@ RSS_NAMESPACES = {
 	"atom": "http://www.w3.org/2005/Atom",
 }
 
-# Apple Podcasts valid categories (representative subset)
+# Apple Podcasts valid categories — all top-level categories and subcategories
+# Source: https://podcasters.apple.com/support/1691-apple-podcasts-categories
 APPLE_VALID_CATEGORIES = {
+	# Top-level
 	"Arts", "Business", "Comedy", "Education", "Fiction", "Government",
 	"History", "Health & Fitness", "Kids & Family", "Leisure", "Music",
 	"News", "Religion & Spirituality", "Science", "Society & Culture",
 	"Sports", "Technology", "True Crime", "TV & Film",
+	# Arts subcategories
+	"Books", "Design", "Fashion & Beauty", "Food", "Performing Arts", "Visual Arts",
+	# Business subcategories
+	"Careers", "Entrepreneurship", "Investing", "Management", "Marketing", "Non-Profit",
+	# Comedy subcategories
+	"Comedy Interviews", "Improv", "Stand-Up",
+	# Education subcategories
+	"Courses", "How To", "Language Learning", "Self-Improvement",
+	# Fiction subcategories
+	"Comedy Fiction", "Drama", "Science Fiction",
+	# Health & Fitness subcategories
+	"Alternative Health", "Fitness", "Medicine", "Mental Health", "Nutrition", "Sexuality",
+	# Kids & Family subcategories
+	"Education for Kids", "Parenting", "Pets & Animals", "Stories for Kids",
+	# Leisure subcategories
+	"Animation & Manga", "Automotive", "Aviation", "Crafts", "Games", "Hobbies",
+	"Home & Garden", "Video Games",
+	# Music subcategories
+	"Music Commentary", "Music History", "Music Interviews",
+	# News subcategories
+	"Business News", "Daily News", "Entertainment News", "News Commentary",
+	"Politics", "Sports News", "Tech News",
+	# Religion & Spirituality subcategories
+	"Buddhism", "Christianity", "Hinduism", "Islam", "Judaism", "Religion", "Spirituality",
+	# Science subcategories
+	"Astronomy", "Chemistry", "Earth Sciences", "Life Sciences", "Mathematics",
+	"Natural Sciences", "Nature", "Physics", "Social Sciences",
+	# Society & Culture subcategories
+	"Documentary", "Personal Journals", "Philosophy", "Places & Travel", "Relationships",
+	# Sports subcategories
+	"Baseball", "Basketball", "Cricket", "Fantasy Sports", "Football", "Golf",
+	"Hockey", "Rugby", "Running", "Soccer", "Swimming", "Tennis", "Volleyball",
+	"Wilderness", "Wrestling",
+	# TV & Film subcategories
+	"After Shows", "Film History", "Film Interviews", "Film Reviews", "TV Reviews",
 }
 
 # Valid audio MIME types

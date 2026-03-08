@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { showSuccessToast, showErrorToast } from "@/lib/toast"
 
 interface Project {
   id: string
@@ -47,6 +48,7 @@ export default function DashboardPage() {
       }
     } catch (error) {
       console.error("Failed to load projects:", error)
+      showErrorToast("Failed to load projects")
     } finally {
       setLoading(false)
     }
@@ -71,13 +73,17 @@ export default function DashboardPage() {
       })
 
       if (response.ok) {
+        showSuccessToast("Project created successfully")
         setShowCreateDialog(false)
         setNewProjectTitle("")
         setNewProjectDescription("")
         loadProjects()
+      } else {
+        showErrorToast("Failed to create project: " + response.statusText)
       }
     } catch (error) {
       console.error("Failed to create project:", error)
+      showErrorToast("Failed to create project: Network error")
     }
   }
 

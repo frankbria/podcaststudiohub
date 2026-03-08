@@ -6,12 +6,12 @@ aggregated quality summaries for projects. All endpoints require authentication
 and automatically enforce tenant isolation via RLS.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional, Any, Dict, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import select, func
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db

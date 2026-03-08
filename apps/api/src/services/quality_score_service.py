@@ -12,7 +12,7 @@ Score dimensions:
 - overall: Weighted average (content 20%, coherence 25%, balance 30%, engagement 25%)
 """
 
-from typing import List, Optional
+from typing import List
 from ..schemas.quality_metrics import QualityMetricsData, QualityScore, Interpretation
 
 

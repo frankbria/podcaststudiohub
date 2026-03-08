@@ -567,6 +567,14 @@ async def auth_headers(client):
 
 
 @pytest.fixture
+async def user_tenant_id(client, auth_headers):
+	"""Get the authenticated user's tenant_id."""
+	response = await client.get("/auth/me", headers=auth_headers)
+	assert response.status_code == 200
+	return response.json()["tenant_id"]
+
+
+@pytest.fixture
 async def project_id(client, auth_headers):
 	"""Create a project and return its ID."""
 	response = await client.post("/projects", headers=auth_headers, json={
@@ -621,7 +629,7 @@ async def test_get_validation_requires_auth(client, project_id):
 
 
 @pytest.mark.asyncio
-async def test_validate_endpoint_with_rss_content(client, auth_headers, project_id, test_db):
+async def test_validate_endpoint_with_rss_content(client, auth_headers, project_id, user_tenant_id, test_db):
 	"""POST validate with rss_content validates feed and stores results."""
 	from src.models.rss_feed import RSSFeed
 	from uuid import UUID
@@ -629,7 +637,7 @@ async def test_validate_endpoint_with_rss_content(client, auth_headers, project_
 	# Insert an RSSFeed record for this project
 	rss_feed = RSSFeed(
 		project_id=UUID(project_id),
-		tenant_id=UUID(project_id),  # Reuse for test simplicity
+		tenant_id=UUID(user_tenant_id),
 		s3_key=None,
 		public_url=None,
 		validation_status=None,
@@ -659,14 +667,14 @@ async def test_validate_endpoint_with_rss_content(client, auth_headers, project_
 
 
 @pytest.mark.asyncio
-async def test_validate_endpoint_with_invalid_xml(client, auth_headers, project_id, test_db):
+async def test_validate_endpoint_with_invalid_xml(client, auth_headers, project_id, user_tenant_id, test_db):
 	"""POST validate returns 422 when rss_content is invalid XML."""
 	from src.models.rss_feed import RSSFeed
 	from uuid import UUID
 
 	rss_feed = RSSFeed(
 		project_id=UUID(project_id),
-		tenant_id=UUID(project_id),
+		tenant_id=UUID(user_tenant_id),
 		s3_key=None,
 		public_url=None,
 		validation_status=None,
@@ -683,14 +691,14 @@ async def test_validate_endpoint_with_invalid_xml(client, auth_headers, project_
 
 
 @pytest.mark.asyncio
-async def test_get_validation_after_validate(client, auth_headers, project_id, test_db):
+async def test_get_validation_after_validate(client, auth_headers, project_id, user_tenant_id, test_db):
 	"""GET validation returns stored results after validation runs."""
 	from src.models.rss_feed import RSSFeed
 	from uuid import UUID
 
 	rss_feed = RSSFeed(
 		project_id=UUID(project_id),
-		tenant_id=UUID(project_id),
+		tenant_id=UUID(user_tenant_id),
 		s3_key=None,
 		public_url=None,
 		validation_status=None,
@@ -728,14 +736,14 @@ async def test_get_validation_after_validate(client, auth_headers, project_id, t
 
 
 @pytest.mark.asyncio
-async def test_validate_endpoint_with_errors(client, auth_headers, project_id, test_db):
+async def test_validate_endpoint_with_errors(client, auth_headers, project_id, user_tenant_id, test_db):
 	"""POST validate returns validation errors for a bad feed."""
 	from src.models.rss_feed import RSSFeed
 	from uuid import UUID
 
 	rss_feed = RSSFeed(
 		project_id=UUID(project_id),
-		tenant_id=UUID(project_id),
+		tenant_id=UUID(user_tenant_id),
 		s3_key=None,
 		public_url=None,
 		validation_status=None,
@@ -774,14 +782,14 @@ async def test_validate_nonexistent_project(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_validation_response_structure(client, auth_headers, project_id, test_db):
+async def test_validation_response_structure(client, auth_headers, project_id, user_tenant_id, test_db):
 	"""Validate that the response includes all required fields."""
 	from src.models.rss_feed import RSSFeed
 	from uuid import UUID
 
 	rss_feed = RSSFeed(
 		project_id=UUID(project_id),
-		tenant_id=UUID(project_id),
+		tenant_id=UUID(user_tenant_id),
 		s3_key=None,
 		public_url=None,
 		validation_status=None,

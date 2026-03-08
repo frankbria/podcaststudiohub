@@ -82,7 +82,6 @@ def test_episode_response_schema_includes_task_completed_at():
 def test_episode_response_task_id_is_optional():
 	"""EpisodeResponse.task_id must be Optional (can be None)."""
 	from src.schemas.episode import EpisodeResponse
-	import inspect
 	field = EpisodeResponse.model_fields['task_id']
 	# Optional fields have a default of None or are not required
 	assert not field.is_required(), "task_id should be optional in EpisodeResponse"

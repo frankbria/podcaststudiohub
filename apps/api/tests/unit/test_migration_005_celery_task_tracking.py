@@ -11,7 +11,7 @@ Tests cover:
 
 import importlib.util
 import os
-from unittest.mock import call, patch, MagicMock
+from unittest.mock import patch
 
 
 # ---------------------------------------------------------------------------

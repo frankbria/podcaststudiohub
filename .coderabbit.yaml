@@ -1,0 +1,114 @@
+# CodeRabbit configuration for podcaststudiohub
+# This repo uses an automated repo-maintainer agent that creates PRs via Claude Code.
+# CodeRabbit provides review feedback that the agent addresses before merging.
+
+language: "en-US"
+tone_instructions: "Be direct and technical. Focus on bugs, security issues, and correctness over style preferences. Skip praise — just flag problems."
+early_access: false
+enable_free_tier: true
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: false
+  review_status: true
+  review_details: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: false
+  poem: false
+  commit_status: true
+  fail_commit_status: false
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  abort_on_close: true
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: true
+    base_branches: []
+    ignore_title_keywords: []
+    labels: []
+    # Do NOT ignore bot accounts — the repo-maintainer agent creates PRs
+    # that need CodeRabbit review as part of the automated pipeline.
+    ignore_usernames: []
+
+  path_filters:
+    - "!**/package-lock.json"
+    - "!**/uv.lock"
+    - "!**/*.lock"
+    - "!.github/repo-maintainer/state.json"
+
+  path_instructions:
+    - path: "apps/api/**/*.py"
+      instructions: "Python backend using FastAPI + SQLAlchemy + Alembic. Uses tabs for indentation. Check for SQL injection, proper async usage, and correct Pydantic model validation."
+    - path: "apps/api/**/test_*.py"
+      instructions: "Tests use pytest. Verify assertions are meaningful (not just 'assert True'). Check that tests actually exercise the code path they claim to test."
+    - path: "apps/web/**/*.{ts,tsx}"
+      instructions: "Next.js frontend with TypeScript. Uses shadcn/ui Nova template with Hugeicons (not lucide-react). Check for proper error handling, accessibility, and type safety."
+    - path: "apps/web/**/*.css"
+      instructions: "Uses Tailwind CSS. Check for responsive design and proper use of utility classes."
+    - path: "**/alembic/**"
+      instructions: "Database migrations. Verify migrations are reversible (have proper downgrade). Check for data loss risks."
+
+  tools:
+    # Python
+    ruff:
+      enabled: true
+    pylint:
+      enabled: false
+
+    # TypeScript/JavaScript
+    eslint:
+      enabled: true
+    biome:
+      enabled: false
+
+    # Shell
+    shellcheck:
+      enabled: true
+
+    # GitHub Actions
+    actionlint:
+      enabled: true
+
+    # Security
+    gitleaks:
+      enabled: true
+
+    # Markdown
+    markdownlint:
+      enabled: false
+
+    # YAML
+    yamllint:
+      enabled: false
+
+    # Disabled — not used in this project
+    hadolint:
+      enabled: false
+    checkov:
+      enabled: false
+
+    github-checks:
+      enabled: true
+      timeout_ms: 90000
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  web_search:
+    enabled: false
+  learnings:
+    scope: "local"
+  issues:
+    scope: "local"
+  pull_requests:
+    scope: "local"

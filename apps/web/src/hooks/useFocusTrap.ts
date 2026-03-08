@@ -1,14 +1,18 @@
 import { useEffect, useRef } from "react"
 
+const FOCUSABLE_SELECTORS =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
 export function useFocusTrap(isOpen: boolean) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!isOpen || !containerRef.current) return
 
-    const focusableSelectors =
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    const focusableElements = containerRef.current.querySelectorAll<HTMLElement>(focusableSelectors)
+    const container = containerRef.current
+    const focusableElements = Array.from(
+      container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTORS)
+    )
     const firstElement = focusableElements[0]
     const lastElement = focusableElements[focusableElements.length - 1]
 
@@ -30,9 +34,7 @@ export function useFocusTrap(isOpen: boolean) {
       }
     }
 
-    const container = containerRef.current
     container.addEventListener("keydown", handleKeyDown)
-
     return () => {
       container.removeEventListener("keydown", handleKeyDown)
     }

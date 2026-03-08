@@ -5,11 +5,7 @@ Verifies that all relationship declarations are properly configured with
 back_populates on both sides, using SQLAlchemy mapper inspection.
 No database connection required.
 """
-import os
-
-import pytest
 from sqlalchemy import inspect as sa_inspect
-from sqlalchemy.orm import RelationshipProperty
 
 
 # ---------------------------------------------------------------------------
@@ -39,16 +35,16 @@ def _assert_backpopulates(model_cls, rel_name: str, expected_back_populates: str
 # Import models (env vars already set by conftest.py)
 # ---------------------------------------------------------------------------
 
-from src.models.user import User
-from src.models.project import Project
-from src.models.episode import Episode
-from src.models.tts_configuration import TTSConfiguration
-from src.models.conversation_template import ConversationTemplate
-from src.models.distribution_target import DistributionTarget
-from src.models.audio_snippet import AudioSnippet
-from src.models.episode_layout import EpisodeLayout
-from src.models.episode_composition import EpisodeComposition
-from src.models.rss_feed import RSSFeed
+from src.models.user import User  # noqa: E402
+from src.models.project import Project  # noqa: E402
+from src.models.episode import Episode  # noqa: E402
+from src.models.tts_configuration import TTSConfiguration  # noqa: E402
+from src.models.conversation_template import ConversationTemplate  # noqa: E402
+from src.models.distribution_target import DistributionTarget  # noqa: E402
+from src.models.audio_snippet import AudioSnippet  # noqa: E402
+from src.models.episode_layout import EpisodeLayout  # noqa: E402
+from src.models.episode_composition import EpisodeComposition  # noqa: E402
+from src.models.rss_feed import RSSFeed  # noqa: E402
 
 
 # ============================================================================

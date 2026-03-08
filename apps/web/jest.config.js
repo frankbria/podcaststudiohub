@@ -19,6 +19,8 @@ const config = {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^@radix-ui/react-progress$': '<rootDir>/__mocks__/@radix-ui/react-progress.tsx',
     '^@radix-ui/react-select$': '<rootDir>/__mocks__/@radix-ui/react-select.tsx',
+    '^@hugeicons/react$': '<rootDir>/__mocks__/@hugeicons/react.tsx',
+    '^@hugeicons/core-free-icons$': '<rootDir>/__mocks__/@hugeicons/core-free-icons.ts',
   },
 
   // Coverage collection settings

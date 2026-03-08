@@ -1,8 +1,7 @@
 """Episode model for podcast episodes"""
 
 from datetime import datetime
-from typing import Optional
-from sqlalchemy import Column, String, Text, DateTime, Integer, BigInteger, Numeric, ForeignKey
+from sqlalchemy import Column, Text, DateTime, Integer, BigInteger, Numeric, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
@@ -23,8 +22,8 @@ class Episode(Base):
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
 
-    # Episode number (can be null for unnumbered episodes)
-    episode_number = Column(Integer, nullable=True)
+    # Episode number - required, unique per project, auto-assigned if not provided
+    episode_number = Column(Integer, nullable=False)
 
     # Episode metadata (title, description, episode_number stored here per migration 002)
     # Structure: {
@@ -76,6 +75,11 @@ class Episode(Base):
     content_sources = relationship("ContentSource", back_populates="episode", cascade="all, delete-orphan")
     tts_config = relationship("TTSConfiguration", foreign_keys=[tts_config_id])
     template = relationship("ConversationTemplate", foreign_keys=[template_id])
+
+    __table_args__ = (
+        UniqueConstraint('project_id', 'episode_number', name='uq_episodes_project_number'),
+        Index('idx_episodes_project_number', 'project_id', 'episode_number'),
+    )
 
     def __repr__(self) -> str:
         title = self.episode_metadata.get('title', 'Untitled') if self.episode_metadata else 'Untitled'

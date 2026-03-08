@@ -599,6 +599,137 @@ async def test_episode_ordering_by_number(client, project_and_auth):
 
 
 # ============================================================================
+# AUTO-ASSIGNMENT AND UNIQUENESS TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_create_episode_without_episode_number(client, project_and_auth):
+	"""Test episode_number is auto-assigned when not provided."""
+	project_id, headers = project_and_auth
+
+	response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_metadata": {
+			"title": "Auto Numbered",
+			"description": "Should get episode_number 1"
+		}
+	})
+	assert response.status_code == 201
+	data = response.json()
+	assert data["episode_number"] == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_assignment_increments_per_project(client, project_and_auth):
+	"""Test auto-assigned numbers increment sequentially per project."""
+	project_id, headers = project_and_auth
+
+	# Create 3 episodes without specifying episode_number
+	for i in range(3):
+		response = await client.post("/episodes", headers=headers, json={
+			"project_id": project_id,
+			"episode_metadata": {
+				"title": f"Episode {i + 1}",
+				"description": "Auto numbered"
+			}
+		})
+		assert response.status_code == 201
+		assert response.json()["episode_number"] == i + 1
+
+
+@pytest.mark.asyncio
+async def test_auto_assignment_after_explicit_number(client, project_and_auth):
+	"""Test auto-assignment continues from max existing episode_number."""
+	project_id, headers = project_and_auth
+
+	# Create episode with explicit number 5
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 5,
+		"episode_metadata": {"title": "Ep 5", "description": "Desc"}
+	})
+
+	# Auto-assigned episode should get number 6
+	response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_metadata": {"title": "Auto", "description": "Desc"}
+	})
+	assert response.status_code == 201
+	assert response.json()["episode_number"] == 6
+
+
+@pytest.mark.asyncio
+async def test_duplicate_episode_number_same_project_returns_409(client, project_and_auth):
+	"""Test that duplicate episode_number within same project returns 409."""
+	project_id, headers = project_and_auth
+
+	# Create episode with number 1
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "First", "description": "Desc"}
+	})
+
+	# Attempt to create another with same number
+	response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Duplicate", "description": "Desc"}
+	})
+	assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_same_episode_number_different_projects(client, project_and_auth):
+	"""Test that same episode_number is allowed across different projects."""
+	project_id_1, headers = project_and_auth
+
+	# Create second project
+	proj2_response = await client.post("/projects", headers=headers, json={
+		"name": "Second Project",
+		"podcast_metadata": {
+			"show_title": "Show 2",
+			"author": "Author 2",
+			"description": "Description 2"
+		}
+	})
+	assert proj2_response.status_code == 201
+	project_id_2 = proj2_response.json()["id"]
+
+	# Create episode 1 in project 1
+	r1 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id_1,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Ep1 P1", "description": "Desc"}
+	})
+	assert r1.status_code == 201
+
+	# Create episode 1 in project 2 - should succeed
+	r2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id_2,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Ep1 P2", "description": "Desc"}
+	})
+	assert r2.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_episode_response_has_non_null_episode_number(client, project_and_auth):
+	"""Test that episode responses always include a non-null episode_number."""
+	project_id, headers = project_and_auth
+
+	response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_metadata": {"title": "Test", "description": "Desc"}
+	})
+	assert response.status_code == 201
+	data = response.json()
+	assert data["episode_number"] is not None
+	assert isinstance(data["episode_number"], int)
+	assert data["episode_number"] >= 1
+
+
+# ============================================================================
 # TENANT ISOLATION TESTS (SKIPPED)
 # ============================================================================
 

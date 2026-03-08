@@ -8,7 +8,7 @@ and authentication requirements for audio snippets.
 import io
 import pytest
 from uuid import uuid4
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 
 # ============================================================================
@@ -832,7 +832,7 @@ async def test_download_url_with_s3(client, auth_headers):
 
 	snippet_id = create_response.json()["id"]
 
-	with patch("src.services.audio_snippet_service.generate_download_url", new_callable=AsyncMock) as mock_url:
+	with patch("src.routers.audio_snippets.generate_download_url", new_callable=AsyncMock) as mock_url:
 		mock_url.return_value = presigned_url
 		response = await client.get(
 			f"/audio-snippets/{snippet_id}/download",

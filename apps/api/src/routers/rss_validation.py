@@ -64,6 +64,7 @@ async def validate_rss_feed(
 		result = await service.validate_rss_feed(
 			db=db,
 			project_id=project_id,
+			tenant_id=current_user.tenant_id,
 			rss_content=body.rss_content,
 		)
 		return result
@@ -110,7 +111,7 @@ async def get_rss_validation(
 	"""
 	service = RSSValidationService()
 	try:
-		result = await service.get_validation_status(db=db, project_id=project_id)
+		result = await service.get_validation_status(db=db, project_id=project_id, tenant_id=current_user.tenant_id)
 		return result
 	except ValueError as exc:
 		raise HTTPException(

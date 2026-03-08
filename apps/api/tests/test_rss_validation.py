@@ -366,11 +366,12 @@ def test_is_valid_language_code_invalid():
 @pytest.mark.asyncio
 async def test_image_validation_inaccessible_url(service):
 	"""Image validation reports warning when URL is not accessible."""
-	import requests as _requests
+	import httpx as _httpx
 
-	with patch("src.services.rss_validation_service.requests.get") as mock_get:
-		mock_get.side_effect = _requests.exceptions.ConnectionError("Connection refused")
-		errors = await service._validate_image("https://bad.example.com/image.jpg")
+	with patch("src.services.rss_validation_service._is_safe_url", return_value=True):
+		with patch("src.services.rss_validation_service._http_get", new_callable=AsyncMock) as mock_get:
+			mock_get.side_effect = _httpx.ConnectError("Connection refused")
+			errors = await service._validate_image("https://bad.example.com/image.jpg")
 
 	assert len(errors) == 1
 	assert errors[0].level == "warning"
@@ -385,9 +386,10 @@ async def test_image_validation_wrong_content_type(service):
 	mock_response.headers = {"content-type": "text/html"}
 	mock_response.content = b"<html>not an image</html>"
 
-	with patch("src.services.rss_validation_service.requests.get", return_value=mock_response):
-		with patch("PIL.Image.open", side_effect=Exception("Not an image")):
-			errors = await service._validate_image("https://example.com/not-image.html")
+	with patch("src.services.rss_validation_service._is_safe_url", return_value=True):
+		with patch("src.services.rss_validation_service._http_get", new_callable=AsyncMock, return_value=mock_response):
+			with patch("PIL.Image.open", side_effect=Exception("Not an image")):
+				errors = await service._validate_image("https://example.com/not-image.html")
 
 	content_errors = [e for e in errors if "JPG or PNG" in e.message]
 	assert len(content_errors) >= 1
@@ -411,8 +413,9 @@ async def test_image_validation_small_dimensions(service):
 	mock_response.headers = {"content-type": "image/jpeg"}
 	mock_response.content = image_content
 
-	with patch("src.services.rss_validation_service.requests.get", return_value=mock_response):
-		errors = await service._validate_image("https://example.com/small.jpg", min_dim=3000)
+	with patch("src.services.rss_validation_service._is_safe_url", return_value=True):
+		with patch("src.services.rss_validation_service._http_get", new_callable=AsyncMock, return_value=mock_response):
+			errors = await service._validate_image("https://example.com/small.jpg", min_dim=3000)
 
 	dim_errors = [e for e in errors if "dimensions" in e.message.lower() or "pixels" in e.message.lower()]
 	assert len(dim_errors) >= 1
@@ -452,6 +455,7 @@ async def test_full_validation_valid_feed(service):
 		result = await service.validate_rss_feed(
 			db=mock_db,
 			project_id=mock_rss_feed.project_id,
+			tenant_id=uuid4(),
 			rss_content=VALID_RSS,
 		)
 
@@ -477,6 +481,7 @@ async def test_full_validation_rss_not_found(service):
 		await service.validate_rss_feed(
 			db=mock_db,
 			project_id=uuid4(),
+			tenant_id=uuid4(),
 			rss_content=VALID_RSS,
 		)
 
@@ -493,7 +498,7 @@ async def test_get_validation_status_no_validation(service):
 	mock_db.execute.return_value = mock_result
 
 	with pytest.raises(ValueError, match="validate first"):
-		await service.get_validation_status(db=mock_db, project_id=uuid4())
+		await service.get_validation_status(db=mock_db, project_id=uuid4(), tenant_id=uuid4())
 
 
 @pytest.mark.asyncio
@@ -541,7 +546,7 @@ async def test_get_validation_status_returns_stored(service):
 	mock_result.scalar_one_or_none.return_value = mock_rss_feed
 	mock_db.execute.return_value = mock_result
 
-	result = await service.get_validation_status(db=mock_db, project_id=uuid4())
+	result = await service.get_validation_status(db=mock_db, project_id=uuid4(), tenant_id=uuid4())
 
 	assert isinstance(result, ValidationStatusUpdate)
 	assert result.is_valid_for_all is False

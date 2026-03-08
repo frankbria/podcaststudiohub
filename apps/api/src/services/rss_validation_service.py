@@ -14,14 +14,18 @@ Validation checks:
 """
 
 import io
+import ipaddress
 import logging
+import re
+import socket
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
+from urllib.parse import urlparse
 from uuid import UUID
 
-import requests
+import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,6 +64,31 @@ SPOTIFY_MIN_IMAGE_DIM = 3000
 SPOTIFY_MAX_IMAGE_SIZE_MB = 30
 
 
+def _is_safe_url(url: str) -> bool:
+	"""
+	Return True only if url uses https:// and resolves to a public IP address.
+
+	Rejects private, loopback, link-local, and reserved addresses to prevent SSRF.
+	"""
+	parsed = urlparse(url)
+	if parsed.scheme != "https":
+		return False
+	host = parsed.hostname
+	if not host:
+		return False
+	try:
+		ip = ipaddress.ip_address(socket.gethostbyname(host))
+		return ip.is_global
+	except Exception:
+		return False
+
+
+async def _http_get(url: str, timeout: int = 10) -> httpx.Response:
+	"""Make an async HTTP GET request using httpx."""
+	async with httpx.AsyncClient(timeout=timeout) as client:
+		return await client.get(url)
+
+
 class RSSValidationService:
 	"""Validate RSS feeds against podcast directory requirements."""
 
@@ -71,6 +100,7 @@ class RSSValidationService:
 		self,
 		db: AsyncSession,
 		project_id: UUID,
+		tenant_id: UUID,
 		rss_content: Optional[str] = None,
 	) -> ValidationStatusUpdate:
 		"""
@@ -83,6 +113,7 @@ class RSSValidationService:
 		Args:
 			db: Database session
 			project_id: UUID of the project
+			tenant_id: UUID of the calling user's tenant (for ownership check)
 			rss_content: Optional RSS XML content to validate directly
 
 		Returns:
@@ -92,7 +123,7 @@ class RSSValidationService:
 			ValueError: If RSSFeed not found or content unavailable
 			ET.ParseError: If RSS content is not valid XML
 		"""
-		rss_feed = await self._get_rss_feed(db, project_id)
+		rss_feed = await self._get_rss_feed(db, project_id, tenant_id)
 
 		if rss_content is None:
 			rss_content = await self._fetch_rss_content(rss_feed)
@@ -128,6 +159,7 @@ class RSSValidationService:
 		self,
 		db: AsyncSession,
 		project_id: UUID,
+		tenant_id: UUID,
 	) -> ValidationStatusUpdate:
 		"""
 		Return the last stored validation results for a project's RSS feed.
@@ -135,6 +167,7 @@ class RSSValidationService:
 		Args:
 			db: Database session
 			project_id: UUID of the project
+			tenant_id: UUID of the calling user's tenant (for ownership check)
 
 		Returns:
 			ValidationStatusUpdate previously stored
@@ -142,7 +175,7 @@ class RSSValidationService:
 		Raises:
 			ValueError: If RSSFeed not found or never validated
 		"""
-		rss_feed = await self._get_rss_feed(db, project_id)
+		rss_feed = await self._get_rss_feed(db, project_id, tenant_id)
 
 		if not rss_feed.validation_status:
 			raise ValueError("No validation results found. Call validate first.")
@@ -153,10 +186,13 @@ class RSSValidationService:
 	# Internal helpers
 	# ------------------------------------------------------------------
 
-	async def _get_rss_feed(self, db: AsyncSession, project_id: UUID) -> RSSFeed:
-		"""Fetch RSSFeed record for project or raise ValueError."""
+	async def _get_rss_feed(self, db: AsyncSession, project_id: UUID, tenant_id: UUID) -> RSSFeed:
+		"""Fetch RSSFeed record for project owned by tenant or raise ValueError."""
 		result = await db.execute(
-			select(RSSFeed).where(RSSFeed.project_id == project_id)
+			select(RSSFeed).where(
+				RSSFeed.project_id == project_id,
+				RSSFeed.tenant_id == tenant_id,
+			)
 		)
 		rss_feed = result.scalar_one_or_none()
 		if rss_feed is None:
@@ -170,18 +206,26 @@ class RSSValidationService:
 		"""
 		Retrieve RSS XML content from the stored URL or S3 key.
 
-		In production this fetches from rss_feed.public_url (HTTP) or
+		In production this fetches from rss_feed.public_url (HTTPS) or
 		falls back to S3 via rss_feed.s3_key. Tests patch this method.
 
 		Raises:
-			ValueError: If no content source is available or fetch fails
+			ValueError: If no content source is available, URL is unsafe, or fetch fails
 		"""
 		if rss_feed.public_url:
+			if not _is_safe_url(rss_feed.public_url):
+				raise ValueError(
+					f"RSS feed URL resolves to a private or reserved address: {rss_feed.public_url}"
+				)
 			try:
-				response = requests.get(rss_feed.public_url, timeout=10)
+				response = await _http_get(rss_feed.public_url)
 				response.raise_for_status()
 				return response.text
-			except requests.RequestException as exc:
+			except httpx.RequestError as exc:
+				raise ValueError(
+					f"Failed to fetch RSS feed from {rss_feed.public_url}: {exc}"
+				) from exc
+			except httpx.HTTPStatusError as exc:
 				raise ValueError(
 					f"Failed to fetch RSS feed from {rss_feed.public_url}: {exc}"
 				) from exc
@@ -758,14 +802,23 @@ class RSSValidationService:
 		"""
 		Validate podcast artwork image.
 
-		Checks URL accessibility, format (JPG/PNG), dimensions, and file size.
+		Checks URL safety, accessibility, format (JPG/PNG), dimensions, and file size.
 		Network errors are reported as warnings rather than errors to avoid
 		blocking validation when images are temporarily unavailable.
 		"""
 		errors: list[ValidationError] = []
 
+		if not _is_safe_url(image_url):
+			errors.append(ValidationError(
+				field="itunes:image",
+				level="error",
+				message="Artwork URL must use https:// and resolve to a public IP address",
+				details=f"URL: {image_url}",
+			))
+			return errors
+
 		try:
-			response = requests.get(image_url, timeout=10)
+			response = await _http_get(image_url)
 			if response.status_code != 200:
 				errors.append(ValidationError(
 					field="itunes:image",
@@ -820,7 +873,7 @@ class RSSValidationService:
 					details=str(pil_exc),
 				))
 
-		except requests.RequestException as exc:
+		except httpx.RequestError as exc:
 			errors.append(ValidationError(
 				field="itunes:image",
 				level="warning",
@@ -858,5 +911,4 @@ class RSSValidationService:
 		Basic BCP 47 language code validation.
 		Accepts 'en', 'en-US', 'zh-Hans-CN', etc.
 		"""
-		import re  # noqa: PLC0415
 		return bool(re.match(r'^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$', lang))

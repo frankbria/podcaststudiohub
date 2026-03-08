@@ -52,6 +52,8 @@ export default function EpisodePage() {
   const [progress, setProgress] = useState(0)
   const [ttsConfigs, setTTSConfigs] = useState<TTSConfig[]>([])
   const [selectedTTSConfigId, setSelectedTTSConfigId] = useState<string>("")
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+  const [saveTTSError, setSaveTTSError] = useState<string | null>(null)
 
   useEffect(() => {
     if (session) {
@@ -184,6 +186,7 @@ export default function EpisodePage() {
   }
 
   const saveTTSConfig = async () => {
+    setSaveTTSError(null)
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}`, {
         method: "PUT",
@@ -199,8 +202,12 @@ export default function EpisodePage() {
       if (response.ok) {
         setShowTTSDialog(false)
         loadEpisode()
+      } else {
+        setSaveTTSError(`Failed to save TTS settings (${response.status}: ${response.statusText})`)
+        console.error("Failed to save TTS configuration:", response.status, response.statusText)
       }
     } catch (error) {
+      setSaveTTSError("Failed to save TTS settings. Please try again.")
       console.error("Failed to save TTS configuration:", error)
     }
   }
@@ -227,6 +234,7 @@ export default function EpisodePage() {
   }
 
   const downloadEpisode = async () => {
+    setDownloadError(null)
     try {
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}/download`,
@@ -236,7 +244,11 @@ export default function EpisodePage() {
           },
         }
       )
-      if (!response.ok) return
+      if (!response.ok) {
+        setDownloadError(`Download failed (${response.status}: ${response.statusText})`)
+        console.error("Failed to download episode:", response.status, response.statusText)
+        return
+      }
       const blob = await response.blob()
       const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement("a")
@@ -247,7 +259,8 @@ export default function EpisodePage() {
       document.body.removeChild(a)
       URL.revokeObjectURL(objectUrl)
     } catch (error) {
-      console.error("Failed to download episode:", error)
+      setDownloadError("Download failed. Please try again.")
+      console.error("Failed to download episode:", params.id, episode?.episode_metadata?.title, error)
     }
   }
 
@@ -329,6 +342,9 @@ export default function EpisodePage() {
                 <Button variant="outline" onClick={downloadEpisode} className="w-full">
                   Download MP3
                 </Button>
+                {downloadError && (
+                  <p className="text-sm text-red-600">{downloadError}</p>
+                )}
               </div>
             )}
 
@@ -453,10 +469,11 @@ export default function EpisodePage() {
                 </p>
               ) : (
                 <div className="space-y-2">
-                  <label className="block text-sm font-medium text-gray-700">
+                  <label htmlFor="tts-config-select" className="block text-sm font-medium text-gray-700">
                     TTS Configuration
                   </label>
                   <select
+                    id="tts-config-select"
                     className="w-full p-2 border rounded"
                     value={selectedTTSConfigId}
                     onChange={(e) => setSelectedTTSConfigId(e.target.value)}
@@ -469,6 +486,9 @@ export default function EpisodePage() {
                     ))}
                   </select>
                 </div>
+              )}
+              {saveTTSError && (
+                <p className="text-sm text-red-600">{saveTTSError}</p>
               )}
               <Button onClick={saveTTSConfig} className="w-full">
                 Save TTS Settings

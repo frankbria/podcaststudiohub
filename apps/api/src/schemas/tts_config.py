@@ -7,7 +7,7 @@ with provider-specific validation for OpenAI, ElevenLabs, Gemini, and Edge TTS.
 
 from datetime import datetime
 from typing import Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, ConfigDict, ValidationInfo
 from uuid import UUID
 
 
@@ -25,7 +25,7 @@ class TTSConfigCreate(BaseModel):
 
     @field_validator('config')
     @classmethod
-    def validate_config(cls, v: Dict[str, Any], info) -> Dict[str, Any]:
+    def validate_config(cls, v: Dict[str, Any], info: ValidationInfo) -> Dict[str, Any]:
         """Validate config structure based on provider."""
         provider = info.data.get('provider')
 

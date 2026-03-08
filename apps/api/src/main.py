@@ -1,13 +1,15 @@
 """
 Main FastAPI application for Podcastfy GUI API
 """
+import logging
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-import logging
 
 from src.config import settings
 from src.middleware.cors import setup_cors
 from src.middleware.tenant import TenantContextMiddleware
+from src.routers import auth, projects, episodes, content, generation, tts_config
 
 # Configure logging
 logging.basicConfig(
@@ -69,8 +71,6 @@ async def internal_error_handler(request, exc):
 
 
 # Register routers - User Story 1 (Basic Podcast Generation)
-from src.routers import auth, projects, episodes, content, generation, tts_config
-
 app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(episodes.router)

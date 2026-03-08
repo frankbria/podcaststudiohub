@@ -6,8 +6,11 @@ individual episode metrics, project-level aggregations, and paginated lists.
 """
 
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 from pydantic import BaseModel, Field
+
+
+Rating = Literal["poor", "fair", "good", "excellent"]
 
 
 class QualityMetricsData(BaseModel):
@@ -27,12 +30,12 @@ class QualityScore(BaseModel):
 	"""Calculated quality score for a specific dimension."""
 	dimension: str = Field(..., description="Dimension name: content_length, coherence, balance, engagement, overall")
 	score: float = Field(..., ge=0, le=1, description="Score 0.0-1.0")
-	rating: str = Field(..., description="poor, fair, good, or excellent")
+	rating: Rating = Field(..., description="poor, fair, good, or excellent")
 
 
 class Interpretation(BaseModel):
 	"""Human-readable interpretation of metrics."""
-	overall_rating: str = Field(..., description="Overall quality rating: poor, fair, good, excellent")
+	overall_rating: Rating = Field(..., description="Overall quality rating: poor, fair, good, excellent")
 	strengths: List[str] = Field(default_factory=list, description="List of quality strengths")
 	improvements: List[str] = Field(default_factory=list, description="List of suggested improvements")
 	recommendations: Optional[str] = Field(None, description="Specific guidance for improvement")

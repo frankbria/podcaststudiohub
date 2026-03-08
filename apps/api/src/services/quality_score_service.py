@@ -46,7 +46,7 @@ class QualityScoreService:
 		co_score, co_rating = self._calculate_coherence_score(metrics.coherence_score)
 		ba_score, ba_rating = self._calculate_balance_score(metrics.is_balanced, metrics.speaker_balance_ratio)
 		en_score, en_rating = self._calculate_engagement_score(
-			metrics.has_good_banter, metrics.dialogue_turns, metrics.max_monologue_words
+			metrics.has_good_banter, metrics.dialogue_turns
 		)
 		ov_score, ov_rating = self._calculate_overall_score(cl_score, co_score, ba_score, en_score)
 
@@ -140,15 +140,14 @@ class QualityScoreService:
 		self,
 		has_good_banter: bool,
 		dialogue_turns: int,
-		max_monologue: int
 	) -> tuple[float, str]:
 		"""
 		Score dialogue engagement.
 
 		- Good banter + many turns (>50): 1.0 excellent
 		- Good banter alone: 0.8 good
-		- Many turns (>30) but no good banter: 0.6 fair
-		- Otherwise: 0.4 poor
+		- Many turns (>30) but no good banter: 0.6 good
+		- Otherwise: 0.4 fair
 		"""
 		if has_good_banter and dialogue_turns > 50:
 			score = 1.0

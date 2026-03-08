@@ -11,6 +11,7 @@ from typing import Optional, Any, Dict, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +25,7 @@ from ..schemas.quality_metrics import (
 	QualityMetricsListResponse,
 	QualityScore,
 )
-from ..services.quality_score_service import QualityScoreService
+from ..services.quality_score_service import QualityScoreService, _rating_from_score
 
 router = APIRouter(prefix="/quality-metrics", tags=["quality-metrics"])
 
@@ -34,7 +35,13 @@ _score_service = QualityScoreService()
 def _build_episode_response(episode: Episode) -> EpisodeQualityMetricsResponse:
 	"""Build EpisodeQualityMetricsResponse from an Episode ORM object."""
 	raw = episode.generation_progress.get("quality_metrics", {})
-	metrics = QualityMetricsData(**raw)
+	try:
+		metrics = QualityMetricsData(**raw)
+	except ValidationError as e:
+		raise HTTPException(
+			status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+			detail=f"Invalid quality metrics data for episode {episode.id}: {e}",
+		)
 
 	quality_scores = _score_service.calculate_quality_scores(metrics)
 	interpretation = _score_service.generate_interpretation(metrics, quality_scores)
@@ -207,7 +214,6 @@ async def get_project_quality_metrics(
 		]
 		if dim_scores:
 			avg_score = sum(dim_scores) / len(dim_scores)
-			from ..services.quality_score_service import _rating_from_score
 			avg_quality_scores.append(
 				QualityScore(dimension=dim, score=round(avg_score, 4), rating=_rating_from_score(avg_score))
 			)

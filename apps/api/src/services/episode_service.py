@@ -7,6 +7,7 @@ status filtering, and generation status management. RLS ensures tenant isolation
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from uuid import UUID
 from typing import Optional
 from fastapi import HTTPException, status
@@ -47,17 +48,38 @@ async def create_episode(
 			detail="Project not found"
 		)
 
+	# Auto-assign episode_number if not provided
+	if episode_data.episode_number is None:
+		max_result = await db.execute(
+			select(func.max(Episode.episode_number)).where(
+				Episode.project_id == episode_data.project_id
+			)
+		)
+		max_number = max_result.scalar()
+		episode_number = (max_number or 0) + 1
+	else:
+		episode_number = episode_data.episode_number
+
 	episode = Episode(
 		project_id=episode_data.project_id,
 		user_id=user_id,
 		tenant_id=tenant_id,
-		episode_number=episode_data.episode_number,
+		episode_number=episode_number,
 		episode_metadata=episode_data.episode_metadata,
 		generation_status="draft",  # Initial status
 		generation_progress={}  # Empty progress initially
 	)
 	db.add(episode)
-	await db.commit()
+	try:
+		await db.commit()
+	except IntegrityError as e:
+		await db.rollback()
+		if 'uq_episodes_project_number' in str(e):
+			raise HTTPException(
+				status_code=status.HTTP_409_CONFLICT,
+				detail=f"Episode number {episode_number} already exists for this project"
+			)
+		raise
 	return episode
 
 

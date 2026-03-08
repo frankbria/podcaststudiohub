@@ -24,7 +24,7 @@ env:
   SCRIPTS_PATH: scripts/repo-maintainer
 
 jobs:
-  # ── Job 1: Circuit Breaker & PR Selection ──────────
+  # -- Job 1: Select PR --
   select-pr:
     runs-on: ubuntu-latest
     outputs:
@@ -35,14 +35,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check circuit breakers
+      - name: Check if paused
         id: breaker
         run: |
-          # Review workflow uses a lighter check than the implementation loop:
-          # only pause and budget matter, not PR count or cooldown (reviews
-          # don't create PRs and should process the backlog quickly).
-          STATE="${{ env.STATE_PATH }}"
-          PAUSED=$(jq -r '.loop.paused // false' "$STATE")
+          PAUSED=$(jq -r '.loop.paused // false' "${{ env.STATE_PATH }}")
           if [[ "$PAUSED" == "true" ]]; then
             echo "::notice::Circuit breaker: loop is paused"
             echo "should_run=false" >> $GITHUB_OUTPUT
@@ -59,11 +55,49 @@ jobs:
           bash ${{ env.SCRIPTS_PATH }}/select-review-pr.sh \
             "${{ inputs.pr_number || '' }}"
 
-  # ── Job 2: Fix Review Feedback ─────────────────────
-  fix-reviews:
+  # -- Job 2: Wait for CodeRabbit review --
+  wait-for-reviews:
     needs: select-pr
-    if: >-
-      needs.select-pr.outputs.pr_number != ''
+    if: needs.select-pr.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    outputs:
+      has_feedback: ${{ steps.check.outputs.has_feedback }}
+    steps:
+      - name: Wait for CodeRabbit and CI
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          echo "Waiting up to 10 minutes for reviews on PR #$PR..."
+
+          for i in $(seq 1 20); do
+            # Check for any review comments (CodeRabbit, humans, etc.)
+            REVIEW_COUNT=$(gh api "repos/${{ github.repository }}/pulls/${PR}/reviews" \
+              --jq 'length' 2>/dev/null || echo "0")
+            COMMENT_COUNT=$(gh api "repos/${{ github.repository }}/pulls/${PR}/comments" \
+              --jq 'length' 2>/dev/null || echo "0")
+
+            TOTAL=$((REVIEW_COUNT + COMMENT_COUNT))
+            echo "Poll $i/20: $REVIEW_COUNT reviews, $COMMENT_COUNT inline comments"
+
+            if [[ "$TOTAL" -gt 0 ]]; then
+              echo "has_feedback=true" >> $GITHUB_OUTPUT
+              echo "Reviews found after $((i * 30)) seconds"
+              exit 0
+            fi
+
+            sleep 30
+          done
+
+          # No reviews after 10 minutes — proceed anyway (CodeRabbit may not be configured)
+          echo "has_feedback=false" >> $GITHUB_OUTPUT
+          echo "::notice::No reviews received after 10 minutes — proceeding without external feedback"
+
+  # -- Job 3: Fix Review Feedback --
+  fix-reviews:
+    needs: [select-pr, wait-for-reviews]
+    if: needs.select-pr.outputs.pr_number != ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -88,10 +122,11 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          allowed_bots: "claude[bot],github-actions[bot]"
+          allowed_bots: "claude[bot],github-actions[bot],coderabbitai[bot]"
           prompt: |
             You are the Repo Maintainer agent addressing review feedback on PR #${{ needs.select-pr.outputs.pr_number }}.
-            This is review round ${{ needs.select-pr.outputs.round }} of a maximum 3 rounds.
+            This is review round ${{ needs.select-pr.outputs.round }}.
+            External review feedback available: ${{ needs.wait-for-reviews.outputs.has_feedback }}
 
             ## Step 1: Understand Context
 
@@ -107,7 +142,7 @@ jobs:
             REPO="${{ github.repository }}"
             PR=${{ needs.select-pr.outputs.pr_number }}
 
-            # Inline code review comments
+            # Inline code review comments (includes CodeRabbit)
             gh api "repos/${REPO}/pulls/${PR}/comments" \
               --jq '.[] | {id, path, line, body, user: .user.login, created_at}'
 
@@ -120,30 +155,29 @@ jobs:
               --jq '.comments[] | {body, author: .author.login, createdAt}'
             ```
 
-            ## Step 3: Categorize Feedback
+            ## Step 3: Categorize and Fix
 
             For each piece of feedback, classify as:
             - **Critical** (must fix): Security issues, bugs, broken tests, logic errors
             - **Suggestion** (evaluate): Code quality improvements, better patterns
             - **Nitpick** (skip unless trivially correct): Style preferences, naming opinions
 
-            Focus on the MOST RECENT review feedback. Ignore items that reference code
-            already changed in subsequent commits.
-
-            ## Step 4: Fix Issues
-
             For each critical item and each worthwhile suggestion:
             1. Read the specific file and surrounding code context
             2. Verify the feedback is technically correct before implementing
-            3. Make the fix with minimal scope (only change what's needed)
-            4. Commit with: `git commit -m "fix: address review — <short description>"`
+            3. Make the fix with minimal scope
+            4. Commit with: `git commit -m "fix: address review - <short description>"`
+
+            If there is no feedback to address, that's fine — skip to testing.
+
+            ## Step 4: Test
 
             After all fixes, run the test suite:
             - Python (if changed): `cd apps/api && uv run pytest`
             - TypeScript (if changed): `cd apps/web && npm test`
             - Linting: `cd apps/api && uv run ruff check .` and `cd apps/web && npm run lint`
 
-            Fix any test or lint failures introduced by your changes.
+            Fix any test or lint failures.
 
             ## Step 5: Push Changes
 
@@ -153,29 +187,24 @@ jobs:
 
             ## Step 6: Comment on PR
 
-            Post a summary comment on the PR:
+            Post a summary comment:
             ```bash
-            gh pr comment ${{ needs.select-pr.outputs.pr_number }} --body "## Review Round ${{ needs.select-pr.outputs.round }} — Feedback Addressed
+            gh pr comment ${{ needs.select-pr.outputs.pr_number }} --body "## Review Round ${{ needs.select-pr.outputs.round }} Complete
 
             ### Fixed
-            - [list each fix with file path and brief description]
+            - [list each fix]
 
             ### Acknowledged (no change needed)
-            - [list items where the current code is correct, with explanation]
-
-            ### Deferred
-            - [list items deferred to future work, with justification]
+            - [list items where current code is correct]
 
             ---
-            *Automated by repo-maintainer (review round ${{ needs.select-pr.outputs.round }}/3)*"
+            *Automated by repo-maintainer (round ${{ needs.select-pr.outputs.round }})*"
             ```
 
             ## Rules
-            - Do NOT merge the PR — merging is handled by a separate step
+            - Do NOT merge the PR
             - Do NOT modify: deployment/*, .env*, docker-compose*, .github/repo-maintainer/*
-            - Keep changes minimal — only address the specific feedback
-            - If tests fail after 2 fix attempts, document the failure in the PR comment
-            - Follow existing code patterns (tabs for indentation, PEP 8, etc.)
+            - Keep changes minimal
           claude_args: '--model sonnet --allowedTools "Bash,Read,Write,Edit,Glob,Grep" --max-turns 75'
 
       - name: Update round label
@@ -186,7 +215,6 @@ jobs:
           PR="${{ needs.select-pr.outputs.pr_number }}"
           ROUND="${{ needs.select-pr.outputs.round }}"
           gh pr edit "$PR" --add-label "review-round-${ROUND}" 2>/dev/null || true
-          gh pr edit "$PR" --remove-label "review-changes-requested" 2>/dev/null || true
 
       - name: Check post-fix status
         id: post-check
@@ -194,7 +222,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR="${{ needs.select-pr.outputs.pr_number }}"
-          # Check if Claude pushed any commits
           BRANCH=$(gh pr view "$PR" --json headRefName --jq '.headRefName')
           REMOTE_SHA=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
           LOCAL_SHA=$(git rev-parse HEAD)
@@ -204,11 +231,10 @@ jobs:
             echo "result=no-changes" >> $GITHUB_OUTPUT
           fi
 
-  # ── Job 3: Deploy and Verify on Demo VPS ───────────
+  # -- Job 4: Deploy and Verify on Demo VPS --
   deploy-and-verify:
     needs: [select-pr, fix-reviews]
-    if: >-
-      needs.fix-reviews.result == 'success'
+    if: needs.fix-reviews.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -420,12 +446,10 @@ jobs:
         if: always()
         run: rm -f ~/.ssh/demo_key
 
-  # ── Job 4: Auto-Merge (T0 only) ────────────────────
+  # -- Job 5: Auto-Merge (all tiers - CodeRabbit + CI + demo is the gate) --
   auto-merge:
     needs: [select-pr, fix-reviews, deploy-and-verify]
-    if: >-
-      needs.select-pr.outputs.tier == 'T0' &&
-      needs.deploy-and-verify.outputs.verification_passed == 'true'
+    if: needs.deploy-and-verify.outputs.verification_passed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -479,6 +503,7 @@ jobs:
         run: |
           PR="${{ needs.select-pr.outputs.pr_number }}"
           ISSUE="${{ needs.select-pr.outputs.linked_issue }}"
+          TIER="${{ needs.select-pr.outputs.tier }}"
           ROUND="${{ needs.select-pr.outputs.round }}"
 
           CLOSE_REF=""
@@ -492,52 +517,13 @@ jobs:
           ${CLOSE_REF}
 
           ---
-          *Auto-merged by repo-maintainer (T0, review round ${ROUND})*
+          *Auto-merged by repo-maintainer (${TIER}, review round ${ROUND})*
           EOF
           )"
           echo "::notice::PR #$PR auto-merged"
 
-  # ── Job 5: Notify Human (T1+) ──────────────────────
-  notify-human:
-    needs: [select-pr, fix-reviews, deploy-and-verify]
-    if: >-
-      needs.select-pr.outputs.tier != 'T0' &&
-      needs.deploy-and-verify.outputs.verification_passed == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Label and notify
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PR="${{ needs.select-pr.outputs.pr_number }}"
-          TIER="${{ needs.select-pr.outputs.tier }}"
-          ROUND="${{ needs.select-pr.outputs.round }}"
-
-          gh pr edit "$PR" --add-label "ready-to-merge"
-
-          gh pr comment "$PR" --body "$(cat <<EOF
-          ## Ready for Human Review
-
-          Review feedback addressed (round ${ROUND}/3) and demo verification **passed**.
-          This is a **${TIER}** PR — auto-merge is not enabled.
-
-          ### Next Steps
-          1. Review the latest changes
-          2. Optionally run the full demo locally:
-             \`claude -p "/completing-pr-reviews #${PR}"\`
-          3. Approve and merge when satisfied
-
-          ---
-          *Automated by repo-maintainer (${TIER})*
-          EOF
-          )"
-
-  # ── Job 6: Escalate on Failure ─────────────────────
-  escalate:
+  # -- Job 6: Refile on Failure --
+  refile:
     needs: [select-pr, fix-reviews, deploy-and-verify]
     if: >-
       always() &&
@@ -548,49 +534,91 @@ jobs:
        needs.select-pr.outputs.round == '3')
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       pull-requests: write
       issues: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Escalate to human
+      - name: Determine failure reason
+        id: reason
+        run: |
+          FIX_RESULT="${{ needs.fix-reviews.result }}"
+          VERIFY_RESULT="${{ needs.deploy-and-verify.result }}"
+          VERIFY_PASSED="${{ needs.deploy-and-verify.outputs.verification_passed }}"
+          ROUND="${{ needs.select-pr.outputs.round }}"
+
+          if [[ "$FIX_RESULT" == "failure" ]]; then
+            echo "reason=Failed to address review feedback" >> $GITHUB_OUTPUT
+          elif [[ "$VERIFY_RESULT" == "failure" ]]; then
+            echo "reason=Demo deployment or verification crashed" >> $GITHUB_OUTPUT
+          elif [[ "$VERIFY_PASSED" == "false" ]]; then
+            echo "reason=Demo verification did not pass acceptance criteria" >> $GITHUB_OUTPUT
+          elif [[ "$ROUND" == "3" ]]; then
+            echo "reason=Maximum review rounds (3) reached without resolution" >> $GITHUB_OUTPUT
+          else
+            echo "reason=Unknown failure" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Close PR and refile issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PR="${{ needs.select-pr.outputs.pr_number }}"
+          ISSUE="${{ needs.select-pr.outputs.linked_issue }}"
+          TIER="${{ needs.select-pr.outputs.tier }}"
           ROUND="${{ needs.select-pr.outputs.round }}"
-          FIX_RESULT="${{ needs.fix-reviews.result }}"
-          VERIFY_RESULT="${{ needs.deploy-and-verify.result }}"
-          VERIFY_PASSED="${{ needs.deploy-and-verify.outputs.verification_passed }}"
+          REASON="${{ steps.reason.outputs.reason }}"
 
-          # Determine reason
-          if [[ "$FIX_RESULT" == "failure" ]]; then
-            REASON="Claude Code failed to address review feedback"
-          elif [[ "$VERIFY_RESULT" == "failure" ]]; then
-            REASON="Demo deployment or verification failed"
-          elif [[ "$VERIFY_PASSED" == "false" ]]; then
-            REASON="Demo verification did not pass acceptance criteria"
-          elif [[ "$ROUND" == "3" ]]; then
-            REASON="Maximum review rounds (3) reached"
-          else
-            REASON="Unknown failure"
-          fi
-
-          gh pr edit "$PR" --add-label "maintainer-needs-human"
-
-          gh pr comment "$PR" --body "$(cat <<EOF
-          ## Automated Review Resolution Failed
+          # Close the PR
+          gh pr close "$PR" --comment "$(cat <<EOF
+          ## Auto-closed: Unable to Complete
 
           **Reason:** ${REASON}
-          **Round:** ${ROUND}/3
+          **Round:** ${ROUND}
+          **Tier:** ${TIER}
 
-          ### How to proceed
-          1. Review the remaining feedback and verification results on this PR
-          2. Fix issues manually, OR run locally:
-             \`claude -p "/completing-pr-reviews #${PR}"\`
-          3. Remove the \`maintainer-needs-human\` label when resolved
+          This PR has been closed and the linked issue refiled for retry.
+          The branch will be deleted to keep the repo clean.
 
           ---
-          *Escalated by repo-maintainer*
+          *Closed by repo-maintainer*
           EOF
           )"
+
+          # Delete the branch
+          BRANCH=$(gh pr view "$PR" --json headRefName --jq '.headRefName')
+          git push origin --delete "$BRANCH" 2>/dev/null || true
+
+          # Reopen and comment on the linked issue
+          if [[ -n "$ISSUE" && "$ISSUE" != "null" && "$ISSUE" != "" ]]; then
+            # Ensure the issue is open
+            gh issue reopen "$ISSUE" 2>/dev/null || true
+
+            # Remove plan-ready so it gets re-triaged
+            gh issue edit "$ISSUE" --remove-label "plan-ready" 2>/dev/null || true
+            gh issue edit "$ISSUE" --add-label "needs-retry" 2>/dev/null || true
+
+            # Notify the human
+            gh issue comment "$ISSUE" --body "$(cat <<EOF
+          ## @frankbria — Automated implementation failed
+
+          PR #${PR} was closed after failing to complete.
+
+          **Reason:** ${REASON}
+          **Attempts:** Round ${ROUND}
+
+          ### What happened
+          The repo-maintainer agent attempted to implement this issue but could not
+          produce a PR that passes all checks (review feedback, tests, demo verification).
+
+          ### Next steps
+          - Review the closed PR #${PR} for context on what went wrong
+          - Either re-plan this issue with simpler acceptance criteria, or
+          - Implement manually: \`claude -p "/implementing-issue-plans #${ISSUE}"\`
+
+          ---
+          *Refiled by repo-maintainer*
+          EOF
+          )"
+          fi

@@ -12,7 +12,7 @@ Score dimensions:
 - overall: Weighted average (content 20%, coherence 25%, balance 30%, engagement 25%)
 """
 
-from typing import List, Optional
+from typing import List
 from ..schemas.quality_metrics import QualityMetricsData, QualityScore, Interpretation
 
 
@@ -146,9 +146,9 @@ class QualityScoreService:
 		Score dialogue engagement.
 
 		- Good banter + many turns (>50): 1.0 excellent
-		- Good banter alone: 0.8 good
-		- Many turns (>30) but no good banter: 0.6 fair
-		- Otherwise: 0.4 poor
+		- Good banter alone: 0.8 excellent
+		- Many turns (>30) but no good banter: 0.6 good
+		- Otherwise: 0.4 fair
 		"""
 		if has_good_banter and dialogue_turns > 50:
 			score = 1.0

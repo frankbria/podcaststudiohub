@@ -20,9 +20,11 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
+from urllib.parse import urlparse
 from uuid import UUID
 
 import defusedxml.ElementTree as defused_ET
+from defusedxml.common import DefusedXmlException
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -161,6 +163,7 @@ class RSSValidationService:
 
 		result = ValidationStatusUpdate(
 			last_validated_at=now,
+			feed_last_generated=rss_feed.last_generated,
 			apple_podcasts=apple_result,
 			spotify=spotify_result,
 			google_podcasts=google_result,
@@ -239,7 +242,7 @@ class RSSValidationService:
 		"""
 		if rss_feed.public_url:
 			try:
-				async with httpx.AsyncClient(timeout=10.0) as client:
+				async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
 					response = await client.get(rss_feed.public_url)
 					response.raise_for_status()
 					return response.text
@@ -296,6 +299,8 @@ class RSSValidationService:
 		try:
 			return defused_ET.fromstring(rss_content)
 		except ET.ParseError as exc:
+			raise ET.ParseError(f"Invalid RSS XML: {exc}") from exc
+		except DefusedXmlException as exc:
 			raise ET.ParseError(f"Invalid RSS XML: {exc}") from exc
 
 	# ------------------------------------------------------------------
@@ -394,9 +399,9 @@ class RSSValidationService:
 				field="itunes:explicit",
 				level="error",
 				message="Missing required <itunes:explicit> element",
-				examples=["<itunes:explicit>false</itunes:explicit>"],
+				examples=["<itunes:explicit>no</itunes:explicit>"],
 			))
-		elif explicit_text.lower() not in {"yes", "no", "clean", "true", "false"}:
+		elif explicit_text.lower() not in {"yes", "no", "clean"}:
 			errors.append(ValidationError(
 				field="itunes:explicit",
 				level="error",
@@ -472,6 +477,19 @@ class RSSValidationService:
 					level="error",
 					message=f"Episode '{title}' enclosure missing url attribute",
 				))
+			else:
+				parsed_url = urlparse(enc_url)
+				if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+					errors.append(ValidationError(
+						field="item/enclosure/@url",
+						level="error",
+						message=(
+							f"Episode '{title}' enclosure url must be an absolute "
+							"HTTP/HTTPS URL"
+						),
+						details=f"Found: {enc_url}",
+						examples=["<enclosure url='https://example.com/ep.mp3' .../>"],
+					))
 			if enc_type not in APPLE_VALID_AUDIO_TYPES:
 				errors.append(ValidationError(
 					field="item/enclosure/@type",
@@ -805,6 +823,17 @@ class RSSValidationService:
 					level="warning",
 					message="RSS <image> element missing <url>",
 				))
+			else:
+				image_results = await self._validate_image(
+					image_url_elem.text.strip(),
+					min_dim=APPLE_MIN_IMAGE_DIM,
+					max_size_kb=APPLE_MAX_IMAGE_SIZE_KB,
+				)
+				for img_err in image_results:
+					if img_err.level == "warning":
+						warnings.append(img_err)
+					else:
+						errors.append(img_err)
 			if image_title_elem is None or image_title_elem.text != channel_title:
 				warnings.append(ValidationError(
 					field="image/title",
@@ -947,7 +976,7 @@ class RSSValidationService:
 		max_bytes = max_size_kb * 1024
 
 		try:
-			async with httpx.AsyncClient(timeout=10.0) as client:
+			async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
 				async with client.stream("GET", image_url) as response:
 					if response.status_code != 200:
 						errors.append(ValidationError(

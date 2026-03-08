@@ -84,6 +84,13 @@ class ValidationStatusUpdate(BaseModel):
 	"""
 
 	last_validated_at: datetime
+	feed_last_generated: Optional[datetime] = Field(
+		None,
+		description=(
+			"When the RSS feed was last generated. "
+			"If this is newer than last_validated_at, the stored validation is stale."
+		),
+	)
 	apple_podcasts: DirectoryValidationResult
 	spotify: DirectoryValidationResult
 	google_podcasts: DirectoryValidationResult

@@ -1,12 +1,14 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ProgressConnectionStatus } from "@/components/ProgressConnectionStatus"
+import { useProgressTracking } from "@/hooks/useProgressTracking"
 
 interface Episode {
   id: string
@@ -44,38 +46,30 @@ export default function EpisodePage() {
     }
   }, [session, params.id])
 
-  useEffect(() => {
-    if (episode?.generation_status && ["queued", "extracting", "generating", "synthesizing"].includes(episode.generation_status)) {
-      // EventSource doesn't support custom headers (W3C spec limitation).
-      // Pass JWT token as a query parameter so the backend can authenticate the SSE connection.
-      const token = (session as any)?.accessToken
-      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ""
-      const eventSource = new EventSource(
-        `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress${tokenParam}`
-      )
+  const token = (session as any)?.accessToken
+  const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ""
+  const episodeId = params.id as string
 
-      eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data)
-        setEpisode((prev) => prev ? { ...prev, generation_status: data.status, generation_progress: data.progress } : null)
-
-        if (data.progress?.progress) {
-          setProgress(data.progress.progress)
-        }
-
-        if (data.status === "complete" || data.status === "failed") {
-          eventSource.close()
-          loadEpisode() // Reload to get audio URL
-        }
-      }
-
-      eventSource.onerror = (error) => {
-        console.error("SSE connection error:", error)
-        eventSource.close()
-      }
-
-      return () => eventSource.close()
+  const handleProgressUpdate = useCallback((data: any) => {
+    setEpisode((prev) =>
+      prev ? { ...prev, generation_status: data.status, generation_progress: data.progress } : null
+    )
+    if (data.progress?.progress) {
+      setProgress(data.progress.progress)
     }
-  }, [episode?.generation_status, session])
+  }, [])
+
+  const handleProgressComplete = useCallback(() => {
+    loadEpisode()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const { connectionStatus } = useProgressTracking(episode?.generation_status, {
+    sseUrl: `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${episodeId}/progress${tokenParam}`,
+    pollUrl: `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${episodeId}/progress`,
+    authToken: token,
+    onUpdate: handleProgressUpdate,
+    onComplete: handleProgressComplete,
+  })
 
   const loadEpisode = async () => {
     try {
@@ -210,6 +204,9 @@ export default function EpisodePage() {
                   ></div>
                 </div>
                 <p className="text-sm text-gray-600 mt-1">{progress}% complete</p>
+                <div className="mt-2">
+                  <ProgressConnectionStatus status={connectionStatus} />
+                </div>
               </div>
             )}
 

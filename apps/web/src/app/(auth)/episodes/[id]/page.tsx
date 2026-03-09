@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { AudioPlayerSkeleton } from "@/components/skeletons/AudioPlayerSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
-import { FileText } from "lucide-react"
+import { FileText, Music } from "lucide-react"
 
 interface Episode {
   id: string
@@ -38,6 +38,7 @@ export default function EpisodePage() {
   const [contentUrl, setContentUrl] = useState("")
   const [textContent, setTextContent] = useState("")
   const [sourceType, setSourceType] = useState<"url" | "text">("url")
+  const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
   const [progress, setProgress] = useState(0)
 
@@ -82,6 +83,7 @@ export default function EpisodePage() {
   }, [episode?.generation_status, session])
 
   const loadEpisode = async () => {
+    setLoading(true)
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}`, {
         headers: {
@@ -190,7 +192,39 @@ export default function EpisodePage() {
     return (
       <div className="min-h-screen bg-gray-50 p-8">
         <div className="max-w-4xl mx-auto">
+          <Button
+            variant="outline"
+            onClick={() => router.back()}
+            className="mb-4"
+          >
+            ← Back to Project
+          </Button>
           <AudioPlayerSkeleton />
+        </div>
+      </div>
+    )
+  }
+
+  if (!episode) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-8">
+        <div className="max-w-4xl mx-auto">
+          <Button
+            variant="outline"
+            onClick={() => router.back()}
+            className="mb-4"
+          >
+            ← Back to Project
+          </Button>
+          <EmptyState
+            icon={<Music className="h-16 w-16" />}
+            title="Episode not found"
+            description="This episode could not be loaded. Please try again."
+            action={{
+              label: "Back to Project",
+              onClick: () => router.back(),
+            }}
+          />
         </div>
       </div>
     )

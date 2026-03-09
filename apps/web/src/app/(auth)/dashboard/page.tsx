@@ -3,13 +3,11 @@
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { projectSchema, type ProjectFormData } from "@/lib/validation"
+import { CreateProjectForm } from "@/components/forms/CreateProjectForm"
+import type { ProjectFormData } from "@/lib/validation"
 
 interface Project {
   id: string
@@ -25,17 +23,6 @@ export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isValid },
-    reset,
-  } = useForm<ProjectFormData>({
-    resolver: zodResolver(projectSchema),
-    mode: "onBlur",
-  })
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -64,40 +51,29 @@ export default function DashboardPage() {
     }
   }
 
-  const createProject = async (data: ProjectFormData) => {
-    setIsSubmitting(true)
-    try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
+  const handleCreateProject = async (data: ProjectFormData) => {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${(session as any)?.accessToken}`,
+      },
+      body: JSON.stringify({
+        title: data.title,
+        description: data.description,
+        podcast_metadata: {
+          language: "en",
+          explicit: false,
         },
-        body: JSON.stringify({
-          title: data.title,
-          description: data.description,
-          podcast_metadata: {
-            language: "en",
-            explicit: false,
-          },
-        }),
-      })
+      }),
+    })
 
-      if (response.ok) {
-        setShowCreateDialog(false)
-        reset()
-        loadProjects()
-      }
-    } catch (error) {
-      console.error("Failed to create project:", error)
-    } finally {
-      setIsSubmitting(false)
+    if (!response.ok) {
+      throw new Error("Failed to create project")
     }
-  }
 
-  const handleDialogOpenChange = (open: boolean) => {
-    setShowCreateDialog(open)
-    if (!open) reset()
+    setShowCreateDialog(false)
+    loadProjects()
   }
 
   if (loading) {
@@ -147,7 +123,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <Dialog open={showCreateDialog} onOpenChange={handleDialogOpenChange}>
+        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create New Project</DialogTitle>
@@ -155,44 +131,9 @@ export default function DashboardPage() {
                 Create a new podcast project to organize your episodes
               </DialogDescription>
             </DialogHeader>
-            <form onSubmit={handleSubmit(createProject)} className="space-y-4 mt-4">
-              <div>
-                <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-1">
-                  Project Title <span className="text-red-500">*</span>
-                </label>
-                <Input
-                  id="title"
-                  placeholder="My Podcast"
-                  aria-invalid={errors.title ? "true" : "false"}
-                  className={errors.title ? "border-red-500" : ""}
-                  {...register("title")}
-                />
-                {errors.title && (
-                  <p className="text-red-500 text-sm mt-1">{errors.title.message}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">
-                  Description
-                </label>
-                <Input
-                  id="description"
-                  placeholder="A brief description of your podcast"
-                  {...register("description")}
-                />
-                {errors.description && (
-                  <p className="text-red-500 text-sm mt-1">{errors.description.message}</p>
-                )}
-                <p className="text-gray-500 text-xs mt-1">Max 1000 characters</p>
-              </div>
-              <Button
-                type="submit"
-                disabled={isSubmitting || !isValid}
-                className="w-full"
-              >
-                {isSubmitting ? "Creating..." : "Create Project"}
-              </Button>
-            </form>
+            <div className="mt-4">
+              <CreateProjectForm onSubmit={handleCreateProject} />
+            </div>
           </DialogContent>
         </Dialog>
       </div>

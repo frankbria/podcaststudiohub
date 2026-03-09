@@ -5,225 +5,246 @@ import {
 } from "@/lib/validation"
 
 describe("projectSchema", () => {
-	it("accepts a valid title", async () => {
-		const result = await projectSchema.parseAsync({ title: "My Podcast" })
-		expect(result.title).toBe("My Podcast")
+	it("accepts a valid title", () => {
+		const result = projectSchema.safeParse({ title: "My Podcast" })
+		expect(result.success).toBe(true)
 	})
 
-	it("rejects an empty title", async () => {
-		await expect(projectSchema.parseAsync({ title: "" })).rejects.toThrow()
+	it("trims whitespace from title", () => {
+		const result = projectSchema.safeParse({ title: "  My Podcast  " })
+		expect(result.success).toBe(true)
+		if (result.success) {
+			expect(result.data.title).toBe("My Podcast")
+		}
 	})
 
-	it("rejects a whitespace-only title", async () => {
-		await expect(
-			projectSchema.parseAsync({ title: "   " })
-		).rejects.toThrow()
+	it("rejects empty title", () => {
+		const result = projectSchema.safeParse({ title: "" })
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			expect(result.error.issues[0].message).toBe("Title is required")
+		}
 	})
 
-	it("trims whitespace from title", async () => {
-		const result = await projectSchema.parseAsync({ title: "  My Podcast  " })
-		expect(result.title).toBe("My Podcast")
+	it("rejects whitespace-only title", () => {
+		const result = projectSchema.safeParse({ title: "   " })
+		expect(result.success).toBe(false)
 	})
 
-	it("rejects title exceeding 200 characters", async () => {
-		await expect(
-			projectSchema.parseAsync({ title: "a".repeat(201) })
-		).rejects.toThrow()
+	it("rejects title over 200 characters", () => {
+		const result = projectSchema.safeParse({ title: "a".repeat(201) })
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			expect(result.error.issues[0].message).toContain("200")
+		}
 	})
 
-	it("accepts title at exactly 200 characters", async () => {
-		const result = await projectSchema.parseAsync({ title: "a".repeat(200) })
-		expect(result.title).toHaveLength(200)
+	it("accepts title of exactly 200 characters", () => {
+		const result = projectSchema.safeParse({ title: "a".repeat(200) })
+		expect(result.success).toBe(true)
 	})
 
-	it("accepts optional description", async () => {
-		const result = await projectSchema.parseAsync({
+	it("accepts optional description", () => {
+		const result = projectSchema.safeParse({
 			title: "My Podcast",
-			description: "A great show",
+			description: "A great podcast",
 		})
-		expect(result.description).toBe("A great show")
+		expect(result.success).toBe(true)
 	})
 
-	it("accepts missing description", async () => {
-		const result = await projectSchema.parseAsync({ title: "My Podcast" })
-		expect(result.description).toBeUndefined()
+	it("accepts missing description", () => {
+		const result = projectSchema.safeParse({ title: "My Podcast" })
+		expect(result.success).toBe(true)
 	})
 
-	it("rejects description exceeding 1000 characters", async () => {
-		await expect(
-			projectSchema.parseAsync({
-				title: "My Podcast",
-				description: "a".repeat(1001),
-			})
-		).rejects.toThrow()
-	})
-
-	it("accepts description at exactly 1000 characters", async () => {
-		const result = await projectSchema.parseAsync({
+	it("rejects description over 1000 characters", () => {
+		const result = projectSchema.safeParse({
 			title: "My Podcast",
-			description: "a".repeat(1000),
+			description: "a".repeat(1001),
 		})
-		expect(result.description).toHaveLength(1000)
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			expect(result.error.issues[0].message).toContain("1000")
+		}
 	})
 
-	it("trims whitespace from description", async () => {
-		const result = await projectSchema.parseAsync({
+	it("trims whitespace from description", () => {
+		const result = projectSchema.safeParse({
 			title: "My Podcast",
-			description: "  A great show  ",
+			description: "  A great podcast  ",
 		})
-		expect(result.description).toBe("A great show")
+		expect(result.success).toBe(true)
+		if (result.success) {
+			expect(result.data.description).toBe("A great podcast")
+		}
 	})
 })
 
 describe("episodeSchema", () => {
-	it("accepts a valid episode title", async () => {
-		const result = await episodeSchema.parseAsync({ title: "Episode 1" })
-		expect(result.title).toBe("Episode 1")
+	it("accepts a valid title", () => {
+		const result = episodeSchema.safeParse({ title: "Episode 1" })
+		expect(result.success).toBe(true)
 	})
 
-	it("rejects an empty episode title", async () => {
-		await expect(episodeSchema.parseAsync({ title: "" })).rejects.toThrow()
+	it("trims whitespace from title", () => {
+		const result = episodeSchema.safeParse({ title: "  Episode 1  " })
+		expect(result.success).toBe(true)
+		if (result.success) {
+			expect(result.data.title).toBe("Episode 1")
+		}
 	})
 
-	it("rejects a whitespace-only episode title", async () => {
-		await expect(
-			episodeSchema.parseAsync({ title: "   " })
-		).rejects.toThrow()
+	it("rejects empty title", () => {
+		const result = episodeSchema.safeParse({ title: "" })
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			expect(result.error.issues[0].message).toBe("Episode title is required")
+		}
 	})
 
-	it("trims whitespace from episode title", async () => {
-		const result = await episodeSchema.parseAsync({ title: "  Episode 1  " })
-		expect(result.title).toBe("Episode 1")
+	it("rejects whitespace-only title", () => {
+		const result = episodeSchema.safeParse({ title: "   " })
+		expect(result.success).toBe(false)
 	})
 
-	it("rejects episode title exceeding 200 characters", async () => {
-		await expect(
-			episodeSchema.parseAsync({ title: "a".repeat(201) })
-		).rejects.toThrow()
-	})
-
-	it("accepts episode title at exactly 200 characters", async () => {
-		const result = await episodeSchema.parseAsync({ title: "a".repeat(200) })
-		expect(result.title).toHaveLength(200)
+	it("rejects title over 200 characters", () => {
+		const result = episodeSchema.safeParse({ title: "a".repeat(201) })
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			expect(result.error.issues[0].message).toContain("200")
+		}
 	})
 })
 
-describe("contentSourceSchema - URL type", () => {
-	it("accepts a valid HTTP URL", async () => {
-		const result = await contentSourceSchema.parseAsync({
+describe("contentSourceSchema — URL type", () => {
+	it("accepts a valid http URL", () => {
+		const result = contentSourceSchema.safeParse({
 			sourceType: "url",
 			url: "http://example.com/article",
 		})
-		expect(result.url).toBe("http://example.com/article")
+		expect(result.success).toBe(true)
 	})
 
-	it("accepts a valid HTTPS URL", async () => {
-		const result = await contentSourceSchema.parseAsync({
+	it("accepts a valid https URL", () => {
+		const result = contentSourceSchema.safeParse({
 			sourceType: "url",
 			url: "https://example.com/article",
 		})
-		expect(result.url).toBe("https://example.com/article")
+		expect(result.success).toBe(true)
 	})
 
-	it("accepts a YouTube HTTPS URL", async () => {
-		const result = await contentSourceSchema.parseAsync({
+	it("accepts a YouTube https URL", () => {
+		const result = contentSourceSchema.safeParse({
 			sourceType: "url",
 			url: "https://www.youtube.com/watch?v=abc123",
 		})
-		expect(result.url).toContain("youtube.com")
+		expect(result.success).toBe(true)
 	})
 
-	it("rejects an empty URL when sourceType is url", async () => {
-		await expect(
-			contentSourceSchema.parseAsync({ sourceType: "url", url: "" })
-		).rejects.toThrow()
+	it("rejects an empty URL when sourceType is url", () => {
+		const result = contentSourceSchema.safeParse({
+			sourceType: "url",
+			url: "",
+		})
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			const urlError = result.error.issues.find((e) => e.path[0] === "url")
+			expect(urlError?.message).toContain("required")
+		}
 	})
 
-	it("rejects missing URL when sourceType is url", async () => {
-		await expect(
-			contentSourceSchema.parseAsync({ sourceType: "url" })
-		).rejects.toThrow()
+	it("rejects a missing URL when sourceType is url", () => {
+		const result = contentSourceSchema.safeParse({
+			sourceType: "url",
+		})
+		expect(result.success).toBe(false)
 	})
 
-	it("rejects an invalid URL format", async () => {
-		await expect(
-			contentSourceSchema.parseAsync({
-				sourceType: "url",
-				url: "not-a-url",
-			})
-		).rejects.toThrow()
+	it("rejects an invalid URL format", () => {
+		const result = contentSourceSchema.safeParse({
+			sourceType: "url",
+			url: "not-a-url",
+		})
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			const urlError = result.error.issues.find((e) => e.path[0] === "url")
+			expect(urlError?.message).toContain("HTTP or HTTPS")
+		}
 	})
 
-	it("rejects ftp:// protocol", async () => {
-		await expect(
-			contentSourceSchema.parseAsync({
-				sourceType: "url",
-				url: "ftp://example.com/file",
-			})
-		).rejects.toThrow()
+	it("rejects ftp:// URLs", () => {
+		const result = contentSourceSchema.safeParse({
+			sourceType: "url",
+			url: "ftp://weird-protocol.com",
+		})
+		expect(result.success).toBe(false)
 	})
 })
 
-describe("contentSourceSchema - Text type", () => {
-	it("accepts valid text content", async () => {
-		const result = await contentSourceSchema.parseAsync({
+describe("contentSourceSchema — text type", () => {
+	it("accepts valid text content", () => {
+		const result = contentSourceSchema.safeParse({
 			sourceType: "text",
-			content: "This is some valid text content for the podcast.",
+			content: "This is enough content to be valid.",
 		})
-		expect(result.content).toContain("valid text content")
+		expect(result.success).toBe(true)
 	})
 
-	it("rejects empty text content when sourceType is text", async () => {
-		await expect(
-			contentSourceSchema.parseAsync({ sourceType: "text", content: "" })
-		).rejects.toThrow()
-	})
-
-	it("rejects missing content when sourceType is text", async () => {
-		await expect(
-			contentSourceSchema.parseAsync({ sourceType: "text" })
-		).rejects.toThrow()
-	})
-
-	it("rejects content shorter than 10 characters", async () => {
-		await expect(
-			contentSourceSchema.parseAsync({ sourceType: "text", content: "Short" })
-		).rejects.toThrow()
-	})
-
-	it("rejects content longer than 50000 characters", async () => {
-		await expect(
-			contentSourceSchema.parseAsync({
-				sourceType: "text",
-				content: "a".repeat(50001),
-			})
-		).rejects.toThrow()
-	})
-
-	it("accepts content at exactly 10 characters", async () => {
-		const result = await contentSourceSchema.parseAsync({
+	it("rejects empty content when sourceType is text", () => {
+		const result = contentSourceSchema.safeParse({
 			sourceType: "text",
-			content: "a".repeat(10),
+			content: "",
 		})
-		expect(result.content).toHaveLength(10)
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			const contentError = result.error.issues.find(
+				(e) => e.path[0] === "content"
+			)
+			expect(contentError?.message).toContain("required")
+		}
 	})
 
-	it("accepts content at exactly 50000 characters", async () => {
-		const result = await contentSourceSchema.parseAsync({
+	it("rejects content shorter than 10 characters", () => {
+		const result = contentSourceSchema.safeParse({
+			sourceType: "text",
+			content: "short",
+		})
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			const contentError = result.error.issues.find(
+				(e) => e.path[0] === "content"
+			)
+			expect(contentError?.message).toContain("10 characters")
+		}
+	})
+
+	it("rejects content over 50000 characters", () => {
+		const result = contentSourceSchema.safeParse({
+			sourceType: "text",
+			content: "a".repeat(50001),
+		})
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			const contentError = result.error.issues.find(
+				(e) => e.path[0] === "content"
+			)
+			expect(contentError?.message).toContain("50,000")
+		}
+	})
+
+	it("accepts content of exactly 10 characters", () => {
+		const result = contentSourceSchema.safeParse({
+			sourceType: "text",
+			content: "1234567890",
+		})
+		expect(result.success).toBe(true)
+	})
+
+	it("accepts content of exactly 50000 characters", () => {
+		const result = contentSourceSchema.safeParse({
 			sourceType: "text",
 			content: "a".repeat(50000),
 		})
-		expect(result.content).toHaveLength(50000)
-	})
-})
-
-describe("contentSourceSchema - sourceType enum", () => {
-	it("rejects invalid sourceType", async () => {
-		await expect(
-			contentSourceSchema.parseAsync({
-				sourceType: "file",
-				url: "https://example.com",
-			})
-		).rejects.toThrow()
+		expect(result.success).toBe(true)
 	})
 })

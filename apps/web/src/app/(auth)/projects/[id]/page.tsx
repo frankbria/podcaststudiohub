@@ -3,13 +3,11 @@
 import { useState, useEffect } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { Input } from "@/components/ui/input"
-import { episodeSchema, type EpisodeFormData } from "@/lib/validation"
+import { CreateEpisodeForm } from "@/components/forms/CreateEpisodeForm"
+import type { EpisodeFormData } from "@/lib/validation"
 
 interface Episode {
   id: string
@@ -33,17 +31,6 @@ export default function ProjectPage() {
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-
-  const {
-    register,
-    handleSubmit,
-    formState: { errors, isValid },
-    reset,
-  } = useForm<EpisodeFormData>({
-    resolver: zodResolver(episodeSchema),
-    mode: "onBlur",
-  })
 
   useEffect(() => {
     if (session) {
@@ -88,38 +75,26 @@ export default function ProjectPage() {
     }
   }
 
-  const createEpisode = async (data: EpisodeFormData) => {
-    setIsSubmitting(true)
-    try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
-        body: JSON.stringify({
-          project_id: params.id,
-          title: data.title,
-        }),
-      })
+  const handleCreateEpisode = async (data: EpisodeFormData) => {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${(session as any)?.accessToken}`,
+      },
+      body: JSON.stringify({
+        project_id: params.id,
+        title: data.title,
+      }),
+    })
 
-      if (response.ok) {
-        const episode = await response.json()
-        setShowCreateDialog(false)
-        reset()
-        // Navigate to episode page to add content and generate
-        router.push(`/episodes/${episode.id}`)
-      }
-    } catch (error) {
-      console.error("Failed to create episode:", error)
-    } finally {
-      setIsSubmitting(false)
+    if (!response.ok) {
+      throw new Error("Failed to create episode")
     }
-  }
 
-  const handleDialogOpenChange = (open: boolean) => {
-    setShowCreateDialog(open)
-    if (!open) reset()
+    const episode = await response.json()
+    setShowCreateDialog(false)
+    router.push(`/episodes/${episode.id}`)
   }
 
   const getStatusBadge = (status: string) => {
@@ -192,7 +167,7 @@ export default function ProjectPage() {
           )}
         </div>
 
-        <Dialog open={showCreateDialog} onOpenChange={handleDialogOpenChange}>
+        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create New Episode</DialogTitle>
@@ -200,30 +175,9 @@ export default function ProjectPage() {
                 Create a new podcast episode
               </DialogDescription>
             </DialogHeader>
-            <form onSubmit={handleSubmit(createEpisode)} className="space-y-4 mt-4">
-              <div>
-                <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-1">
-                  Episode Title <span className="text-red-500">*</span>
-                </label>
-                <Input
-                  id="title"
-                  placeholder="Episode 1: Introduction"
-                  aria-invalid={errors.title ? "true" : "false"}
-                  className={errors.title ? "border-red-500" : ""}
-                  {...register("title")}
-                />
-                {errors.title && (
-                  <p className="text-red-500 text-sm mt-1">{errors.title.message}</p>
-                )}
-              </div>
-              <Button
-                type="submit"
-                disabled={isSubmitting || !isValid}
-                className="w-full"
-              >
-                {isSubmitting ? "Creating..." : "Create Episode"}
-              </Button>
-            </form>
+            <div className="mt-4">
+              <CreateEpisodeForm onSubmit={handleCreateEpisode} />
+            </div>
           </DialogContent>
         </Dialog>
       </div>

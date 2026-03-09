@@ -1,5 +1,6 @@
 import { z } from "zod"
 
+// Project validation
 export const projectSchema = z.object({
 	title: z
 		.string()
@@ -16,6 +17,7 @@ export const projectSchema = z.object({
 
 export type ProjectFormData = z.infer<typeof projectSchema>
 
+// Episode validation
 export const episodeSchema = z.object({
 	title: z
 		.string()
@@ -27,63 +29,60 @@ export const episodeSchema = z.object({
 
 export type EpisodeFormData = z.infer<typeof episodeSchema>
 
+// URL validation helper
+function isValidUrl(val: string): boolean {
+	try {
+		const url = new URL(val)
+		return url.protocol === "http:" || url.protocol === "https:"
+	} catch {
+		return false
+	}
+}
+
+// Content source validation
 export const contentSourceSchema = z
 	.object({
-		sourceType: z.enum(["url", "text"], {
-			errorMap: () => ({ message: "Select URL or Text" }),
-		}),
-		url: z
-			.string()
-			.optional()
-			.refine(
-				(val) => {
-					if (!val || val === "") return true
-					try {
-						const url = new URL(val)
-						return url.protocol === "http:" || url.protocol === "https:"
-					} catch {
-						return false
-					}
-				},
-				{ message: "URL must be HTTP or HTTPS" }
-			),
-		content: z
-			.string()
-			.optional()
-			.refine(
-				(val) => {
-					if (val === undefined || val === "") return true
-					return val.length >= 10
-				},
-				{ message: "Content must be at least 10 characters" }
-			)
-			.refine(
-				(val) => {
-					if (val === undefined || val === "") return true
-					return val.length <= 50000
-				},
-				{ message: "Content must be under 50,000 characters" }
-			),
+		sourceType: z.enum(["url", "text"]),
+		url: z.string().optional(),
+		content: z.string().optional(),
 	})
 	.superRefine((data, ctx) => {
 		if (data.sourceType === "url") {
-			if (!data.url || data.url === "") {
+			if (!data.url || data.url.trim() === "") {
 				ctx.addIssue({
 					code: z.ZodIssueCode.custom,
 					message: "URL is required",
 					path: ["url"],
 				})
+			} else if (!isValidUrl(data.url.trim())) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: "URL must be HTTP or HTTPS",
+					path: ["url"],
+				})
 			}
 		}
 		if (data.sourceType === "text") {
-			if (!data.content || data.content === "") {
+			if (!data.content || data.content.trim() === "") {
 				ctx.addIssue({
 					code: z.ZodIssueCode.custom,
 					message: "Content is required",
+					path: ["content"],
+				})
+			} else if (data.content.trim().length < 10) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: "Content must be at least 10 characters",
+					path: ["content"],
+				})
+			} else if (data.content.trim().length > 50000) {
+				ctx.addIssue({
+					code: z.ZodIssueCode.custom,
+					message: "Content must be under 50,000 characters",
 					path: ["content"],
 				})
 			}
 		}
 	})
 
-export type ContentSourceFormData = z.infer<typeof contentSourceSchema>
+export type ContentSourceData = z.infer<typeof contentSourceSchema>

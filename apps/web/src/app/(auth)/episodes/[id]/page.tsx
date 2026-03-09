@@ -3,13 +3,11 @@
 import { useState, useEffect } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
-import { useForm } from "react-hook-form"
-import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { contentSourceSchema, type ContentSourceFormData } from "@/lib/validation"
+import { AddContentSourceForm } from "@/components/forms/AddContentSourceForm"
+import type { ContentSourceData } from "@/lib/validation"
 
 interface Episode {
   id: string
@@ -34,26 +32,8 @@ export default function EpisodePage() {
   const [episode, setEpisode] = useState<Episode | null>(null)
   const [contentSources, setContentSources] = useState<ContentSource[]>([])
   const [showAddContentDialog, setShowAddContentDialog] = useState(false)
-  const [isSubmittingContent, setIsSubmittingContent] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [progress, setProgress] = useState(0)
-
-  const {
-    register,
-    handleSubmit,
-    watch,
-    setValue,
-    formState: { errors, isValid },
-    reset: resetContentForm,
-  } = useForm<ContentSourceFormData>({
-    resolver: zodResolver(contentSourceSchema),
-    mode: "onBlur",
-    defaultValues: {
-      sourceType: "url",
-    },
-  })
-
-  const sourceType = watch("sourceType")
 
   useEffect(() => {
     if (session) {
@@ -129,45 +109,34 @@ export default function EpisodePage() {
     }
   }
 
-  const addContentSource = async (data: ContentSourceFormData) => {
-    setIsSubmittingContent(true)
-    try {
-      const body = data.sourceType === "url"
-        ? {
-            episode_id: params.id,
-            source_type: "url",
-            source_data: { url: data.url, title: "Web Article" },
-          }
-        : {
-            episode_id: params.id,
-            source_type: "text",
-            source_data: { content: data.content, title: "Custom Text" },
-          }
+  const handleAddContentSource = async (data: ContentSourceData) => {
+    const body = data.sourceType === "url"
+      ? {
+          episode_id: params.id,
+          source_type: "url",
+          source_data: { url: data.url, title: "Web Article" },
+        }
+      : {
+          episode_id: params.id,
+          source_type: "text",
+          source_data: { content: data.content, title: "Custom Text" },
+        }
 
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/content/episodes/${params.id}/content`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
-        body: JSON.stringify(body),
-      })
+    const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/content/episodes/${params.id}/content`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${(session as any)?.accessToken}`,
+      },
+      body: JSON.stringify(body),
+    })
 
-      if (response.ok) {
-        setShowAddContentDialog(false)
-        resetContentForm()
-        loadContentSources()
-      }
-    } catch (error) {
-      console.error("Failed to add content source:", error)
-    } finally {
-      setIsSubmittingContent(false)
+    if (!response.ok) {
+      throw new Error("Failed to add content source")
     }
-  }
 
-  const handleContentDialogOpenChange = (open: boolean) => {
-    setShowAddContentDialog(open)
-    if (!open) resetContentForm()
+    setShowAddContentDialog(false)
+    loadContentSources()
   }
 
   const generatePodcast = async () => {
@@ -289,75 +258,15 @@ export default function EpisodePage() {
           {generating ? "Starting Generation..." : "Generate Podcast"}
         </Button>
 
-        <Dialog open={showAddContentDialog} onOpenChange={handleContentDialogOpenChange}>
+        <Dialog open={showAddContentDialog} onOpenChange={setShowAddContentDialog}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Add Content Source</DialogTitle>
               <DialogDescription>Add content to generate your podcast from</DialogDescription>
             </DialogHeader>
-            <form onSubmit={handleSubmit(addContentSource)} className="space-y-4 mt-4">
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant={sourceType === "url" ? "default" : "outline"}
-                  onClick={() => setValue("sourceType", "url", { shouldValidate: true })}
-                >
-                  URL
-                </Button>
-                <Button
-                  type="button"
-                  variant={sourceType === "text" ? "default" : "outline"}
-                  onClick={() => setValue("sourceType", "text", { shouldValidate: true })}
-                >
-                  Text
-                </Button>
-              </div>
-
-              {sourceType === "url" ? (
-                <div>
-                  <label htmlFor="url" className="block text-sm font-medium text-gray-700 mb-1">
-                    URL <span className="text-red-500">*</span>
-                  </label>
-                  <Input
-                    id="url"
-                    type="url"
-                    placeholder="https://example.com/article"
-                    aria-invalid={errors.url ? "true" : "false"}
-                    className={errors.url ? "border-red-500" : ""}
-                    {...register("url")}
-                  />
-                  {errors.url && (
-                    <p className="text-red-500 text-sm mt-1">{errors.url.message}</p>
-                  )}
-                  <p className="text-gray-500 text-xs mt-1">Supports HTTP and HTTPS URLs</p>
-                </div>
-              ) : (
-                <div>
-                  <label htmlFor="content" className="block text-sm font-medium text-gray-700 mb-1">
-                    Text Content <span className="text-red-500">*</span>
-                  </label>
-                  <textarea
-                    id="content"
-                    className={`w-full h-32 p-2 border rounded ${errors.content ? "border-red-500" : ""}`}
-                    placeholder="Enter your content here..."
-                    aria-invalid={errors.content ? "true" : "false"}
-                    {...register("content")}
-                  />
-                  {errors.content && (
-                    <p className="text-red-500 text-sm mt-1">{errors.content.message}</p>
-                  )}
-                  <p className="text-gray-500 text-xs mt-1">10 - 50,000 characters</p>
-                </div>
-              )}
-
-              <Button
-                type="submit"
-                disabled={isSubmittingContent || !isValid}
-                className="w-full"
-              >
-                {isSubmittingContent ? "Adding..." : "Add Content"}
-              </Button>
-            </form>
+            <div className="mt-4">
+              <AddContentSourceForm onSubmit={handleAddContentSource} />
+            </div>
           </DialogContent>
         </Dialog>
       </div>

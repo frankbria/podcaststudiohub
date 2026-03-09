@@ -10,7 +10,7 @@ describe('DashboardSkeleton', () => {
 
   it('announces loading state to screen readers', () => {
     render(<DashboardSkeleton />)
-    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+    expect(screen.getByLabelText('Loading projects')).toBeInTheDocument()
   })
 
   it('renders 6 card skeletons', () => {

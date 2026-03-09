@@ -10,7 +10,7 @@ describe('EpisodeListSkeleton', () => {
 
   it('announces loading state to screen readers', () => {
     render(<EpisodeListSkeleton />)
-    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+    expect(screen.getByLabelText('Loading episodes')).toBeInTheDocument()
   })
 
   it('renders 4 episode skeleton rows', () => {

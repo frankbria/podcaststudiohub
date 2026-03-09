@@ -4,7 +4,8 @@ export function EpisodeListSkeleton() {
   return (
     <div
       className="space-y-4"
-      aria-label="Loading"
+      role="status"
+      aria-label="Loading episodes"
       data-testid="episode-list-skeleton"
     >
       {Array.from({ length: 4 }).map((_, i) => (

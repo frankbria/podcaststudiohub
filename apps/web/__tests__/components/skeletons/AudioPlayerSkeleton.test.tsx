@@ -10,7 +10,7 @@ describe('AudioPlayerSkeleton', () => {
 
   it('announces loading state to screen readers', () => {
     render(<AudioPlayerSkeleton />)
-    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+    expect(screen.getByLabelText('Loading audio player')).toBeInTheDocument()
   })
 
   it('applies animate-pulse to skeleton elements', () => {

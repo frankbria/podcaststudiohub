@@ -6,7 +6,8 @@ export function DashboardSkeleton() {
   return (
     <div
       className="min-h-screen bg-gray-50 p-8"
-      aria-label="Loading"
+      role="status"
+      aria-label="Loading projects"
       data-testid="dashboard-skeleton"
     >
       <div className="max-w-6xl mx-auto">

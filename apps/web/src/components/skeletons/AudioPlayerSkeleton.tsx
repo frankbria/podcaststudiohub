@@ -4,7 +4,8 @@ export function AudioPlayerSkeleton() {
   return (
     <div
       className="space-y-4"
-      aria-label="Loading"
+      role="status"
+      aria-label="Loading audio player"
       data-testid="audio-player-skeleton"
     >
       <div className="bg-gray-100 rounded p-4" aria-hidden="true">

@@ -240,6 +240,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      issues: write
     outputs:
       verification_passed: ${{ steps.verdict.outputs.passed }}
 
@@ -308,6 +309,61 @@ jobs:
           CELERY_BROKER_URL: redis://localhost:6379/0
           CELERY_RESULT_BACKEND: redis://localhost:6379/0
         run: uv run pytest tests/ -v
+
+      - name: Check backend coverage
+        if: always() && steps.backend-tests.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COV_XML="apps/api/coverage/backend/coverage.xml"
+          if [ ! -f "$COV_XML" ]; then
+            echo "No coverage report found — skipping check"
+            exit 0
+          fi
+
+          COVERAGE=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('$COV_XML')
+          rate = float(tree.getroot().attrib.get('line-rate', 0))
+          print(f'{rate * 100:.1f}')
+          ")
+          echo "Backend coverage: ${COVERAGE}%"
+
+          THRESHOLD=80
+          if python3 -c "exit(0 if float('$COVERAGE') < $THRESHOLD else 1)"; then
+            echo "Coverage ${COVERAGE}% is below ${THRESHOLD}% — filing issue"
+
+            TITLE="coverage: backend at ${COVERAGE}% (below ${THRESHOLD}% target)"
+            EXISTING=$(gh issue list --search "$TITLE" --state open --json number --jq 'length')
+            if [[ "$EXISTING" -gt 0 ]]; then
+              echo "Issue already exists — skipping"
+              exit 0
+            fi
+
+            gh issue create \
+              --title "$TITLE" \
+              --label "priority-p2,tech-debt" \
+              --body "$(cat <<EOF
+          ## Backend test coverage has dropped below ${THRESHOLD}%
+
+          **Current coverage:** ${COVERAGE}%
+          **Target:** ${THRESHOLD}%
+          **Detected in:** PR #${{ needs.select-pr.outputs.pr_number }}
+
+          ### Action needed
+          Add tests to bring coverage back above ${THRESHOLD}%. Focus on files with
+          the lowest coverage first — check the coverage report artifact for details.
+
+          ### Coverage report
+          Run locally: \`cd apps/api && uv run pytest tests/ --cov-report=term-missing\`
+
+          ---
+          *Filed automatically by repo-maintainer*
+          EOF
+          )"
+          else
+            echo "Coverage ${COVERAGE}% meets ${THRESHOLD}% threshold"
+          fi
 
       - name: Run frontend tests
         id: frontend-tests

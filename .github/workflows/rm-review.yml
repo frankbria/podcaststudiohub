@@ -231,182 +231,177 @@ jobs:
             echo "result=no-changes" >> $GITHUB_OUTPUT
           fi
 
-  # -- Job 4: Deploy and Verify on Demo VPS --
-  deploy-and-verify:
+  # -- Job 4: Verify in CI --
+  verify:
     needs: [select-pr, fix-reviews]
     if: needs.fix-reviews.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
     outputs:
-      verification_passed: ${{ steps.parse-results.outputs.passed }}
+      verification_passed: ${{ steps.verdict.outputs.passed }}
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: podcastfy
+          POSTGRES_PASSWORD: podcastfy_password
+          POSTGRES_DB: podcastfy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Configure SSH
+      - name: Checkout PR branch
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.DEMO_VPS_SSH_KEY }}
-          SSH_HOST: ${{ vars.DEMO_VPS_HOST }}
-        run: |
-          mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/demo_key
-          chmod 600 ~/.ssh/demo_key
-          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr checkout ${{ needs.select-pr.outputs.pr_number }}
 
-      - name: Deploy PR branch to demo VPS
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install API dependencies and migrate
+        working-directory: apps/api
         env:
-          SSH_HOST: ${{ vars.DEMO_VPS_HOST }}
-          SSH_USER: ${{ secrets.DEMO_VPS_USER }}
-          DEMO_PATH: ${{ vars.DEMO_VPS_PATH }}
-          PR_NUMBER: ${{ needs.select-pr.outputs.pr_number }}
+          DATABASE_URL: postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy
+          ENCRYPTION_KEY: test-encryption-key-for-ci-0000
+          JWT_SECRET_KEY: test-jwt-secret-for-ci
         run: |
-          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" << DEPLOY_EOF
-            set -euo pipefail
-            export NVM_DIR="\$HOME/.nvm"
-            [ -s "\$NVM_DIR/nvm.sh" ] && . "\$NVM_DIR/nvm.sh"
-            export PATH="\$HOME/.cargo/bin:\$PATH"
+          uv sync
+          uv run alembic upgrade head
 
-            cd "$DEMO_PATH"
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
 
-            # Fetch latest and checkout PR branch
-            git fetch origin
-            gh pr checkout "$PR_NUMBER" --force
-
-            # Install API dependencies
-            cd apps/api
-            uv sync
-            uv run alembic upgrade head 2>/dev/null || echo "Migration warning (non-fatal)"
-            cd ../..
-
-            # Install frontend dependencies and build
-            cd apps/web
-            npm ci
-            npm run build 2>/dev/null || echo "Build warning (non-fatal)"
-            cd ../..
-
-            # Link .env.demo so the API app picks up config via Pydantic Settings
-            DEMO_ENV="\$(dirname "$DEMO_PATH")/.env.demo"
-            if [ -f "\$DEMO_ENV" ]; then
-              ln -sf "\$DEMO_ENV" apps/api/.env
-              echo "Linked \$DEMO_ENV -> apps/api/.env"
-            else
-              echo "WARNING: \$DEMO_ENV not found — API may fail to start"
-            fi
-
-            # Start demo services (clean slate)
-            pm2 delete demo-api demo-web demo-celery 2>/dev/null || true
-
-            pm2 start uv --name demo-api --cwd "$DEMO_PATH/apps/api" \
-              -- run uvicorn src.main:app --host 0.0.0.0 --port 8200
-
-            PORT=3200 NEXT_PUBLIC_API_URL=http://localhost:8200 \
-              pm2 start npm --name demo-web --cwd "$DEMO_PATH/apps/web" -- start
-
-            pm2 start uv --name demo-celery --cwd "$DEMO_PATH/apps/api" \
-              -- run celery -A src.worker:celery_app worker --loglevel=info
-
-            # Wait for services to start
-            sleep 10
-
-            # Health checks
-            API_STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8200/health 2>/dev/null || echo "000")
-            WEB_STATUS=\$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3200 2>/dev/null || echo "000")
-            echo "API status: \$API_STATUS, Web status: \$WEB_STATUS"
-
-            if [[ "\$API_STATUS" != "200" ]]; then
-              echo "WARNING: API health check returned \$API_STATUS"
-            fi
-          DEPLOY_EOF
-
-      - name: Run Claude Code verification on demo VPS
+      - name: Run backend tests
+        id: backend-tests
+        working-directory: apps/api
         env:
-          SSH_HOST: ${{ vars.DEMO_VPS_HOST }}
-          SSH_USER: ${{ secrets.DEMO_VPS_USER }}
-          DEMO_PATH: ${{ vars.DEMO_VPS_PATH }}
-          PR_NUMBER: ${{ needs.select-pr.outputs.pr_number }}
-          LINKED_ISSUE: ${{ needs.select-pr.outputs.linked_issue }}
+          DATABASE_URL: postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy
+          SECRET_KEY: test-secret-key-for-ci
+          ENCRYPTION_KEY: test-encryption-key-for-ci-0000
+          JWT_SECRET_KEY: test-jwt-secret-for-ci
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+        run: uv run pytest tests/ -v
+
+      - name: Run frontend tests
+        id: frontend-tests
+        working-directory: apps/web
+        run: npm test -- --passWithNoTests --watchAll=false
+
+      - name: Build frontend
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8200
+        run: npm run build
+
+      - name: Start API server
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy
+          SECRET_KEY: test-secret-key-for-ci
+          ENCRYPTION_KEY: test-encryption-key-for-ci-0000
+          JWT_SECRET_KEY: test-jwt-secret-for-ci
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
         run: |
-          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" << VERIFY_EOF
-            set -euo pipefail
-            export NVM_DIR="\$HOME/.nvm"
-            [ -s "\$NVM_DIR/nvm.sh" ] && . "\$NVM_DIR/nvm.sh"
-            export PATH="\$HOME/.cargo/bin:\$PATH"
-
-            RESULTS_FILE="/tmp/verification-results.json"
-
-            claude -p "You are verifying PR #${PR_NUMBER} for the podcaststudiohub project.
-            The linked issue is #${LINKED_ISSUE:-none}.
-
-            ## Instructions
-
-            1. Read the linked issue to understand acceptance criteria:
-               gh issue view ${LINKED_ISSUE:-0}
-
-            2. The services are running at:
-               - API: http://localhost:8200
-               - Web: http://localhost:3200
-
-            3. For each acceptance criterion from the issue:
-               - Test it using curl for API endpoints
-               - Use agent-browser for UI verification if applicable
-               - Record PASS or FAIL with brief evidence
-
-            4. Also run a basic smoke test:
-               - API health: curl http://localhost:8200/health
-               - Frontend loads: curl -s http://localhost:3200 | head -20
-               - No console errors in frontend
-
-            5. Write your results as JSON to \$RESULTS_FILE:
-               {
-                 \"pr\": ${PR_NUMBER},
-                 \"criteria\": [
-                   {\"name\": \"criterion description\", \"status\": \"pass\", \"evidence\": \"brief evidence\"},
-                   ...
-                 ],
-                 \"smoke_test\": {\"api_health\": true, \"frontend_loads\": true},
-                 \"overall\": \"pass\"
-               }
-
-            Set overall to 'fail' if ANY criterion fails or smoke test fails.
-            " --model sonnet --max-turns 50 2>/dev/null || true
-
-            # Output results
-            if [ -f "\$RESULTS_FILE" ]; then
-              cat "\$RESULTS_FILE"
-            else
-              echo '{"pr": 0, "criteria": [], "smoke_test": {"api_health": false, "frontend_loads": false}, "overall": "fail", "error": "No results file generated"}'
+          uv run uvicorn src.main:app --host 0.0.0.0 --port 8200 &
+          echo "Waiting for API..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8200/health > /dev/null 2>&1; then
+              echo "API ready after ${i}s"
+              break
             fi
-          VERIFY_EOF
-          # Save results locally
-          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" \
-            "cat /tmp/verification-results.json 2>/dev/null || echo '{\"overall\":\"fail\"}'" \
-            > /tmp/verification-results.json
+            sleep 1
+          done
 
-      - name: Cleanup demo VPS
+      - name: Start frontend server
+        working-directory: apps/web
+        env:
+          PORT: 3200
+          NEXT_PUBLIC_API_URL: http://localhost:8200
+        run: |
+          npm start &
+          echo "Waiting for frontend..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3200 > /dev/null 2>&1; then
+              echo "Frontend ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Health checks
+        id: health
+        run: |
+          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8200/health)
+          WEB_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3200)
+          echo "API: $API_STATUS, Frontend: $WEB_STATUS"
+          if [[ "$API_STATUS" != "200" || "$WEB_STATUS" != "200" ]]; then
+            echo "passed=false" >> $GITHUB_OUTPUT
+            echo "::error::Health checks failed — API: $API_STATUS, Frontend: $WEB_STATUS"
+            exit 1
+          fi
+          echo "passed=true" >> $GITHUB_OUTPUT
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E tests
+        id: e2e-tests
+        env:
+          BASE_URL: http://localhost:3200
+          E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
+          E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+        run: npx playwright test --project=chromium
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
         if: always()
-        env:
-          SSH_HOST: ${{ vars.DEMO_VPS_HOST }}
-          SSH_USER: ${{ secrets.DEMO_VPS_USER }}
-          DEMO_PATH: ${{ vars.DEMO_VPS_PATH }}
-        run: |
-          ssh -i ~/.ssh/demo_key "$SSH_USER@$SSH_HOST" << CLEANUP_EOF || true
-            pm2 delete demo-api demo-web demo-celery 2>/dev/null || true
-            cd "$DEMO_PATH" && git checkout main && git clean -fd 2>/dev/null || true
-          CLEANUP_EOF
+        with:
+          name: verification-playwright-report
+          path: playwright-report/
+          retention-days: 7
 
-      - name: Parse verification results
-        id: parse-results
+      - name: Determine verdict
+        id: verdict
+        if: always()
         run: |
-          if [ -f /tmp/verification-results.json ]; then
-            OVERALL=$(jq -r '.overall // "fail"' /tmp/verification-results.json)
-            echo "Verification result: $OVERALL"
-            cat /tmp/verification-results.json | jq .
-            if [[ "$OVERALL" == "pass" ]]; then
-              echo "passed=true" >> $GITHUB_OUTPUT
-            else
-              echo "passed=false" >> $GITHUB_OUTPUT
-            fi
+          BACKEND="${{ steps.backend-tests.outcome }}"
+          FRONTEND="${{ steps.frontend-tests.outcome }}"
+          HEALTH="${{ steps.health.outcome }}"
+          E2E="${{ steps.e2e-tests.outcome }}"
+
+          echo "Backend: $BACKEND, Frontend: $FRONTEND, Health: $HEALTH, E2E: $E2E"
+
+          if [[ "$BACKEND" == "success" && "$FRONTEND" == "success" && "$HEALTH" == "success" && "$E2E" == "success" ]]; then
+            echo "passed=true" >> $GITHUB_OUTPUT
           else
-            echo "No verification results found"
             echo "passed=false" >> $GITHUB_OUTPUT
           fi
 
@@ -416,40 +411,37 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ needs.select-pr.outputs.pr_number }}
         run: |
-          PASSED="${{ steps.parse-results.outputs.passed }}"
-          if [ -f /tmp/verification-results.json ]; then
-            CRITERIA=$(jq -r '.criteria[] | "- **\(.name)**: \(.status) — \(.evidence)"' /tmp/verification-results.json 2>/dev/null || echo "- No criteria tested")
-            SMOKE=$(jq -r '"API: \(.smoke_test.api_health), Frontend: \(.smoke_test.frontend_loads)"' /tmp/verification-results.json 2>/dev/null || echo "Unknown")
-          else
-            CRITERIA="- Verification did not produce results"
-            SMOKE="Unknown"
-          fi
+          PASSED="${{ steps.verdict.outputs.passed }}"
+          BACKEND="${{ steps.backend-tests.outcome }}"
+          FRONTEND="${{ steps.frontend-tests.outcome }}"
+          HEALTH="${{ steps.health.outcome }}"
+          E2E="${{ steps.e2e-tests.outcome }}"
 
           if [[ "$PASSED" == "true" ]]; then
-            ICON="Passed"
+            TITLE="## Verification: Passed"
           else
-            ICON="Failed"
+            TITLE="## Verification: Failed"
           fi
 
-          gh pr comment "$PR_NUMBER" --body "## Demo Verification: ${ICON}
+          gh pr comment "$PR_NUMBER" --body "$(cat <<EOF
+          ${TITLE}
 
-          ### Acceptance Criteria
-          ${CRITERIA}
-
-          ### Smoke Test
-          ${SMOKE}
+          | Check | Result |
+          |-------|--------|
+          | Backend tests | ${BACKEND} |
+          | Frontend tests | ${FRONTEND} |
+          | Health checks | ${HEALTH} |
+          | E2E tests (Playwright) | ${E2E} |
 
           ---
-          *Verified on demo VPS by repo-maintainer*"
+          *Verified in CI by repo-maintainer*
+          EOF
+          )"
 
-      - name: Cleanup SSH
-        if: always()
-        run: rm -f ~/.ssh/demo_key
-
-  # -- Job 5: Auto-Merge (all tiers - CodeRabbit + CI + demo is the gate) --
+  # -- Job 5: Auto-Merge (all tiers - CodeRabbit + CI + verification is the gate) --
   auto-merge:
-    needs: [select-pr, fix-reviews, deploy-and-verify]
-    if: needs.deploy-and-verify.outputs.verification_passed == 'true'
+    needs: [select-pr, fix-reviews, verify]
+    if: needs.verify.outputs.verification_passed == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -524,13 +516,13 @@ jobs:
 
   # -- Job 6: Refile on Failure --
   refile:
-    needs: [select-pr, fix-reviews, deploy-and-verify]
+    needs: [select-pr, fix-reviews, verify]
     if: >-
       always() &&
       needs.select-pr.outputs.pr_number != '' &&
       (needs.fix-reviews.result == 'failure' ||
-       needs.deploy-and-verify.result == 'failure' ||
-       needs.deploy-and-verify.outputs.verification_passed == 'false' ||
+       needs.verify.result == 'failure' ||
+       needs.verify.outputs.verification_passed == 'false' ||
        needs.select-pr.outputs.round == '3')
     runs-on: ubuntu-latest
     permissions:
@@ -544,16 +536,16 @@ jobs:
         id: reason
         run: |
           FIX_RESULT="${{ needs.fix-reviews.result }}"
-          VERIFY_RESULT="${{ needs.deploy-and-verify.result }}"
-          VERIFY_PASSED="${{ needs.deploy-and-verify.outputs.verification_passed }}"
+          VERIFY_RESULT="${{ needs.verify.result }}"
+          VERIFY_PASSED="${{ needs.verify.outputs.verification_passed }}"
           ROUND="${{ needs.select-pr.outputs.round }}"
 
           if [[ "$FIX_RESULT" == "failure" ]]; then
             echo "reason=Failed to address review feedback" >> $GITHUB_OUTPUT
           elif [[ "$VERIFY_RESULT" == "failure" ]]; then
-            echo "reason=Demo deployment or verification crashed" >> $GITHUB_OUTPUT
+            echo "reason=CI verification failed (tests, health checks, or E2E)" >> $GITHUB_OUTPUT
           elif [[ "$VERIFY_PASSED" == "false" ]]; then
-            echo "reason=Demo verification did not pass acceptance criteria" >> $GITHUB_OUTPUT
+            echo "reason=CI verification did not pass all checks" >> $GITHUB_OUTPUT
           elif [[ "$ROUND" == "3" ]]; then
             echo "reason=Maximum review rounds (3) reached without resolution" >> $GITHUB_OUTPUT
           else
@@ -610,7 +602,7 @@ jobs:
 
           ### What happened
           The repo-maintainer agent attempted to implement this issue but could not
-          produce a PR that passes all checks (review feedback, tests, demo verification).
+          produce a PR that passes all checks (review feedback, tests, CI verification).
 
           ### Next steps
           - Review the closed PR #${PR} for context on what went wrong

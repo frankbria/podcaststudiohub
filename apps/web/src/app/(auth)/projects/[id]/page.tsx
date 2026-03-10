@@ -7,6 +7,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
+import { EditProjectDialog } from "@/components/dialogs/EditProjectDialog"
+import { EditEpisodeDialog } from "@/components/dialogs/EditEpisodeDialog"
 
 interface Episode {
   id: string
@@ -20,6 +23,8 @@ interface Project {
   id: string
   title: string
   description: string | null
+  episode_count: number
+  created_at: string
 }
 
 export default function ProjectPage() {
@@ -31,6 +36,18 @@ export default function ProjectPage() {
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newEpisodeTitle, setNewEpisodeTitle] = useState("")
+
+  // Project edit/delete state
+  const [showEditProject, setShowEditProject] = useState(false)
+  const [editProjectLoading, setEditProjectLoading] = useState(false)
+  const [showDeleteProject, setShowDeleteProject] = useState(false)
+  const [deleteProjectLoading, setDeleteProjectLoading] = useState(false)
+
+  // Episode edit/delete state
+  const [editEpisode, setEditEpisode] = useState<Episode | null>(null)
+  const [editEpisodeLoading, setEditEpisodeLoading] = useState(false)
+  const [deleteEpisode, setDeleteEpisode] = useState<Episode | null>(null)
+  const [deleteEpisodeLoading, setDeleteEpisodeLoading] = useState(false)
 
   useEffect(() => {
     if (session) {
@@ -101,6 +118,113 @@ export default function ProjectPage() {
     }
   }
 
+  const handleUpdateProject = async (data: { title: string; description: string }) => {
+    if (!project) return
+    setEditProjectLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/projects/${project.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+          body: JSON.stringify(data),
+        }
+      )
+
+      if (response.ok) {
+        const updated = await response.json()
+        setProject((prev) => prev ? { ...prev, ...updated } : prev)
+        setShowEditProject(false)
+      }
+    } catch (error) {
+      console.error("Failed to update project:", error)
+    } finally {
+      setEditProjectLoading(false)
+    }
+  }
+
+  const handleDeleteProject = async () => {
+    if (!project) return
+    setDeleteProjectLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/projects/${project.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+        }
+      )
+
+      if (response.ok) {
+        router.push("/dashboard")
+      }
+    } catch (error) {
+      console.error("Failed to delete project:", error)
+    } finally {
+      setDeleteProjectLoading(false)
+    }
+  }
+
+  const handleUpdateEpisode = async (data: { title: string; description: string }) => {
+    if (!editEpisode) return
+    setEditEpisodeLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/${editEpisode.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+          body: JSON.stringify(data),
+        }
+      )
+
+      if (response.ok) {
+        const updated = await response.json()
+        setEpisodes((prev) =>
+          prev.map((e) => (e.id === editEpisode.id ? { ...e, ...updated } : e))
+        )
+        setEditEpisode(null)
+      }
+    } catch (error) {
+      console.error("Failed to update episode:", error)
+    } finally {
+      setEditEpisodeLoading(false)
+    }
+  }
+
+  const handleDeleteEpisode = async () => {
+    if (!deleteEpisode) return
+    setDeleteEpisodeLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/${deleteEpisode.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+        }
+      )
+
+      if (response.ok) {
+        setEpisodes((prev) => prev.filter((e) => e.id !== deleteEpisode.id))
+        setDeleteEpisode(null)
+      }
+    } catch (error) {
+      console.error("Failed to delete episode:", error)
+    } finally {
+      setDeleteEpisodeLoading(false)
+    }
+  }
+
   const getStatusBadge = (status: string) => {
     const colors = {
       draft: "bg-gray-200 text-gray-800",
@@ -135,9 +259,21 @@ export default function ProjectPage() {
             <h1 className="text-3xl font-bold">{project?.title}</h1>
             <p className="text-gray-600 mt-1">{project?.description}</p>
           </div>
-          <Button onClick={() => setShowCreateDialog(true)}>
-            Create Episode
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setShowEditProject(true)}>
+              Edit Project
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setShowDeleteProject(true)}
+              className="text-red-600 hover:text-red-700 border-red-300 hover:border-red-400"
+            >
+              Delete Project
+            </Button>
+            <Button onClick={() => setShowCreateDialog(true)}>
+              Create Episode
+            </Button>
+          </div>
         </div>
 
         <div className="space-y-4">
@@ -149,11 +285,32 @@ export default function ProjectPage() {
             >
               <CardHeader>
                 <div className="flex justify-between items-start">
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <CardTitle>{episode.title}</CardTitle>
                     <CardDescription>{episode.description || "No description"}</CardDescription>
                   </div>
-                  {getStatusBadge(episode.generation_status)}
+                  <div className="flex items-center gap-2 ml-2 shrink-0">
+                    {getStatusBadge(episode.generation_status)}
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label="Edit episode"
+                        onClick={() => setEditEpisode(episode)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label="Delete episode"
+                        onClick={() => setDeleteEpisode(episode)}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </CardHeader>
             </Card>
@@ -196,6 +353,54 @@ export default function ProjectPage() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {project && (
+          <EditProjectDialog
+            open={showEditProject}
+            onOpenChange={setShowEditProject}
+            project={project}
+            onUpdate={(updated) => setProject(updated)}
+            onSave={handleUpdateProject}
+            isLoading={editProjectLoading}
+          />
+        )}
+
+        {project && (
+          <ConfirmDeleteDialog
+            open={showDeleteProject}
+            onOpenChange={setShowDeleteProject}
+            title="Delete Project?"
+            description="This will permanently remove the project and all its episodes."
+            entityName={project.title}
+            isLoading={deleteProjectLoading}
+            onConfirm={handleDeleteProject}
+          />
+        )}
+
+        {editEpisode && (
+          <EditEpisodeDialog
+            open={!!editEpisode}
+            onOpenChange={(open) => { if (!open) setEditEpisode(null) }}
+            episode={editEpisode}
+            onUpdate={(updated) =>
+              setEpisodes((prev) => prev.map((e) => (e.id === updated.id ? updated : e)))
+            }
+            onSave={handleUpdateEpisode}
+            isLoading={editEpisodeLoading}
+          />
+        )}
+
+        {deleteEpisode && (
+          <ConfirmDeleteDialog
+            open={!!deleteEpisode}
+            onOpenChange={(open) => { if (!open) setDeleteEpisode(null) }}
+            title="Delete Episode?"
+            description="This will permanently remove the episode."
+            entityName={deleteEpisode.title}
+            isLoading={deleteEpisodeLoading}
+            onConfirm={handleDeleteEpisode}
+          />
+        )}
       </div>
     </div>
   )

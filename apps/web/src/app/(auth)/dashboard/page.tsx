@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
+import { EditProjectDialog } from "@/components/dialogs/EditProjectDialog"
 
 interface Project {
   id: string
@@ -24,6 +26,14 @@ export default function DashboardPage() {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newProjectTitle, setNewProjectTitle] = useState("")
   const [newProjectDescription, setNewProjectDescription] = useState("")
+
+  // Edit state
+  const [editProject, setEditProject] = useState<Project | null>(null)
+  const [editLoading, setEditLoading] = useState(false)
+
+  // Delete state
+  const [deleteProject, setDeleteProject] = useState<Project | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -81,6 +91,61 @@ export default function DashboardPage() {
     }
   }
 
+  const handleUpdateProject = async (data: { title: string; description: string }) => {
+    if (!editProject) return
+    setEditLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/projects/${editProject.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+          body: JSON.stringify(data),
+        }
+      )
+
+      if (response.ok) {
+        const updated = await response.json()
+        setProjects((prev) =>
+          prev.map((p) => (p.id === editProject.id ? { ...p, ...updated } : p))
+        )
+        setEditProject(null)
+      }
+    } catch (error) {
+      console.error("Failed to update project:", error)
+    } finally {
+      setEditLoading(false)
+    }
+  }
+
+  const handleDeleteProject = async () => {
+    if (!deleteProject) return
+    setDeleteLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/projects/${deleteProject.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+        }
+      )
+
+      if (response.ok) {
+        setProjects((prev) => prev.filter((p) => p.id !== deleteProject.id))
+        setDeleteProject(null)
+      }
+    } catch (error) {
+      console.error("Failed to delete project:", error)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
   if (loading) {
     return <div className="p-8">Loading...</div>
   }
@@ -103,10 +168,33 @@ export default function DashboardPage() {
               onClick={() => router.push(`/projects/${project.id}`)}
             >
               <CardHeader>
-                <CardTitle>{project.title}</CardTitle>
-                <CardDescription>
-                  {project.description || "No description"}
-                </CardDescription>
+                <div className="flex justify-between items-start">
+                  <div className="flex-1 min-w-0">
+                    <CardTitle className="truncate">{project.title}</CardTitle>
+                    <CardDescription>
+                      {project.description || "No description"}
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-1 ml-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Edit project"
+                      onClick={() => setEditProject(project)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Delete project"
+                      onClick={() => setDeleteProject(project)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-gray-600">
@@ -163,6 +251,31 @@ export default function DashboardPage() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {editProject && (
+          <EditProjectDialog
+            open={!!editProject}
+            onOpenChange={(open) => { if (!open) setEditProject(null) }}
+            project={editProject}
+            onUpdate={(updated) =>
+              setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
+            }
+            onSave={handleUpdateProject}
+            isLoading={editLoading}
+          />
+        )}
+
+        {deleteProject && (
+          <ConfirmDeleteDialog
+            open={!!deleteProject}
+            onOpenChange={(open) => { if (!open) setDeleteProject(null) }}
+            title="Delete Project?"
+            description="This will permanently remove the project and all its episodes."
+            entityName={deleteProject.title}
+            isLoading={deleteLoading}
+            onConfirm={handleDeleteProject}
+          />
+        )}
       </div>
     </div>
   )

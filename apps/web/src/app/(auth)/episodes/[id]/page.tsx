@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
+import { EditEpisodeDialog } from "@/components/dialogs/EditEpisodeDialog"
 
 interface Episode {
   id: string
@@ -36,6 +38,14 @@ export default function EpisodePage() {
   const [sourceType, setSourceType] = useState<"url" | "text">("url")
   const [generating, setGenerating] = useState(false)
   const [progress, setProgress] = useState(0)
+
+  // Episode edit state
+  const [showEditEpisode, setShowEditEpisode] = useState(false)
+  const [editEpisodeLoading, setEditEpisodeLoading] = useState(false)
+
+  // Content source delete state
+  const [deleteContentSource, setDeleteContentSource] = useState<ContentSource | null>(null)
+  const [deleteContentLoading, setDeleteContentLoading] = useState(false)
 
   useEffect(() => {
     if (session) {
@@ -145,6 +155,58 @@ export default function EpisodePage() {
     }
   }
 
+  const handleUpdateEpisode = async (data: { title: string; description: string }) => {
+    setEditEpisodeLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+          body: JSON.stringify(data),
+        }
+      )
+
+      if (response.ok) {
+        const updated = await response.json()
+        setEpisode((prev) => prev ? { ...prev, ...updated } : prev)
+        setShowEditEpisode(false)
+      }
+    } catch (error) {
+      console.error("Failed to update episode:", error)
+    } finally {
+      setEditEpisodeLoading(false)
+    }
+  }
+
+  const handleDeleteContentSource = async () => {
+    if (!deleteContentSource) return
+    setDeleteContentLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/content/${deleteContentSource.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+        }
+      )
+
+      if (response.ok) {
+        setContentSources((prev) => prev.filter((s) => s.id !== deleteContentSource.id))
+        setDeleteContentSource(null)
+      }
+    } catch (error) {
+      console.error("Failed to delete content source:", error)
+    } finally {
+      setDeleteContentLoading(false)
+    }
+  }
+
   const generatePodcast = async () => {
     setGenerating(true)
     try {
@@ -178,6 +240,12 @@ export default function EpisodePage() {
     return colors[status as keyof typeof colors] || colors.draft
   }
 
+  const getContentSourceLabel = (source: ContentSource): string => {
+    if (source.source_type === "url") return source.source_data?.url || "URL"
+    if (source.source_type === "text") return source.source_data?.title || "Text"
+    return source.source_type
+  }
+
   const canGenerate = contentSources.length > 0 && episode?.generation_status === "draft"
 
   return (
@@ -193,12 +261,23 @@ export default function EpisodePage() {
 
         <Card className="mb-6">
           <CardHeader>
-            <CardTitle>{episode?.title}</CardTitle>
-            <CardDescription>
-              Status: <span className={getStatusColor(episode?.generation_status || "draft")}>
-                {episode?.generation_status || "draft"}
-              </span>
-            </CardDescription>
+            <div className="flex justify-between items-start">
+              <div>
+                <CardTitle>{episode?.title}</CardTitle>
+                <CardDescription>
+                  Status: <span className={getStatusColor(episode?.generation_status || "draft")}>
+                    {episode?.generation_status || "draft"}
+                  </span>
+                </CardDescription>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowEditEpisode(true)}
+              >
+                Edit Episode
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             {episode?.generation_status && ["queued", "extracting", "generating", "synthesizing"].includes(episode.generation_status) && (
@@ -239,15 +318,24 @@ export default function EpisodePage() {
               <ul className="space-y-2">
                 {contentSources.map((source) => (
                   <li key={source.id} className="flex items-center justify-between p-3 bg-gray-100 rounded">
-                    <div>
+                    <div className="flex-1 min-w-0">
                       <span className="font-medium">{source.source_type}</span>
                       {source.source_type === "url" && (
-                        <p className="text-sm text-gray-600">{source.source_data.url}</p>
+                        <p className="text-sm text-gray-600 truncate">{source.source_data.url}</p>
                       )}
                       {source.source_type === "text" && (
                         <p className="text-sm text-gray-600">{source.source_data.content?.substring(0, 100)}...</p>
                       )}
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Delete content source"
+                      onClick={() => setDeleteContentSource(source)}
+                      className="ml-2 text-red-600 hover:text-red-700 hover:bg-red-50 shrink-0"
+                    >
+                      Delete
+                    </Button>
                   </li>
                 ))}
               </ul>
@@ -317,6 +405,32 @@ export default function EpisodePage() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {episode && (
+          <EditEpisodeDialog
+            open={showEditEpisode}
+            onOpenChange={setShowEditEpisode}
+            episode={{
+              ...episode,
+              created_at: episode.generation_status,
+            }}
+            onUpdate={(updated) => setEpisode((prev) => prev ? { ...prev, ...updated } : prev)}
+            onSave={handleUpdateEpisode}
+            isLoading={editEpisodeLoading}
+          />
+        )}
+
+        {deleteContentSource && (
+          <ConfirmDeleteDialog
+            open={!!deleteContentSource}
+            onOpenChange={(open) => { if (!open) setDeleteContentSource(null) }}
+            title="Delete Content Source?"
+            description="This will permanently remove this content source from the episode."
+            entityName={getContentSourceLabel(deleteContentSource)}
+            isLoading={deleteContentLoading}
+            onConfirm={handleDeleteContentSource}
+          />
+        )}
       </div>
     </div>
   )

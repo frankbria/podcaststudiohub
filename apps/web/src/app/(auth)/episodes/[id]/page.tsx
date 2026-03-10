@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
 
 interface Episode {
   id: string
@@ -36,6 +37,10 @@ export default function EpisodePage() {
   const [sourceType, setSourceType] = useState<"url" | "text">("url")
   const [generating, setGenerating] = useState(false)
   const [progress, setProgress] = useState(0)
+
+  // Delete content source state
+  const [deletingSource, setDeletingSource] = useState<ContentSource | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
 
   useEffect(() => {
     if (session) {
@@ -145,6 +150,29 @@ export default function EpisodePage() {
     }
   }
 
+  const handleDeleteContentSource = async () => {
+    if (!deletingSource) return
+    setDeleteLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/content/${deletingSource.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+        }
+      )
+      if (!response.ok) {
+        throw new Error("Delete request failed")
+      }
+      setContentSources((prev) => prev.filter((s) => s.id !== deletingSource.id))
+      setDeletingSource(null)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
   const generatePodcast = async () => {
     setGenerating(true)
     try {
@@ -176,6 +204,12 @@ export default function EpisodePage() {
       failed: "text-red-600",
     }
     return colors[status as keyof typeof colors] || colors.draft
+  }
+
+  const getContentSourceLabel = (source: ContentSource): string => {
+    if (source.source_type === "url") return source.source_data?.url || "URL"
+    if (source.source_type === "text") return source.source_data?.content?.substring(0, 60) || "Text"
+    return source.source_type
   }
 
   const canGenerate = contentSources.length > 0 && episode?.generation_status === "draft"
@@ -239,15 +273,24 @@ export default function EpisodePage() {
               <ul className="space-y-2">
                 {contentSources.map((source) => (
                   <li key={source.id} className="flex items-center justify-between p-3 bg-gray-100 rounded">
-                    <div>
+                    <div className="flex-1 min-w-0">
                       <span className="font-medium">{source.source_type}</span>
                       {source.source_type === "url" && (
-                        <p className="text-sm text-gray-600">{source.source_data.url}</p>
+                        <p className="text-sm text-gray-600 truncate">{source.source_data.url}</p>
                       )}
                       {source.source_type === "text" && (
-                        <p className="text-sm text-gray-600">{source.source_data.content?.substring(0, 100)}...</p>
+                        <p className="text-sm text-gray-600 truncate">{source.source_data.content?.substring(0, 100)}...</p>
                       )}
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Delete content source: ${getContentSourceLabel(source)}`}
+                      className="ml-2 shrink-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                      onClick={() => setDeletingSource(source)}
+                    >
+                      Delete
+                    </Button>
                   </li>
                 ))}
               </ul>
@@ -317,6 +360,18 @@ export default function EpisodePage() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {deletingSource && (
+          <ConfirmDeleteDialog
+            open={!!deletingSource}
+            onOpenChange={(open) => { if (!open) setDeletingSource(null) }}
+            title="Delete Content Source?"
+            description="This will permanently remove this content source from the episode. This action cannot be undone."
+            entityName={getContentSourceLabel(deletingSource)}
+            isLoading={deleteLoading}
+            onConfirm={handleDeleteContentSource}
+          />
+        )}
       </div>
     </div>
   )

@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
+import { EditEpisodeDialog, EditableEpisode } from "@/components/dialogs/EditEpisodeDialog"
 
 interface Episode {
   id: string
@@ -14,6 +16,7 @@ interface Episode {
   description: string | null
   generation_status: string
   created_at: string
+  project_id: string
 }
 
 interface Project {
@@ -31,6 +34,13 @@ export default function ProjectPage() {
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newEpisodeTitle, setNewEpisodeTitle] = useState("")
+
+  // Edit state
+  const [editingEpisode, setEditingEpisode] = useState<Episode | null>(null)
+
+  // Delete state
+  const [deletingEpisode, setDeletingEpisode] = useState<Episode | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
 
   useEffect(() => {
     if (session) {
@@ -101,6 +111,38 @@ export default function ProjectPage() {
     }
   }
 
+  const handleDeleteEpisode = async () => {
+    if (!deletingEpisode) return
+    setDeleteLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/${deletingEpisode.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+        }
+      )
+      if (!response.ok) {
+        throw new Error("Delete request failed")
+      }
+      setEpisodes((prev) => prev.filter((e) => e.id !== deletingEpisode.id))
+      setDeletingEpisode(null)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
+  const handleEpisodeUpdated = (updated: EditableEpisode) => {
+    setEpisodes((prev) =>
+      prev.map((e) =>
+        e.id === updated.id ? { ...e, title: updated.title, description: updated.description } : e
+      )
+    )
+    setEditingEpisode(null)
+  }
+
   const getStatusBadge = (status: string) => {
     const colors = {
       draft: "bg-gray-200 text-gray-800",
@@ -149,11 +191,35 @@ export default function ProjectPage() {
             >
               <CardHeader>
                 <div className="flex justify-between items-start">
-                  <div>
+                  <div className="flex-1 min-w-0">
                     <CardTitle>{episode.title}</CardTitle>
                     <CardDescription>{episode.description || "No description"}</CardDescription>
                   </div>
-                  {getStatusBadge(episode.generation_status)}
+                  <div className="flex items-center gap-2 ml-2 shrink-0">
+                    {getStatusBadge(episode.generation_status)}
+                    <div
+                      className="flex gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label="Edit episode"
+                        onClick={() => setEditingEpisode(episode)}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label="Delete episode"
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                        onClick={() => setDeletingEpisode(episode)}
+                      >
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </CardHeader>
             </Card>
@@ -196,6 +262,28 @@ export default function ProjectPage() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {editingEpisode && (
+          <EditEpisodeDialog
+            open={!!editingEpisode}
+            onOpenChange={(open) => { if (!open) setEditingEpisode(null) }}
+            episode={editingEpisode}
+            onUpdate={handleEpisodeUpdated}
+            token={(session as any)?.accessToken ?? ""}
+          />
+        )}
+
+        {deletingEpisode && (
+          <ConfirmDeleteDialog
+            open={!!deletingEpisode}
+            onOpenChange={(open) => { if (!open) setDeletingEpisode(null) }}
+            title="Delete Episode?"
+            description="This will permanently delete the episode and all its content sources. This action cannot be undone."
+            entityName={deletingEpisode.title}
+            isLoading={deleteLoading}
+            onConfirm={handleDeleteEpisode}
+          />
+        )}
       </div>
     </div>
   )

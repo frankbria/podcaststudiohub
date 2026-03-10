@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
+import { EditProjectDialog, EditableProject } from "@/components/dialogs/EditProjectDialog"
 
 interface Project {
   id: string
@@ -24,6 +26,13 @@ export default function DashboardPage() {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newProjectTitle, setNewProjectTitle] = useState("")
   const [newProjectDescription, setNewProjectDescription] = useState("")
+
+  // Edit state
+  const [editingProject, setEditingProject] = useState<Project | null>(null)
+
+  // Delete state
+  const [deletingProject, setDeletingProject] = useState<Project | null>(null)
+  const [deleteLoading, setDeleteLoading] = useState(false)
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -81,6 +90,38 @@ export default function DashboardPage() {
     }
   }
 
+  const handleDeleteProject = async () => {
+    if (!deletingProject) return
+    setDeleteLoading(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/projects/${deletingProject.id}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${(session as any)?.accessToken}`,
+          },
+        }
+      )
+      if (!response.ok) {
+        throw new Error("Delete request failed")
+      }
+      setProjects((prev) => prev.filter((p) => p.id !== deletingProject.id))
+      setDeletingProject(null)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
+  const handleProjectUpdated = (updated: EditableProject) => {
+    setProjects((prev) =>
+      prev.map((p) =>
+        p.id === updated.id ? { ...p, title: updated.title, description: updated.description } : p
+      )
+    )
+    setEditingProject(null)
+  }
+
   if (loading) {
     return <div className="p-8">Loading...</div>
   }
@@ -103,10 +144,36 @@ export default function DashboardPage() {
               onClick={() => router.push(`/projects/${project.id}`)}
             >
               <CardHeader>
-                <CardTitle>{project.title}</CardTitle>
-                <CardDescription>
-                  {project.description || "No description"}
-                </CardDescription>
+                <div className="flex justify-between items-start">
+                  <div className="flex-1 min-w-0">
+                    <CardTitle className="truncate">{project.title}</CardTitle>
+                    <CardDescription>
+                      {project.description || "No description"}
+                    </CardDescription>
+                  </div>
+                  <div
+                    className="flex gap-1 ml-2 shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Edit project"
+                      onClick={() => setEditingProject(project)}
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Delete project"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      onClick={() => setDeletingProject(project)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
                 <p className="text-sm text-gray-600">
@@ -163,6 +230,28 @@ export default function DashboardPage() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {editingProject && (
+          <EditProjectDialog
+            open={!!editingProject}
+            onOpenChange={(open) => { if (!open) setEditingProject(null) }}
+            project={editingProject}
+            onUpdate={handleProjectUpdated}
+            token={(session as any)?.accessToken ?? ""}
+          />
+        )}
+
+        {deletingProject && (
+          <ConfirmDeleteDialog
+            open={!!deletingProject}
+            onOpenChange={(open) => { if (!open) setDeletingProject(null) }}
+            title="Delete Project?"
+            description="This will permanently delete the project and all its episodes. This action cannot be undone."
+            entityName={deletingProject.title}
+            isLoading={deleteLoading}
+            onConfirm={handleDeleteProject}
+          />
+        )}
       </div>
     </div>
   )

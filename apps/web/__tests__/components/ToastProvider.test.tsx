@@ -1,56 +1,56 @@
-import { render } from "@testing-library/react"
-import * as React from "react"
-import { ToastProvider } from "@/components/providers/toast-provider"
+import { render, screen } from '@testing-library/react'
+import * as React from 'react'
+import { ToastProvider } from '@/components/providers/toast-provider'
 
-// Mock sonner Toaster component
-jest.mock("sonner", () => ({
-  Toaster: jest.fn(({ position, richColors, closeButton, visibleToasts, expand }: any) => (
+// Mock sonner's Toaster component
+jest.mock('sonner', () => ({
+  Toaster: ({ position, richColors, theme, expand, visibleToasts, closeButton }: any) => (
     <div
       data-testid="sonner-toaster"
       data-position={position}
       data-rich-colors={String(richColors)}
-      data-close-button={String(closeButton)}
-      data-visible-toasts={visibleToasts}
+      data-theme={theme}
       data-expand={String(expand)}
+      data-visible-toasts={visibleToasts}
+      data-close-button={String(closeButton)}
     />
-  )),
+  ),
+  toast: {
+    success: jest.fn(),
+    error: jest.fn(),
+    loading: jest.fn(),
+    dismiss: jest.fn(),
+  },
 }))
 
-describe("ToastProvider", () => {
-  it("renders the Toaster component", () => {
-    const { getByTestId } = render(<ToastProvider />)
-    expect(getByTestId("sonner-toaster")).toBeInTheDocument()
+describe('ToastProvider', () => {
+  it('renders the Toaster component', () => {
+    render(<ToastProvider />)
+    expect(screen.getByTestId('sonner-toaster')).toBeInTheDocument()
   })
 
-  it("renders Toaster with top-right position", () => {
-    const { getByTestId } = render(<ToastProvider />)
-    expect(getByTestId("sonner-toaster")).toHaveAttribute(
-      "data-position",
-      "top-right"
-    )
+  it('configures Toaster with top-right position', () => {
+    render(<ToastProvider />)
+    expect(screen.getByTestId('sonner-toaster')).toHaveAttribute('data-position', 'top-right')
   })
 
-  it("renders Toaster with richColors enabled", () => {
-    const { getByTestId } = render(<ToastProvider />)
-    expect(getByTestId("sonner-toaster")).toHaveAttribute(
-      "data-rich-colors",
-      "true"
-    )
+  it('configures Toaster with richColors enabled', () => {
+    render(<ToastProvider />)
+    expect(screen.getByTestId('sonner-toaster')).toHaveAttribute('data-rich-colors', 'true')
   })
 
-  it("renders Toaster with closeButton enabled", () => {
-    const { getByTestId } = render(<ToastProvider />)
-    expect(getByTestId("sonner-toaster")).toHaveAttribute(
-      "data-close-button",
-      "true"
-    )
+  it('configures Toaster with light theme', () => {
+    render(<ToastProvider />)
+    expect(screen.getByTestId('sonner-toaster')).toHaveAttribute('data-theme', 'light')
   })
 
-  it("renders Toaster with visibleToasts=3", () => {
-    const { getByTestId } = render(<ToastProvider />)
-    expect(getByTestId("sonner-toaster")).toHaveAttribute(
-      "data-visible-toasts",
-      "3"
-    )
+  it('configures Toaster with visibleToasts 3', () => {
+    render(<ToastProvider />)
+    expect(screen.getByTestId('sonner-toaster')).toHaveAttribute('data-visible-toasts', '3')
+  })
+
+  it('configures Toaster with closeButton enabled', () => {
+    render(<ToastProvider />)
+    expect(screen.getByTestId('sonner-toaster')).toHaveAttribute('data-close-button', 'true')
   })
 })

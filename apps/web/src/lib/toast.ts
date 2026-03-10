@@ -1,8 +1,3 @@
-/**
- * Toast utility functions for user feedback notifications.
- * Wraps sonner toast library with convenience helpers.
- */
-
 import { toast } from "sonner"
 
 export const showSuccessToast = (message: string) => {
@@ -21,45 +16,17 @@ export const dismissToast = (toastId: string | number) => {
   toast.dismiss(toastId)
 }
 
-/**
- * Wraps an async operation with automatic loading/success/error toasts.
- * Returns the result on success, or null on failure.
- */
-export const executeWithToast = async <T,>(
-  operation: () => Promise<T>,
-  successMessage: string,
-  errorMessage?: string
-): Promise<T | null> => {
-  const loadingToastId = toast.loading("Loading...")
-
-  try {
-    const result = await operation()
-    toast.dismiss(loadingToastId)
-    toast.success(successMessage)
-    return result
-  } catch (error) {
-    toast.dismiss(loadingToastId)
-    const message = errorMessage || "Something went wrong"
-    toast.error(message)
-    console.error(message, error)
-    return null
-  }
+interface ResponseLike {
+  status: number
+  statusText: string
 }
 
-/**
- * Checks if an unknown value looks like a fetch Response object.
- */
-const isResponseLike = (
-  error: unknown
-): error is { status: number; statusText: string } =>
-  typeof error === "object" &&
+const isResponseLike = (error: unknown): error is ResponseLike =>
   error !== null &&
+  typeof error === "object" &&
   "status" in error &&
   "statusText" in error
 
-/**
- * Extracts a human-readable error message from various error types.
- */
 export const extractErrorMessage = (error: unknown): string => {
   if (isResponseLike(error)) {
     if (error.status === 400) return "Invalid request. Please check your input."

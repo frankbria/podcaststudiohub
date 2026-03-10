@@ -64,20 +64,20 @@ export default function EpisodePage() {
         }
 
         if (data.status === "complete") {
-          showSuccessToast("Podcast generation complete!")
           eventSource.close()
+          showSuccessToast("Podcast generation complete")
           loadEpisode() // Reload to get audio URL
         } else if (data.status === "failed") {
-          showErrorToast("Podcast generation failed")
           eventSource.close()
+          showErrorToast("Podcast generation failed")
           loadEpisode()
         }
       }
 
       eventSource.onerror = (error) => {
         console.error("SSE connection error:", error)
-        showErrorToast("Connection error: Lost real-time progress updates")
         eventSource.close()
+        showErrorToast("Lost connection to generation progress updates")
       }
 
       return () => eventSource.close()
@@ -172,11 +172,11 @@ export default function EpisodePage() {
         showSuccessToast("Podcast generation started")
         loadEpisode()
       } else {
-        showErrorToast("Failed to start generation: " + response.statusText)
+        showErrorToast("Failed to start podcast generation: " + response.statusText)
       }
     } catch (error) {
       console.error("Failed to generate podcast:", error)
-      showErrorToast("Failed to start generation: Network error")
+      showErrorToast("Failed to start podcast generation: Network error")
     } finally {
       setGenerating(false)
     }

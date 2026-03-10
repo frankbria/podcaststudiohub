@@ -7,6 +7,7 @@ export function ToastProvider() {
     <Toaster
       position="top-right"
       richColors
+      theme="light"
       expand={true}
       visibleToasts={3}
       closeButton={true}

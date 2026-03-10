@@ -19,6 +19,7 @@ const config = {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^@radix-ui/react-progress$': '<rootDir>/__mocks__/@radix-ui/react-progress.tsx',
     '^@radix-ui/react-select$': '<rootDir>/__mocks__/@radix-ui/react-select.tsx',
+    '^@radix-ui/react-dropdown-menu$': '<rootDir>/__mocks__/@radix-ui/react-dropdown-menu.tsx',
   },
 
   // Coverage collection settings

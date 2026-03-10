@@ -5,7 +5,16 @@ on:
     branches:
       - main
     paths:
-      - 'apps/**'
+      - 'apps/api/src/**'
+      - 'apps/api/alembic/**'
+      - 'apps/api/pyproject.toml'
+      - 'apps/api/uv.lock'
+      - 'apps/web/src/**'
+      - 'apps/web/public/**'
+      - 'apps/web/package.json'
+      - 'apps/web/package-lock.json'
+      - 'apps/web/next.config.mjs'
+      - 'apps/web/tailwind.config.ts'
       - 'deployment/**'
       - '.github/workflows/deploy-dev.yml'
 

@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from ..models.user import User
 from ..config import settings
+from ..utils.encryption import encrypt_credential, decrypt_credential
 
 
 # ============================================================================
@@ -237,3 +238,68 @@ async def get_user_by_id(session: AsyncSession, user_id: UUID) -> Optional[User]
         select(User).where(User.id == user_id)
     )
     return result.scalar_one_or_none()
+
+
+# ============================================================================
+# Encrypted API Key Functions
+# ============================================================================
+
+async def store_encrypted_api_key(
+    session: AsyncSession,
+    user_id: UUID,
+    provider: str,
+    api_key: str,
+) -> None:
+    """
+    Encrypt and store an API key for a user.
+
+    Encrypts the key using PostgreSQL pgcrypto and stores it in the user's
+    encrypted_api_keys JSONB field keyed by provider name.
+
+    Args:
+        session: Database session
+        user_id: ID of the user owning the key
+        provider: Service name (e.g. 'openai', 'elevenlabs', 'gemini')
+        api_key: Plain text API key to encrypt and store
+
+    Raises:
+        ValueError: If the user is not found
+    """
+    user = await get_user_by_id(session, user_id)
+    if not user:
+        raise ValueError(f"User {user_id} not found")
+
+    encrypted_key = await encrypt_credential(session, api_key)
+
+    current_keys = dict(user.encrypted_api_keys or {})
+    current_keys[provider] = encrypted_key
+    user.encrypted_api_keys = current_keys
+
+    await session.commit()
+
+
+async def get_decrypted_api_key(
+    session: AsyncSession,
+    user_id: UUID,
+    provider: str,
+) -> Optional[str]:
+    """
+    Retrieve and decrypt an API key for a user.
+
+    Args:
+        session: Database session
+        user_id: ID of the user owning the key
+        provider: Service name (e.g. 'openai', 'elevenlabs', 'gemini')
+
+    Returns:
+        Decrypted plain text API key, or None if not found
+    """
+    user = await get_user_by_id(session, user_id)
+    if not user or not user.encrypted_api_keys:
+        return None
+
+    encrypted_key = user.encrypted_api_keys.get(provider)
+    if not encrypted_key:
+        return None
+
+    return await decrypt_credential(session, encrypted_key)

@@ -95,6 +95,62 @@ def _cleanup_expired_states() -> None:
 		del _oauth_states[state]
 
 
+def _is_sensitive_header(header_name: str) -> bool:
+	"""Return True if a header name indicates it contains a secret credential."""
+	lower = header_name.lower()
+	return "authorization" in lower or "secret" in lower or "token" in lower or "api-key" in lower
+
+
+async def _encrypt_webhook_headers(db: AsyncSession, headers: dict) -> dict:
+	"""
+	Encrypt sensitive header values in a webhook headers dict.
+
+	Headers whose names contain 'authorization', 'secret', 'token', or 'api-key'
+	are encrypted; all others are stored as-is.
+
+	Args:
+		db: Database session
+		headers: Raw header name → value mapping
+
+	Returns:
+		New dict with sensitive values replaced by encrypted ciphertext
+	"""
+	encrypted = {}
+	for name, value in headers.items():
+		if _is_sensitive_header(name) and value:
+			encrypted[name] = await encrypt_credential(db, value)
+		else:
+			encrypted[name] = value
+	return encrypted
+
+
+async def _decrypt_webhook_headers(db: AsyncSession, headers: dict) -> dict:
+	"""
+	Decrypt sensitive header values from stored webhook config.
+
+	Mirrors _encrypt_webhook_headers: only headers whose names match the
+	sensitive-header heuristic are decrypted.
+
+	Args:
+		db: Database session
+		headers: Stored header name → value mapping (some values encrypted)
+
+	Returns:
+		New dict with sensitive values decrypted
+	"""
+	decrypted = {}
+	for name, value in headers.items():
+		if _is_sensitive_header(name) and value:
+			try:
+				decrypted[name] = await decrypt_credential(db, value)
+			except Exception:
+				logger.warning("Failed to decrypt header '%s'; returning as-is", name)
+				decrypted[name] = value
+		else:
+			decrypted[name] = value
+	return decrypted
+
+
 async def create_webhook_target(
 	db: AsyncSession,
 	user_id: UUID,
@@ -105,7 +161,8 @@ async def create_webhook_target(
 	Create a webhook distribution target.
 
 	Stores webhook URL, method, and headers in the config JSONB.
-	Headers are stored as-is (they may contain auth tokens).
+	Sensitive headers (Authorization, X-Secret, etc.) are encrypted before
+	storage using PostgreSQL pgcrypto.
 
 	Args:
 		db: Database session
@@ -122,7 +179,7 @@ async def create_webhook_target(
 		"method": webhook_data.method,
 	}
 	if webhook_data.headers:
-		config["headers"] = webhook_data.headers
+		config["headers"] = await _encrypt_webhook_headers(db, webhook_data.headers)
 
 	target = DistributionTarget(
 		user_id=user_id,
@@ -532,7 +589,7 @@ async def test_connection(
 	platform = target.target_type
 
 	if platform == "webhook":
-		return await _test_webhook_connection(config)
+		return await _test_webhook_connection(db, config)
 	elif platform == "spotify":
 		return await _test_spotify_connection(db, target, config)
 	elif platform == "apple_podcasts":
@@ -546,11 +603,13 @@ async def test_connection(
 		}
 
 
-async def _test_webhook_connection(config: dict) -> dict:
-	"""Send test payload to webhook URL."""
+async def _test_webhook_connection(db: AsyncSession, config: dict) -> dict:
+	"""Send test payload to webhook URL, decrypting sensitive headers first."""
 	url = config.get("url", "")
 	method = config.get("method", "POST")
-	headers = config.get("headers", {})
+	raw_headers = config.get("headers", {})
+	# Decrypt any encrypted sensitive headers before sending the HTTP request
+	headers = await _decrypt_webhook_headers(db, raw_headers) if raw_headers else {}
 
 	try:
 		async with httpx.AsyncClient(timeout=10.0) as client:

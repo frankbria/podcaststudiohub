@@ -163,6 +163,7 @@ async def update_episode(
 
 	Only updates fields provided in update_data (partial updates supported).
 	Uses Pydantic's model_dump(exclude_unset=True) to only update provided fields.
+	Triggers RSS feed regeneration when episode status changes to 'complete'.
 
 	Args:
 		db: Database session
@@ -172,12 +173,48 @@ async def update_episode(
 	Returns:
 		Updated Episode instance
 	"""
+	prev_status = episode.generation_status
 	update_dict = update_data.model_dump(exclude_unset=True)
 	for field, value in update_dict.items():
 		setattr(episode, field, value)
 
 	await db.commit()
+
+	# Trigger RSS regeneration when episode becomes complete/published
+	new_status = episode.generation_status
+	if prev_status != "complete" and new_status == "complete":
+		await _trigger_rss_update(episode)
+
 	return episode
+
+
+async def _trigger_rss_update(episode: Episode) -> None:
+	"""
+	Enqueue RSS feed regeneration task when an episode is published.
+
+	Silently logs errors rather than raising so that the episode update
+	itself is not affected by task dispatch failures.
+
+	Args:
+		episode: Episode that just became complete/published
+	"""
+	import logging
+	logger = logging.getLogger(__name__)
+
+	try:
+		from ..tasks.rss_generation import generate_rss_feed_task
+		generate_rss_feed_task.delay(
+			str(episode.project_id),
+			str(episode.tenant_id),
+		)
+		logger.info(
+			f"Triggered RSS regeneration for project {episode.project_id} "
+			f"(episode {episode.id} completed)"
+		)
+	except Exception as exc:
+		logger.warning(
+			f"Failed to trigger RSS regeneration for project {episode.project_id}: {exc}"
+		)
 
 
 async def delete_episode(

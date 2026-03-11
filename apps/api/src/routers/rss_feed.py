@@ -14,9 +14,15 @@ from uuid import UUID
 from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models import User
-from ..schemas.rss_feed import RSSFeedResponse, RSSFeedUpdate
+from ..schemas.rss_feed import (
+	RSSFeedResponse,
+	RSSFeedUpdate,
+	RSSValidationStatusResponse,
+	RSSValidationTriggerResponse,
+)
 from ..services.rss_generation_service import RSSGenerationService
 from ..services.project_service import get_project_by_id
+from ..tasks.rss_generation import generate_rss_feed_task
 
 # Authenticated management endpoints nested under /projects
 router = APIRouter(tags=["rss-feed"])
@@ -261,6 +267,100 @@ async def get_public_rss_feed(
 			"Cache-Control": "max-age=3600, public",
 			"ETag": f'"{hash(xml_content)}"',
 		},
+	)
+
+
+@router.post(
+	"/projects/{project_id}/rss-feed/validate",
+	response_model=RSSValidationTriggerResponse,
+	status_code=status.HTTP_202_ACCEPTED,
+)
+async def trigger_rss_validation(
+	project_id: UUID,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db),
+):
+	"""
+	Trigger RSS feed regeneration and validation as a background task.
+
+	Dispatches a Celery task to regenerate the feed, validate it against
+	Apple Podcasts, Spotify, and Google Podcasts, then upload to S3.
+
+	Args:
+		project_id: UUID of the project
+		current_user: Authenticated user (from JWT token)
+		db: Database session
+
+	Returns:
+		202 Accepted with task_id for polling status
+
+	Raises:
+		HTTPException 404: If project not found
+	"""
+	project = await get_project_by_id(db, project_id)
+	if project is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail=f"Project {project_id} not found",
+		)
+
+	task = generate_rss_feed_task.delay(str(project_id), str(current_user.tenant_id))
+
+	return RSSValidationTriggerResponse(
+		task_id=task.id,
+		status="queued",
+		message="RSS feed generation and validation has been queued",
+	)
+
+
+@router.get(
+	"/projects/{project_id}/rss-feed/validation-status",
+	response_model=RSSValidationStatusResponse,
+)
+async def get_rss_validation_status(
+	project_id: UUID,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db),
+	rss_service: RSSGenerationService = Depends(get_rss_service),
+):
+	"""
+	Get the most recent RSS feed validation results.
+
+	Returns the stored validation status from the last time the feed
+	was generated and validated.
+
+	Args:
+		project_id: UUID of the project
+		current_user: Authenticated user (from JWT token)
+		db: Database session
+		rss_service: RSS generation service
+
+	Returns:
+		Validation results for Apple Podcasts, Spotify, and Google Podcasts
+
+	Raises:
+		HTTPException 404: If project or RSS feed not found
+	"""
+	project = await get_project_by_id(db, project_id)
+	if project is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail=f"Project {project_id} not found",
+		)
+
+	rss_feed = await rss_service.get_rss_feed(db, project_id)
+	if rss_feed is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail=f"RSS feed not generated yet for project {project_id}",
+		)
+
+	validation_status = rss_feed.validation_status or {}
+	return RSSValidationStatusResponse(
+		last_validated_at=validation_status.get("last_validated_at"),
+		apple_podcasts=validation_status.get("apple_podcasts"),
+		spotify=validation_status.get("spotify"),
+		google_podcasts=validation_status.get("google_podcasts"),
 	)
 
 

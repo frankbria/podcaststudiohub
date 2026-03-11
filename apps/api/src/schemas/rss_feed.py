@@ -7,7 +7,7 @@ Defines Pydantic models for RSS Feed management endpoints.
 from pydantic import BaseModel, Field
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 
 class RSSFeedResponse(BaseModel):
@@ -47,3 +47,29 @@ class RSSFeedUpdate(BaseModel):
 		...,
 		description="Podcast metadata fields to update (triggers feed regeneration)"
 	)
+
+
+class PlatformValidationResult(BaseModel):
+	"""Validation result for a single podcast platform."""
+
+	valid: bool = Field(..., description="Whether the feed is valid for this platform")
+	errors: List[str] = Field(default_factory=list, description="List of validation errors")
+
+
+class RSSValidationStatusResponse(BaseModel):
+	"""Validation status for all podcast platforms."""
+
+	last_validated_at: Optional[str] = Field(None, description="ISO timestamp of last validation")
+	apple_podcasts: Optional[PlatformValidationResult] = Field(None, description="Apple Podcasts validation")
+	spotify: Optional[PlatformValidationResult] = Field(None, description="Spotify validation")
+	google_podcasts: Optional[PlatformValidationResult] = Field(None, description="Google Podcasts validation")
+
+	model_config = {"from_attributes": True}
+
+
+class RSSValidationTriggerResponse(BaseModel):
+	"""Response when validation/generation is triggered as a background task."""
+
+	task_id: str = Field(..., description="Celery task ID")
+	status: str = Field(..., description="Task dispatch status")
+	message: str = Field(..., description="Human-readable status message")

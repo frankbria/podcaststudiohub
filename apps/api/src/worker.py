@@ -16,6 +16,7 @@ celery_app = Celery(
         "src.tasks.s3_upload",
         "src.tasks.platform_distribution",
         "src.tasks.content_extraction",
+        "src.tasks.rss_generation",
     ]
 )
 
@@ -49,6 +50,8 @@ celery_app.conf.task_routes = {
     "src.tasks.platform_distribution.*": {"queue": "distribution"},
     "extract_content": {"queue": "content_extraction"},
     "src.tasks.content_extraction.*": {"queue": "content_extraction"},
+    "generate_rss_feed": {"queue": "rss_generation"},
+    "src.tasks.rss_generation.*": {"queue": "rss_generation"},
 }
 
 # Beat schedule (optional - for periodic tasks)

@@ -395,3 +395,162 @@ async def test_public_feed_accessible_without_jwt(client, project_with_metadata)
 
 	# Should succeed without auth
 	assert response.status_code == 200
+
+
+# ============================================================================
+# POST /projects/{project_id}/rss-feed/validate
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_trigger_rss_validation_success(client, project_with_metadata):
+	"""Test that triggering validation returns 202 Accepted with task_id."""
+	project_id, headers = project_with_metadata
+
+	with patch("src.routers.rss_feed.RSSGenerationService"), \
+	     patch("src.routers.rss_feed.generate_rss_feed_task") as mock_task:
+		mock_async_result = MagicMock()
+		mock_async_result.id = "test-task-id-12345"
+		mock_task.delay.return_value = mock_async_result
+
+		response = await client.post(
+			f"/projects/{project_id}/rss-feed/validate",
+			headers=headers,
+		)
+
+	assert response.status_code == 202
+	data = response.json()
+	assert "task_id" in data
+	assert data["status"] == "queued"
+	assert "message" in data
+
+
+@pytest.mark.asyncio
+async def test_trigger_rss_validation_project_not_found(client, project_with_metadata):
+	"""Test that triggering validation for non-existent project returns 404."""
+	_, headers = project_with_metadata
+	nonexistent_id = uuid4()
+
+	response = await client.post(
+		f"/projects/{nonexistent_id}/rss-feed/validate",
+		headers=headers,
+	)
+
+	assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_trigger_rss_validation_requires_auth(client, project_with_metadata):
+	"""Test that validation trigger endpoint requires authentication."""
+	project_id, _ = project_with_metadata
+
+	response = await client.post(f"/projects/{project_id}/rss-feed/validate")
+
+	assert response.status_code == 403
+
+
+# ============================================================================
+# GET /projects/{project_id}/rss-feed/validation-status
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_get_validation_status_success(client, project_with_metadata):
+	"""Test getting validation status returns structured results."""
+	project_id, headers = project_with_metadata
+	from datetime import datetime
+
+	mock_feed = make_mock_rss_feed(project_id)
+	mock_feed.validation_status = {
+		"last_validated_at": "2025-01-15T10:00:00+00:00",
+		"apple_podcasts": {"valid": True, "errors": []},
+		"spotify": {"valid": True, "errors": []},
+		"google_podcasts": {"valid": True, "errors": []},
+	}
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.get_rss_feed.return_value = mock_feed
+		MockService.return_value = mock_instance
+
+		response = await client.get(
+			f"/projects/{project_id}/rss-feed/validation-status",
+			headers=headers,
+		)
+
+	assert response.status_code == 200
+	data = response.json()
+	assert "apple_podcasts" in data
+	assert "spotify" in data
+	assert "google_podcasts" in data
+	assert data["apple_podcasts"]["valid"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_validation_status_feed_not_found(client, project_with_metadata):
+	"""Test 404 when RSS feed has not been generated yet."""
+	project_id, headers = project_with_metadata
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.get_rss_feed.return_value = None
+		MockService.return_value = mock_instance
+
+		response = await client.get(
+			f"/projects/{project_id}/rss-feed/validation-status",
+			headers=headers,
+		)
+
+	assert response.status_code == 404
+	assert "not generated yet" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_get_validation_status_project_not_found(client, project_with_metadata):
+	"""Test 404 when project does not exist."""
+	_, headers = project_with_metadata
+	nonexistent_id = uuid4()
+
+	response = await client.get(
+		f"/projects/{nonexistent_id}/rss-feed/validation-status",
+		headers=headers,
+	)
+
+	assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_validation_status_requires_auth(client, project_with_metadata):
+	"""Test that validation-status endpoint requires authentication."""
+	project_id, _ = project_with_metadata
+
+	response = await client.get(f"/projects/{project_id}/rss-feed/validation-status")
+
+	assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_validation_status_with_errors(client, project_with_metadata):
+	"""Test validation status response when feed has errors."""
+	project_id, headers = project_with_metadata
+
+	mock_feed = make_mock_rss_feed(project_id)
+	mock_feed.validation_status = {
+		"last_validated_at": "2025-01-15T10:00:00+00:00",
+		"apple_podcasts": {"valid": False, "errors": ["Missing itunes:image"]},
+		"spotify": {"valid": True, "errors": []},
+		"google_podcasts": {"valid": True, "errors": []},
+	}
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.get_rss_feed.return_value = mock_feed
+		MockService.return_value = mock_instance
+
+		response = await client.get(
+			f"/projects/{project_id}/rss-feed/validation-status",
+			headers=headers,
+		)
+
+	assert response.status_code == 200
+	data = response.json()
+	assert data["apple_podcasts"]["valid"] is False
+	assert "Missing itunes:image" in data["apple_podcasts"]["errors"]

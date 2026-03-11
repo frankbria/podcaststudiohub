@@ -1,13 +1,13 @@
 """EpisodeComposition model for final composition state"""
 
 from datetime import datetime
-from typing import Optional
-from sqlalchemy import Column, String, Text, DateTime, Numeric, ForeignKey
+from sqlalchemy import Column, Text, DateTime, Numeric, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
 
 from ..database import Base
+
 
 
 class EpisodeComposition(Base):
@@ -52,6 +52,12 @@ class EpisodeComposition(Base):
     composed_file_path = Column(Text, nullable=True)
     composed_s3_key = Column(Text, nullable=True)
     composed_s3_url = Column(Text, nullable=True)
+    composed_duration_seconds = Column(Numeric(10, 2), nullable=True)
+
+    # Render lifecycle: 'draft', 'composing', 'complete', 'failed'
+    render_status = Column(Text, nullable=False, default='draft')
+    render_error = Column(Text, nullable=True)
+    last_rendered_at = Column(DateTime, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

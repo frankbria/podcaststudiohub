@@ -42,6 +42,10 @@ on:
           - accessibility
           - integration
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   test:
     name: Run Playwright Tests

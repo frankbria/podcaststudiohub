@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
 from src.models.user import User
-from src.services.auth_service import hash_password, create_jwt_token
+from src.services.auth_service import hash_password
 from src.database import set_tenant_context
 
 
@@ -115,7 +115,6 @@ async def test_tenant_isolation_registration_creates_separate_tenants(client: As
     })
     assert user1_response.status_code == 201
     user1_data = user1_response.json()
-    token1 = user1_data["access_token"]
     tenant1_id = user1_data["user"]["tenant_id"]
 
     # Register second user
@@ -126,7 +125,6 @@ async def test_tenant_isolation_registration_creates_separate_tenants(client: As
     })
     assert user2_response.status_code == 201
     user2_data = user2_response.json()
-    token2 = user2_data["access_token"]
     tenant2_id = user2_data["user"]["tenant_id"]
 
     # Verify different tenant IDs
@@ -246,7 +244,6 @@ async def test_middleware_extracts_tenant_id_from_token(client: AsyncClient):
     })
     assert response.status_code == 201
     token = response.json()["access_token"]
-    expected_tenant_id = response.json()["user"]["tenant_id"]
 
     # Make authenticated request
     protected_response = await client.get(
@@ -326,7 +323,7 @@ async def test_get_current_tenant_dependency():
     Verify get_current_tenant() dependency works correctly.
     """
     from src.dependencies import get_current_tenant
-    from fastapi import Request, HTTPException
+    from fastapi import HTTPException
 
     # Test with tenant_id in request state
     class MockRequest:

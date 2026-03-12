@@ -33,7 +33,7 @@ def get_client_identifier(request: Request) -> str:
 			# X-Forwarded-For: client, proxy1, proxy2
 			# Trust the IP that is RATE_LIMIT_PROXY_COUNT hops from the right
 			ips = [ip.strip() for ip in forwarded_for.split(",")]
-			index = max(0, len(ips) - settings.RATE_LIMIT_PROXY_COUNT)
+			index = max(0, len(ips) - 1 - settings.RATE_LIMIT_PROXY_COUNT)
 			return ips[index]
 
 	if request.client:

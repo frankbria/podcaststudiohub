@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: Optional[str] = None
     CELERY_TASK_ALWAYS_EAGER: bool = False
 
+    # Celery retry configuration
+    CELERY_TASK_MAX_RETRIES: int = 3          # Default max retries for tasks
+    CELERY_RETRY_BACKOFF_BASE_SECONDS: int = 5  # Base seconds for exponential backoff
+    CELERY_RETRY_BACKOFF_MAX_SECONDS: int = 300  # Cap retry delay at 5 minutes
+
     # Spotify OAuth
     SPOTIFY_CLIENT_ID: Optional[str] = None
     SPOTIFY_CLIENT_SECRET: Optional[str] = None

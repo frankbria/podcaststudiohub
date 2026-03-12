@@ -14,11 +14,12 @@ from src.config import settings
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
 from src.tasks.s3_upload import upload_to_s3_task
+from src.tasks.retry_utils import calculate_retry_countdown
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, name="generate_podcast", time_limit=600)
+@celery_app.task(bind=True, name="generate_podcast", time_limit=600, max_retries=3)
 def generate_podcast_task(
     self: Task,
     episode_id: str,
@@ -194,24 +195,33 @@ def generate_podcast_task(
         return generation_result
 
     except Exception as e:
-        logger.error(f"Podcast generation failed for episode {episode_id}: {str(e)}")
-        self.update_state(
-            state='FAILURE',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'failed',
-                'progress': 0,
-                'status': f'Generation failed: {str(e)}'
-            }
+        logger.warning(
+            f"Podcast generation error for episode {episode_id} "
+            f"(attempt {self.request.retries + 1}/{self.max_retries + 1}): {e}"
         )
-        return {
-            "status": "failed",
-            "audio_file_path": None,
-            "transcript_path": None,
-            "duration_seconds": 0,
-            "file_size_bytes": 0,
-            "error": str(e)
-        }
+        if self.request.retries >= self.max_retries:
+            logger.error(
+                f"Podcast generation failed after {self.max_retries} retries "
+                f"for episode {episode_id}: {e}"
+            )
+            self.update_state(
+                state='FAILURE',
+                meta={
+                    'episode_id': episode_id,
+                    'stage': 'failed',
+                    'progress': 0,
+                    'status': f'Generation failed: {str(e)}'
+                }
+            )
+            return {
+                "status": "failed",
+                "audio_file_path": None,
+                "transcript_path": None,
+                "duration_seconds": 0,
+                "file_size_bytes": 0,
+                "error": str(e)
+            }
+        raise self.retry(exc=e, countdown=calculate_retry_countdown(self.request.retries))
 
 
 @celery_app.task(bind=True, name="finalize_episode_generation", time_limit=360)

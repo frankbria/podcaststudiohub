@@ -6,11 +6,12 @@ from typing import Dict, Any
 import logging
 
 from src.worker import celery_app
+from src.tasks.retry_utils import calculate_retry_countdown
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, name="distribute_to_platform", time_limit=300)
+@celery_app.task(bind=True, name="distribute_to_platform", time_limit=300, max_retries=5)
 def distribute_to_platform_task(
     self: Task,
     episode_id: str,
@@ -63,8 +64,9 @@ def distribute_to_platform_task(
 
         return result
 
-    except Exception as e:
-        logger.error(f"Distribution to {platform} failed for episode {episode_id}: {str(e)}")
+    except ValueError as e:
+        # Permanent error (e.g. unsupported platform) — do not retry
+        logger.error(f"Permanent error distributing to {platform} for episode {episode_id}: {e}")
         return {
             "status": "failed",
             "platform": platform,
@@ -72,6 +74,24 @@ def distribute_to_platform_task(
             "platform_url": None,
             "error": str(e)
         }
+    except Exception as e:
+        logger.warning(
+            f"Distribution to {platform} error for episode {episode_id} "
+            f"(attempt {self.request.retries + 1}/{self.max_retries + 1}): {e}"
+        )
+        if self.request.retries >= self.max_retries:
+            logger.error(
+                f"Distribution to {platform} failed after {self.max_retries} retries "
+                f"for episode {episode_id}: {e}"
+            )
+            return {
+                "status": "failed",
+                "platform": platform,
+                "platform_episode_id": None,
+                "platform_url": None,
+                "error": str(e)
+            }
+        raise self.retry(exc=e, countdown=calculate_retry_countdown(self.request.retries))
 
 
 def _distribute_to_spotify(episode_id: str, config: Dict, metadata: Dict, task: Task) -> Dict:

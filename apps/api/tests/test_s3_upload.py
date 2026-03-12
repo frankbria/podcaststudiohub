@@ -132,7 +132,9 @@ class TestUploadToS3Task:
         assert result["error"] is None
 
     def test_upload_fails_gracefully_on_generic_exception(self):
-        """upload_to_s3_task returns failed status when upload raises."""
+        """upload_to_s3_task returns failed status after all retries exhausted."""
+        from src.tasks.s3_upload import upload_to_s3_task
+
         with (
             patch("src.tasks.s3_upload.settings") as mock_settings,
             patch("src.tasks.s3_upload.boto3") as mock_boto,
@@ -143,11 +145,17 @@ class TestUploadToS3Task:
             mock_s3.upload_file.side_effect = RuntimeError("Connection timeout")
             mock_boto.client.return_value = mock_s3
 
-            result = self._invoke_upload(
-                file_path="/tmp/audio.mp3",
-                s3_key="test/key.mp3",
-                bucket_name="my-bucket",
+            # Simulate all retries exhausted so task returns failure dict
+            upload_to_s3_task.request.update(
+                id="test-task-id-" + str(uuid.uuid4()),
+                retries=upload_to_s3_task.max_retries,
             )
+            with patch.object(upload_to_s3_task, 'update_state', MagicMock()):
+                result = upload_to_s3_task.run(
+                    file_path="/tmp/audio.mp3",
+                    s3_key="test/key.mp3",
+                    bucket_name="my-bucket",
+                )
 
         assert result["status"] == "failed"
         assert result["s3_url"] is None
@@ -537,7 +545,10 @@ class TestNonRetryableS3Errors:
                 )
 
     def test_retryable_client_error_returns_failed_dict(self):
-        """Retryable S3 errors (e.g. InternalError) return a failed dict, not raise."""
+        """Retryable S3 errors (e.g. InternalError) return a failed dict after retries exhausted."""
+        import pytest
+        from src.tasks.s3_upload import upload_to_s3_task
+
         error_response = {"Error": {"Code": "InternalError", "Message": "Internal error"}}
         client_error = ClientError(error_response, "PutObject")
 
@@ -551,11 +562,30 @@ class TestNonRetryableS3Errors:
             mock_s3.upload_file.side_effect = client_error
             mock_boto.client.return_value = mock_s3
 
-            result = self._invoke_upload(
-                file_path="/tmp/audio.mp3",
-                s3_key="test/key.mp3",
-                bucket_name="my-bucket",
+            # First attempt raises the original ClientError (Celery re-raises via raise_with_context)
+            upload_to_s3_task.request.update(
+                id="test-task-id-" + str(uuid.uuid4()),
+                retries=0,
             )
+            with patch.object(upload_to_s3_task, 'update_state', MagicMock()):
+                with pytest.raises(ClientError):
+                    upload_to_s3_task.run(
+                        file_path="/tmp/audio.mp3",
+                        s3_key="test/key.mp3",
+                        bucket_name="my-bucket",
+                    )
+
+            # After max retries, returns failure dict
+            upload_to_s3_task.request.update(
+                id="test-task-id-" + str(uuid.uuid4()),
+                retries=upload_to_s3_task.max_retries,
+            )
+            with patch.object(upload_to_s3_task, 'update_state', MagicMock()):
+                result = upload_to_s3_task.run(
+                    file_path="/tmp/audio.mp3",
+                    s3_key="test/key.mp3",
+                    bucket_name="my-bucket",
+                )
 
         assert result["status"] == "failed"
         assert "InternalError" in result["error"]

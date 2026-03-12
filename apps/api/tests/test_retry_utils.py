@@ -1,7 +1,6 @@
 """
 Tests for retry utilities: calculate_retry_countdown and should_retry_exception.
 """
-import pytest
 from unittest.mock import MagicMock
 
 

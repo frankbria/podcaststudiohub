@@ -5,7 +5,6 @@ Provides exponential backoff calculation and selective retry logic
 for transient vs permanent failures.
 """
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 

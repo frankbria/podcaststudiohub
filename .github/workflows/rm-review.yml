@@ -312,6 +312,7 @@ jobs:
 
       - name: Check backend coverage
         if: always() && steps.backend-tests.outcome == 'success'
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

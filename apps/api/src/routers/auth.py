@@ -2,18 +2,17 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
 
 from ..database import get_db
 from ..schemas.auth import UserRegister, UserLogin, UserResponse, TokenResponse
 from ..services.auth_service import (
     create_user,
     authenticate_user,
-    create_jwt_token,
-    get_user_by_id
+    create_jwt_token
 )
 from ..models.user import User
 from ..middleware.auth import get_current_user
+from ..dependencies import rate_limit_login, rate_limit_register, rate_limit_resend
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -21,7 +20,8 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserRegister,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _rate_limit: None = Depends(rate_limit_register),
 ):
     """
     Register a new user account.
@@ -69,7 +69,8 @@ async def register(
 @router.post("/login", response_model=TokenResponse)
 async def login(
     credentials: UserLogin,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _rate_limit: None = Depends(rate_limit_login),
 ):
     """
     Authenticate user and return JWT access token.
@@ -112,6 +113,26 @@ async def login(
         expires_in=86400,  # 24 hours in seconds
         user=UserResponse.model_validate(user)
     )
+
+
+@router.post("/resend-verification-email", status_code=status.HTTP_200_OK)
+async def resend_verification_email(
+    current_user: User = Depends(get_current_user),
+    _rate_limit: None = Depends(rate_limit_resend),
+):
+    """
+    Resend verification email to the authenticated user.
+
+    Requires valid JWT token. Rate limited to prevent email bombing.
+    """
+    if current_user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email address is already verified."
+        )
+
+    # Placeholder: actual email sending would be implemented here
+    return {"message": "Verification email sent. Please check your inbox."}
 
 
 @router.get("/me", response_model=UserResponse)

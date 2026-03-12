@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # Rate Limiting
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_LOGIN_REQUESTS: int = 5
+    RATE_LIMIT_LOGIN_WINDOW_MINUTES: int = 5
+    RATE_LIMIT_REGISTER_REQUESTS: int = 3
+    RATE_LIMIT_REGISTER_WINDOW_MINUTES: int = 60
+    RATE_LIMIT_RESEND_REQUESTS: int = 5
+    RATE_LIMIT_RESEND_WINDOW_MINUTES: int = 60
+    RATE_LIMIT_TRUST_PROXY: bool = True
+    RATE_LIMIT_PROXY_COUNT: int = 1
+
     # Security & Authentication
     ENCRYPTION_KEY: str
     JWT_SECRET_KEY: str

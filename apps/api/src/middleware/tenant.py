@@ -4,11 +4,15 @@ Multi-tenant context injection middleware for Row-Level Security (RLS).
 This middleware extracts tenant_id from JWT tokens and stores it in request.state
 for use by the database dependency to configure PostgreSQL RLS context.
 """
+import logging
 from typing import Optional
-from fastapi import Request
+from fastapi import HTTPException, Request
+from jose import JWTError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.middleware.auth import extract_token_from_header, get_tenant_id_from_token
+
+logger = logging.getLogger(__name__)
 
 
 class TenantContextMiddleware(BaseHTTPMiddleware):
@@ -63,10 +67,25 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
                     # Store tenant_id in request state for database dependency
                     request.state.tenant_id = tenant_id
                     request.state.set_tenant_context = True
-        except Exception:
-            # If token extraction fails, continue without tenant context
-            # The authentication middleware will handle invalid tokens
-            pass
+        except (ValueError, KeyError, JWTError):
+            # Expected failures: invalid token format, missing claims, JWT decode error.
+            # Continue without tenant context; the auth middleware will reject the request
+            # on protected endpoints.
+            logger.debug("Invalid token format for %s", request.url.path)
+        except HTTPException:
+            # HTTP exceptions (401, 403, etc.) must propagate to the client.
+            raise
+        except Exception as e:
+            # Unexpected errors (e.g. database issues, programming bugs) must be
+            # logged and re-raised so they produce a 500 response rather than
+            # silently succeeding with missing tenant context.
+            logger.error(
+                "Unexpected error in tenant middleware for %s: %s",
+                request.url.path,
+                e,
+                exc_info=True,
+            )
+            raise
 
         # Continue to route handler
         response = await call_next(request)

@@ -376,3 +376,176 @@ async def test_set_tenant_context_validates_uuid():
 
         with pytest.raises(ValueError, match="Invalid tenant_id format"):
             await set_tenant_context(session, "")
+
+
+# =============================================================================
+# Middleware Exception Handling Tests (GAP-032)
+# =============================================================================
+
+def _make_http_scope(path: str = "/protected"):
+    """Create a minimal Starlette HTTP scope for testing middleware."""
+    return {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [],
+        "query_string": b"",
+        "root_path": "",
+        "state": {},
+    }
+
+
+@pytest.mark.asyncio
+async def test_middleware_handles_value_error_continues_without_tenant():
+    """
+    ValueError from token extraction is caught and logged; request continues without tenant.
+
+    When the JWT token has an invalid format and raises ValueError, the middleware
+    should gracefully continue without setting tenant context (the auth middleware
+    will reject the request for protected endpoints).
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from src.middleware.tenant import TenantContextMiddleware
+
+    middleware = TenantContextMiddleware(app=MagicMock())
+
+    async def mock_call_next(req):
+        return Response("OK")
+
+    with patch("src.middleware.tenant.extract_token_from_header", new_callable=AsyncMock) as mock_extract, \
+            patch("src.middleware.tenant.logger") as mock_logger:
+        mock_extract.side_effect = ValueError("invalid token format")
+        request = Request(_make_http_scope())
+
+        response = await middleware.dispatch(request, mock_call_next)
+
+        # Request continues without tenant context
+        assert response.status_code == 200
+        assert request.state.tenant_id is None
+        assert request.state.set_tenant_context is False
+        # Debug-level log was emitted
+        mock_logger.debug.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_middleware_handles_key_error_continues_without_tenant():
+    """
+    KeyError from missing token claims is caught; request continues without tenant context.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from src.middleware.tenant import TenantContextMiddleware
+
+    middleware = TenantContextMiddleware(app=MagicMock())
+
+    async def mock_call_next(req):
+        return Response("OK")
+
+    with patch("src.middleware.tenant.extract_token_from_header", new_callable=AsyncMock) as mock_extract, \
+            patch("src.middleware.tenant.get_tenant_id_from_token") as mock_get_tenant, \
+            patch("src.middleware.tenant.logger") as mock_logger:
+        mock_extract.return_value = "some.jwt.token"
+        mock_get_tenant.side_effect = KeyError("tenant_id")
+        request = Request(_make_http_scope())
+
+        response = await middleware.dispatch(request, mock_call_next)
+
+        assert response.status_code == 200
+        assert request.state.tenant_id is None
+        assert request.state.set_tenant_context is False
+        mock_logger.debug.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_middleware_propagates_http_exception():
+    """
+    HTTPException raised inside tenant extraction propagates to the client.
+
+    HTTP exceptions (401, 403, etc.) must not be swallowed by the middleware—
+    they should reach the client with the correct status code.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from fastapi import HTTPException
+    from src.middleware.tenant import TenantContextMiddleware
+
+    middleware = TenantContextMiddleware(app=MagicMock())
+
+    async def mock_call_next(req):
+        return Response("OK")
+
+    with patch("src.middleware.tenant.extract_token_from_header", new_callable=AsyncMock) as mock_extract:
+        mock_extract.side_effect = HTTPException(status_code=401, detail="Unauthorized")
+        request = Request(_make_http_scope())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await middleware.dispatch(request, mock_call_next)
+
+        assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_middleware_logs_and_propagates_unexpected_error():
+    """
+    Unexpected exceptions are logged at ERROR level with stack trace, then re-raised.
+
+    This ensures unexpected errors (database issues, programming bugs) are visible
+    in production logs and produce a 500 response rather than silently succeeding.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from src.middleware.tenant import TenantContextMiddleware
+
+    middleware = TenantContextMiddleware(app=MagicMock())
+
+    async def mock_call_next(req):
+        return Response("OK")
+
+    with patch("src.middleware.tenant.extract_token_from_header", new_callable=AsyncMock) as mock_extract, \
+            patch("src.middleware.tenant.logger") as mock_logger:
+        mock_extract.side_effect = RuntimeError("unexpected database error")
+        request = Request(_make_http_scope())
+
+        with pytest.raises(RuntimeError, match="unexpected database error"):
+            await middleware.dispatch(request, mock_call_next)
+
+        # Error was logged with exc_info for stack trace
+        mock_logger.error.assert_called_once()
+        call_kwargs = mock_logger.error.call_args
+        assert call_kwargs.kwargs.get("exc_info") is True
+
+
+@pytest.mark.asyncio
+async def test_middleware_valid_token_extracts_tenant():
+    """
+    Normal happy path: valid token correctly extracts and stores tenant_id.
+
+    Verifies that the improved exception handling does not break the normal flow.
+    """
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from src.middleware.tenant import TenantContextMiddleware
+
+    middleware = TenantContextMiddleware(app=MagicMock())
+    expected_tenant_id = str(uuid.uuid4())
+
+    async def mock_call_next(req):
+        return Response("OK")
+
+    with patch("src.middleware.tenant.extract_token_from_header", new_callable=AsyncMock) as mock_extract, \
+            patch("src.middleware.tenant.get_tenant_id_from_token") as mock_get_tenant:
+        mock_extract.return_value = "valid.jwt.token"
+        mock_get_tenant.return_value = expected_tenant_id
+        request = Request(_make_http_scope())
+
+        response = await middleware.dispatch(request, mock_call_next)
+
+        assert response.status_code == 200
+        assert request.state.tenant_id == expected_tenant_id
+        assert request.state.set_tenant_context is True

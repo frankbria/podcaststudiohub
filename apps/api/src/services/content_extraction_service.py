@@ -13,13 +13,17 @@ maintain async compatibility with the FastAPI application.
 
 import asyncio
 import logging
-from typing import Optional, Dict, Any
+import os
+import tempfile
+from typing import Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from requests.exceptions import RequestException, Timeout, HTTPError
 
 from podcastfy.content_parser.website_extractor import WebsiteExtractor
 from podcastfy.content_parser.pdf_extractor import PDFExtractor
+
+from .storage_service import StorageService
 
 from ..models import ContentSource
 from ..schemas.content import ContentSourceUpdate
@@ -183,34 +187,46 @@ class ContentExtractionService:
 			await self._update_extraction_failed(db, content_source, error_msg)
 			return ExtractionResult(success=False, error_message=error_msg)
 
-		# Construct file path (local filesystem for now)
-		# TODO: Add S3 support in future iteration
-		file_path = f"data/uploads/{filename}"
-
 		# Update status to 'extracting'
 		await self._update_extraction_status(db, content_source, 'extracting')
 
+		temp_file_path = None
 		try:
+			# Download PDF from S3 to a temporary file
+			logger.info(f"Downloading PDF from S3: {s3_key}")
+			temp_file = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
+			temp_file_path = temp_file.name
+			temp_file.close()
+
+			storage_service = StorageService()
+			try:
+				await storage_service.download_file(s3_key=s3_key, local_path=temp_file_path)
+			except Exception as e:
+				error_str = str(e)
+				if '404' in error_str or 'NoSuchKey' in error_str or 'Not Found' in error_str:
+					error_msg = f"PDF file not found in S3 (key: {s3_key})"
+				elif '403' in error_str or 'AccessDenied' in error_str or 'Forbidden' in error_str:
+					error_msg = f"Access denied to S3 file (key: {s3_key})"
+				else:
+					error_msg = f"Failed to download PDF from S3: {error_str}"
+				logger.error(f"S3 download error for {s3_key}: {error_msg}")
+				await self._update_extraction_failed(db, content_source, error_msg)
+				return ExtractionResult(success=False, error_message=error_msg)
+
 			# Extract content using Podcastfy (async wrapper)
-			logger.info(f"Extracting content from PDF: {file_path}")
+			logger.info(f"Extracting content from PDF: {temp_file_path}")
 			extracted_text = await asyncio.to_thread(
 				self.pdf_extractor.extract_content,
-				file_path
+				temp_file_path
 			)
 
 			# Update with success
 			await self._update_extraction_complete(db, content_source, extracted_text)
 
 			logger.info(
-				f"Successfully extracted {len(extracted_text)} characters from PDF {filename}"
+				f"Successfully extracted {len(extracted_text)} characters from PDF {s3_key}"
 			)
 			return ExtractionResult(success=True, content=extracted_text)
-
-		except FileNotFoundError as e:
-			error_msg = f"PDF file not found: {file_path}"
-			logger.error(f"File error extracting {filename}: {error_msg}")
-			await self._update_extraction_failed(db, content_source, error_msg)
-			return ExtractionResult(success=False, error_message=error_msg)
 
 		except Exception as e:
 			# Handle PDF extraction errors (corrupted file, extraction failure)
@@ -218,6 +234,16 @@ class ContentExtractionService:
 			logger.exception(f"Error extracting {filename}: {error_msg}")
 			await self._update_extraction_failed(db, content_source, error_msg)
 			return ExtractionResult(success=False, error_message=error_msg)
+
+		finally:
+			# Always cleanup temporary file; do not delete the original S3 file
+			if temp_file_path:
+				try:
+					if os.path.exists(temp_file_path):
+						os.remove(temp_file_path)
+						logger.debug(f"Cleaned up temporary PDF file: {temp_file_path}")
+				except Exception as e:
+					logger.warning(f"Failed to cleanup temporary file {temp_file_path}: {str(e)}")
 
 	async def extract_from_text(
 		self,

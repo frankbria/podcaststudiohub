@@ -3,13 +3,13 @@ Comprehensive test suite for content extraction service.
 
 Tests cover:
 - URL extraction (success, 404, timeout, HTTP errors)
-- PDF extraction (success, file not found, corrupted file)
+- PDF extraction (success, S3 download, S3 errors, corrupted file, cleanup)
 - Text extraction (success, empty content, validation)
 - Extraction status transitions (pending → extracting → complete/failed)
 - Database updates (extracted_content, error_message columns)
 - Error handling for all common failure cases
 
-Podcastfy modules are mocked to avoid external dependencies.
+Podcastfy modules and StorageService are mocked to avoid external dependencies.
 """
 
 import pytest
@@ -293,14 +293,27 @@ async def test_extract_from_pdf_success(
 	mock_db,
 	pdf_content_source
 ):
-	"""Test successful PDF content extraction."""
+	"""Test successful PDF content extraction from S3."""
 	extracted_text = "This is the extracted content from the PDF document."
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
+		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
+		 patch('src.services.content_extraction_service.tempfile.NamedTemporaryFile') as mock_tmpfile, \
+		 patch('src.services.content_extraction_service.os.path.exists', return_value=True), \
+		 patch('src.services.content_extraction_service.os.remove'), \
 		 patch.object(extraction_service.pdf_extractor, 'extract_content', return_value=extracted_text):
 
 		mock_get.return_value = pdf_content_source
+
+		# Mock temp file creation
+		mock_tmp = Mock()
+		mock_tmp.name = '/tmp/test_pdf.pdf'
+		mock_tmpfile.return_value = mock_tmp
+
+		# Mock StorageService instance
+		mock_storage = AsyncMock()
+		mock_storage_cls.return_value = mock_storage
 
 		result = await extraction_service.extract_from_pdf(mock_db, pdf_content_source.id)
 
@@ -308,6 +321,12 @@ async def test_extract_from_pdf_success(
 		assert result.content == extracted_text
 		assert result.error_message is None
 		assert result.word_count == len(extracted_text.split())
+
+		# Verify S3 download was called with correct args
+		mock_storage.download_file.assert_called_once_with(
+			s3_key='uploads/document.pdf',
+			local_path='/tmp/test_pdf.pdf'
+		)
 
 		# Verify database updates
 		assert mock_update.call_count == 2  # extracting, then complete
@@ -319,26 +338,110 @@ async def test_extract_from_pdf_success(
 
 
 @pytest.mark.asyncio
-async def test_extract_from_pdf_file_not_found(
+async def test_extract_from_pdf_s3_not_found(
 	extraction_service,
 	mock_db,
 	pdf_content_source
 ):
-	"""Test PDF extraction with file not found error."""
-	file_error = FileNotFoundError("File not found")
+	"""Test PDF extraction when S3 file is not found (404)."""
+	s3_error = Exception("Failed to download file from S3: An error occurred (NoSuchKey) when calling the GetObject operation: The specified key does not exist.")
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service.pdf_extractor, 'extract_content', side_effect=file_error):
+		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
+		 patch('src.services.content_extraction_service.tempfile.NamedTemporaryFile') as mock_tmpfile, \
+		 patch('src.services.content_extraction_service.os.path.exists', return_value=True), \
+		 patch('src.services.content_extraction_service.os.remove'):
 
 		mock_get.return_value = pdf_content_source
+
+		mock_tmp = Mock()
+		mock_tmp.name = '/tmp/test_pdf.pdf'
+		mock_tmpfile.return_value = mock_tmp
+
+		mock_storage = AsyncMock()
+		mock_storage.download_file.side_effect = s3_error
+		mock_storage_cls.return_value = mock_storage
 
 		result = await extraction_service.extract_from_pdf(mock_db, pdf_content_source.id)
 
 		assert result.success is False
 		assert result.content is None
-		assert "not found" in result.error_message.lower()
-		assert "data/uploads/document.pdf" in result.error_message
+		assert "not found in S3" in result.error_message
+		assert "uploads/document.pdf" in result.error_message
+
+		# Verify failure status update
+		final_call = mock_update.call_args_list[-1]
+		assert final_call[0][2].extraction_status == 'failed'
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pdf_s3_access_denied(
+	extraction_service,
+	mock_db,
+	pdf_content_source
+):
+	"""Test PDF extraction when S3 returns access denied (403)."""
+	s3_error = Exception("Failed to download file from S3: An error occurred (AccessDenied) when calling the GetObject operation: Access Denied")
+
+	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
+		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
+		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
+		 patch('src.services.content_extraction_service.tempfile.NamedTemporaryFile') as mock_tmpfile, \
+		 patch('src.services.content_extraction_service.os.path.exists', return_value=True), \
+		 patch('src.services.content_extraction_service.os.remove'):
+
+		mock_get.return_value = pdf_content_source
+
+		mock_tmp = Mock()
+		mock_tmp.name = '/tmp/test_pdf.pdf'
+		mock_tmpfile.return_value = mock_tmp
+
+		mock_storage = AsyncMock()
+		mock_storage.download_file.side_effect = s3_error
+		mock_storage_cls.return_value = mock_storage
+
+		result = await extraction_service.extract_from_pdf(mock_db, pdf_content_source.id)
+
+		assert result.success is False
+		assert "Access denied to S3 file" in result.error_message
+		assert "uploads/document.pdf" in result.error_message
+
+		# Verify failure status update
+		final_call = mock_update.call_args_list[-1]
+		assert final_call[0][2].extraction_status == 'failed'
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pdf_s3_generic_error(
+	extraction_service,
+	mock_db,
+	pdf_content_source
+):
+	"""Test PDF extraction when S3 download fails with a generic error."""
+	s3_error = Exception("Failed to download file from S3: Connection reset by peer")
+
+	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
+		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
+		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
+		 patch('src.services.content_extraction_service.tempfile.NamedTemporaryFile') as mock_tmpfile, \
+		 patch('src.services.content_extraction_service.os.path.exists', return_value=True), \
+		 patch('src.services.content_extraction_service.os.remove'):
+
+		mock_get.return_value = pdf_content_source
+
+		mock_tmp = Mock()
+		mock_tmp.name = '/tmp/test_pdf.pdf'
+		mock_tmpfile.return_value = mock_tmp
+
+		mock_storage = AsyncMock()
+		mock_storage.download_file.side_effect = s3_error
+		mock_storage_cls.return_value = mock_storage
+
+		result = await extraction_service.extract_from_pdf(mock_db, pdf_content_source.id)
+
+		assert result.success is False
+		assert "Failed to download PDF from S3" in result.error_message
 
 		# Verify failure status update
 		final_call = mock_update.call_args_list[-1]
@@ -351,14 +454,25 @@ async def test_extract_from_pdf_corrupted_file(
 	mock_db,
 	pdf_content_source
 ):
-	"""Test PDF extraction with corrupted file error."""
+	"""Test PDF extraction with corrupted file error after successful S3 download."""
 	extraction_error = Exception("PDF extraction failed: corrupted file")
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
+		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
+		 patch('src.services.content_extraction_service.tempfile.NamedTemporaryFile') as mock_tmpfile, \
+		 patch('src.services.content_extraction_service.os.path.exists', return_value=True), \
+		 patch('src.services.content_extraction_service.os.remove'), \
 		 patch.object(extraction_service.pdf_extractor, 'extract_content', side_effect=extraction_error):
 
 		mock_get.return_value = pdf_content_source
+
+		mock_tmp = Mock()
+		mock_tmp.name = '/tmp/test_pdf.pdf'
+		mock_tmpfile.return_value = mock_tmp
+
+		mock_storage = AsyncMock()
+		mock_storage_cls.return_value = mock_storage
 
 		result = await extraction_service.extract_from_pdf(mock_db, pdf_content_source.id)
 
@@ -368,6 +482,100 @@ async def test_extract_from_pdf_corrupted_file(
 		# Verify failure status update
 		final_call = mock_update.call_args_list[-1]
 		assert final_call[0][2].extraction_status == 'failed'
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pdf_temp_file_cleanup_on_success(
+	extraction_service,
+	mock_db,
+	pdf_content_source
+):
+	"""Test that temporary file is deleted after successful extraction."""
+	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
+		 patch('src.services.content_extraction_service.update_content_source'), \
+		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
+		 patch('src.services.content_extraction_service.tempfile.NamedTemporaryFile') as mock_tmpfile, \
+		 patch('src.services.content_extraction_service.os.path.exists', return_value=True) as mock_exists, \
+		 patch('src.services.content_extraction_service.os.remove') as mock_remove, \
+		 patch.object(extraction_service.pdf_extractor, 'extract_content', return_value="text"):
+
+		mock_get.return_value = pdf_content_source
+
+		mock_tmp = Mock()
+		mock_tmp.name = '/tmp/cleanup_test.pdf'
+		mock_tmpfile.return_value = mock_tmp
+
+		mock_storage = AsyncMock()
+		mock_storage_cls.return_value = mock_storage
+
+		await extraction_service.extract_from_pdf(mock_db, pdf_content_source.id)
+
+		# Verify temp file was removed
+		mock_remove.assert_called_once_with('/tmp/cleanup_test.pdf')
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pdf_temp_file_cleanup_on_error(
+	extraction_service,
+	mock_db,
+	pdf_content_source
+):
+	"""Test that temporary file is deleted even when extraction fails."""
+	extraction_error = Exception("Unexpected extraction failure")
+
+	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
+		 patch('src.services.content_extraction_service.update_content_source'), \
+		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
+		 patch('src.services.content_extraction_service.tempfile.NamedTemporaryFile') as mock_tmpfile, \
+		 patch('src.services.content_extraction_service.os.path.exists', return_value=True), \
+		 patch('src.services.content_extraction_service.os.remove') as mock_remove, \
+		 patch.object(extraction_service.pdf_extractor, 'extract_content', side_effect=extraction_error):
+
+		mock_get.return_value = pdf_content_source
+
+		mock_tmp = Mock()
+		mock_tmp.name = '/tmp/cleanup_error_test.pdf'
+		mock_tmpfile.return_value = mock_tmp
+
+		mock_storage = AsyncMock()
+		mock_storage_cls.return_value = mock_storage
+
+		await extraction_service.extract_from_pdf(mock_db, pdf_content_source.id)
+
+		# Verify temp file was removed even though extraction failed
+		mock_remove.assert_called_once_with('/tmp/cleanup_error_test.pdf')
+
+
+@pytest.mark.asyncio
+async def test_extract_from_pdf_temp_file_cleanup_on_s3_error(
+	extraction_service,
+	mock_db,
+	pdf_content_source
+):
+	"""Test that temporary file is deleted when S3 download fails."""
+	s3_error = Exception("Failed to download file from S3: connection error")
+
+	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
+		 patch('src.services.content_extraction_service.update_content_source'), \
+		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
+		 patch('src.services.content_extraction_service.tempfile.NamedTemporaryFile') as mock_tmpfile, \
+		 patch('src.services.content_extraction_service.os.path.exists', return_value=True), \
+		 patch('src.services.content_extraction_service.os.remove') as mock_remove:
+
+		mock_get.return_value = pdf_content_source
+
+		mock_tmp = Mock()
+		mock_tmp.name = '/tmp/cleanup_s3_error_test.pdf'
+		mock_tmpfile.return_value = mock_tmp
+
+		mock_storage = AsyncMock()
+		mock_storage.download_file.side_effect = s3_error
+		mock_storage_cls.return_value = mock_storage
+
+		await extraction_service.extract_from_pdf(mock_db, pdf_content_source.id)
+
+		# Verify temp file was removed even though S3 download failed
+		mock_remove.assert_called_once_with('/tmp/cleanup_s3_error_test.pdf')
 
 
 @pytest.mark.asyncio

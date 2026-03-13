@@ -495,7 +495,7 @@ async def test_extract_from_pdf_temp_file_cleanup_on_success(
 		 patch('src.services.content_extraction_service.update_content_source'), \
 		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
 		 patch('src.services.content_extraction_service.tempfile.NamedTemporaryFile') as mock_tmpfile, \
-		 patch('src.services.content_extraction_service.os.path.exists', return_value=True) as mock_exists, \
+		 patch('src.services.content_extraction_service.os.path.exists', return_value=True), \
 		 patch('src.services.content_extraction_service.os.remove') as mock_remove, \
 		 patch.object(extraction_service.pdf_extractor, 'extract_content', return_value="text"):
 

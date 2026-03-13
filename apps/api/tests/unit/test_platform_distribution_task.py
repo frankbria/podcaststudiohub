@@ -11,10 +11,8 @@ Tests cover:
 """
 
 import inspect
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
-
-import pytest
 
 from src.tasks.platform_distribution import distribute_to_platform_task
 

@@ -16,6 +16,7 @@ celery_app = Celery(
         "src.tasks.s3_upload",
         "src.tasks.platform_distribution",
         "src.tasks.content_extraction",
+        "src.tasks.workflow_callbacks",
     ]
 )
 
@@ -49,6 +50,9 @@ celery_app.conf.task_routes = {
     "src.tasks.platform_distribution.*": {"queue": "distribution"},
     "extract_content": {"queue": "content_extraction"},
     "src.tasks.content_extraction.*": {"queue": "content_extraction"},
+    "update_episode_on_success": {"queue": "podcast_generation"},
+    "update_episode_on_failure": {"queue": "podcast_generation"},
+    "src.tasks.workflow_callbacks.*": {"queue": "podcast_generation"},
 }
 
 # Beat schedule (optional - for periodic tasks)

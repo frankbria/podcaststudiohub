@@ -8,7 +8,7 @@ for episode metadata structure, project relationships, and generation status.
 from pydantic import BaseModel, Field, field_validator
 from uuid import UUID
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 
 class EpisodeCreate(BaseModel):
@@ -151,6 +151,8 @@ class EpisodeResponse(BaseModel):
 	transcript_path: Optional[str]
 	tts_config_id: Optional[UUID]
 	template_id: Optional[UUID]
+	platform_ids: Optional[Dict[str, str]]
+	error_message: Optional[str]
 	created_at: datetime
 	updated_at: datetime
 

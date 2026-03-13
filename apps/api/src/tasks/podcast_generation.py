@@ -5,7 +5,7 @@ Wraps the existing podcastfy CLI functionality
 import os
 import uuid as uuid_module
 import logging
-from celery import Task
+from celery import Task, chain
 from typing import Optional, List, Dict, Any
 from pydub import AudioSegment
 
@@ -14,8 +14,105 @@ from src.config import settings
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
 from src.tasks.s3_upload import upload_to_s3_task
+from src.tasks.workflow_callbacks import update_episode_on_failure
 
 logger = logging.getLogger(__name__)
+
+
+def build_workflow_chain(
+	episode_id: str,
+	audio_file_path: str,
+	transcript_path: Optional[str],
+	duration_seconds: float,
+	file_size_bytes: int,
+	enable_composition: bool = False,
+	enable_distribution: bool = False,
+	platforms: Optional[Dict[str, Dict]] = None,
+) -> "chain":
+	"""
+	Build the post-generation Celery workflow chain.
+
+	Sequences the following stages based on configuration flags:
+	  1. S3 upload (upload_to_s3_task) — always included when AWS_S3_BUCKET is set
+	  2. Audio composition (merge_audio_snippets_task) — only if enable_composition=True
+	  3. Platform distribution (distribute_to_platform_task) — only if enable_distribution=True
+	     and at least one platform is provided
+	  4. Success callback (update_episode_on_success) — always included, updates the DB
+
+	Each task uses an immutable signature (.si()) so that the previous task's
+	return value is not passed as a positional argument to the next task.
+
+	Args:
+		episode_id: UUID of the episode being processed
+		audio_file_path: Local path to the generated audio file
+		transcript_path: Local path to the generated transcript
+		duration_seconds: Audio duration in seconds
+		file_size_bytes: Audio file size in bytes
+		enable_composition: Whether to include the audio composition stage
+		enable_distribution: Whether to include platform distribution stages
+		platforms: Dict of {platform_name: platform_config} for distribution
+
+	Returns:
+		A Celery chain object ready for .apply_async()
+	"""
+	from src.tasks.audio_composition import merge_audio_snippets_task
+	from src.tasks.platform_distribution import distribute_to_platform_task
+	from src.tasks.workflow_callbacks import update_episode_on_success
+
+	bucket_name = settings.AWS_S3_BUCKET or ""
+	s3_key = f"podcasts/episode-{episode_id}.mp3"
+
+	tasks = []
+
+	# Stage 1: S3 upload
+	tasks.append(
+		upload_to_s3_task.si(
+			file_path=audio_file_path,
+			s3_key=s3_key,
+			bucket_name=bucket_name,
+			content_type="audio/mpeg",
+		)
+	)
+
+	# Stage 2: Optional audio composition
+	if enable_composition:
+		tasks.append(
+			merge_audio_snippets_task.si(
+				episode_id=episode_id,
+				timeline=[],  # Timeline fetched from DB inside the task
+				output_path=f"/tmp/composed_{episode_id}.mp3",
+			)
+		)
+
+	# Stage 3: Optional platform distribution (one task per platform)
+	if enable_distribution and platforms:
+		for platform_name, platform_config in platforms.items():
+			tasks.append(
+				distribute_to_platform_task.si(
+					episode_id=episode_id,
+					platform=platform_name,
+					platform_config=platform_config,
+					episode_metadata={
+						"title": "Episode",
+						"audio_url": s3_key,
+					},
+				)
+			)
+
+	# Stage 4: Success callback — always appended to finalise the episode in DB
+	tasks.append(
+		update_episode_on_success.si(
+			episode_id=episode_id,
+			audio_file_path=audio_file_path,
+			transcript_path=transcript_path,
+			duration_seconds=duration_seconds,
+			file_size_bytes=file_size_bytes,
+			s3_key=s3_key,
+			bucket_name=bucket_name,
+		)
+	)
+
+	return chain(*tasks)
 
 
 @celery_app.task(bind=True, name="generate_podcast", time_limit=600)
@@ -30,13 +127,24 @@ def generate_podcast_task(
     topic: Optional[str] = None,
     tts_model: str = "openai",
     conversation_config: Optional[Dict[str, Any]] = None,
-    longform: bool = False
+    longform: bool = False,
+    enable_composition: bool = False,
+    enable_distribution: bool = False,
+    platforms: Optional[Dict[str, Dict]] = None,
 ) -> Dict[str, Any]:
     """
     Generate a podcast episode using the existing Podcastfy CLI.
 
     This task wraps the existing generate_podcast() function from the CLI
     and provides progress tracking for the GUI.
+
+    After a successful generation the task triggers a downstream workflow
+    chain:
+      - When enable_composition or enable_distribution is True the full
+        build_workflow_chain() is used (S3 upload → [composition] →
+        [distribution] → DB finalisation).
+      - Otherwise the lightweight finalize_episode_generation_task is used
+        for backward compatibility.
 
     Args:
         self: Celery task instance (for progress updates)
@@ -50,6 +158,9 @@ def generate_podcast_task(
         tts_model: TTS provider (openai, elevenlabs, gemini, etc.)
         conversation_config: Custom conversation configuration
         longform: Whether to generate long-form content
+        enable_composition: Whether to include the audio composition stage
+        enable_distribution: Whether to include platform distribution stages
+        platforms: Dict of {platform_name: platform_config} for distribution
 
     Returns:
         Dictionary with generation results:
@@ -157,39 +268,74 @@ def generate_podcast_task(
             }
         )
 
+        transcript_path = audio_file_path.replace('.mp3', '_transcript.txt')
         generation_result = {
             "status": "success",
             "audio_file_path": audio_file_path,
-            "transcript_path": audio_file_path.replace('.mp3', '_transcript.txt'),
+            "transcript_path": transcript_path,
             "duration_seconds": duration_seconds,
             "file_size_bytes": file_size_bytes,
             "error": None
         }
 
-        # Chain the finalization task (S3 upload + DB update).
-        # Isolated try/except: a broker hiccup must not mark a successful
-        # generation as "failed" or orphan the audio file.
-        try:
-            finalize_episode_generation_task.delay(
+        # Choose the downstream workflow based on requested features.
+        # When composition or distribution is enabled we build the full
+        # Celery chain (upload → composition → distribution → DB update).
+        # Otherwise fall back to the lightweight finalize task so that
+        # existing callers are unaffected.
+        if enable_composition or enable_distribution:
+            workflow = build_workflow_chain(
                 episode_id=episode_id,
-                generation_result=generation_result,
+                audio_file_path=audio_file_path,
+                transcript_path=transcript_path,
+                duration_seconds=duration_seconds,
+                file_size_bytes=file_size_bytes,
+                enable_composition=enable_composition,
+                enable_distribution=enable_distribution,
+                platforms=platforms or {},
             )
-        except Exception as broker_err:
-            logger.critical(
-                "Celery broker unavailable after successful generation for "
-                "episode %s — falling back to synchronous finalization: %s",
-                episode_id, broker_err,
+            logger.info(
+                "Triggering workflow chain for episode %s "
+                "(composition=%s, distribution=%s, platforms=%s)",
+                episode_id, enable_composition, enable_distribution,
+                list((platforms or {}).keys()),
             )
             try:
-                finalize_episode_generation_task(
+                workflow.apply_async(
+                    link_error=update_episode_on_failure.si(
+                        episode_id=episode_id,
+                        error="Workflow chain failed — see task logs for details",
+                    )
+                )
+            except Exception as broker_err:
+                logger.critical(
+                    "Celery broker unavailable after successful generation for "
+                    "episode %s — workflow chain could not be triggered: %s",
+                    episode_id, broker_err,
+                )
+        else:
+            # Backward-compatible path: lightweight finalize task (S3 + DB).
+            try:
+                finalize_episode_generation_task.delay(
                     episode_id=episode_id,
                     generation_result=generation_result,
                 )
-            except Exception as sync_err:
+            except Exception as broker_err:
                 logger.critical(
-                    "Synchronous finalization also failed for episode %s: %s",
-                    episode_id, sync_err,
+                    "Celery broker unavailable after successful generation for "
+                    "episode %s — falling back to synchronous finalization: %s",
+                    episode_id, broker_err,
                 )
+                try:
+                    finalize_episode_generation_task(
+                        episode_id=episode_id,
+                        generation_result=generation_result,
+                    )
+                except Exception as sync_err:
+                    logger.critical(
+                        "Synchronous finalization also failed for episode %s: %s",
+                        episode_id, sync_err,
+                    )
 
         return generation_result
 

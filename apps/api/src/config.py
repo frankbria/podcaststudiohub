@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     SPOTIFY_CLIENT_SECRET: Optional[str] = None
     SPOTIFY_REDIRECT_URI: Optional[str] = None
 
+    # Workflow feature flags
+    ENABLE_AUDIO_COMPOSITION: bool = False
+    ENABLE_PLATFORM_DISTRIBUTION: bool = False
+
     # Logging
     LOG_LEVEL: str = "INFO"
 

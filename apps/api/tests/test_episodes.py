@@ -792,3 +792,422 @@ async def test_delete_episode_requires_auth(client):
 	response = await client.delete(f"/episodes/{fake_id}")
 	# Auth middleware returns 403 Forbidden when no valid token provided
 	assert response.status_code == 403
+
+
+# ============================================================================
+# SEARCH AND FILTER TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_search_episodes_by_title(client, project_and_auth):
+	"""Test full-text search on episode title."""
+	project_id, headers = project_and_auth
+
+	# Create episodes with distinct titles
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "AI Safety Podcast", "description": "Discussing safety"}
+	})
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "Music Theory Basics", "description": "Learning music"}
+	})
+
+	# Search by title keyword
+	response = await client.get(
+		f"/episodes?project_id={project_id}&search=AI+Safety",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 1
+	assert data["episodes"][0]["episode_metadata"]["title"] == "AI Safety Podcast"
+
+
+@pytest.mark.asyncio
+async def test_search_episodes_by_description(client, project_and_auth):
+	"""Test full-text search on episode description."""
+	project_id, headers = project_and_auth
+
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Episode One", "description": "Covers neural networks"}
+	})
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "Episode Two", "description": "Covers climate change"}
+	})
+
+	# Search description
+	response = await client.get(
+		f"/episodes?project_id={project_id}&search=neural",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 1
+	assert "neural" in data["episodes"][0]["episode_metadata"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_search_episodes_no_results(client, project_and_auth):
+	"""Test search returns empty when no match."""
+	project_id, headers = project_and_auth
+
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Tech Talk", "description": "About technology"}
+	})
+
+	response = await client.get(
+		f"/episodes?project_id={project_id}&search=zyxwvutsrqponm",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 0
+	assert len(data["episodes"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_search_case_insensitive(client, project_and_auth):
+	"""Test that search is case insensitive."""
+	project_id, headers = project_and_auth
+
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Python Programming", "description": "Learn Python"}
+	})
+
+	# Search with different casing
+	response = await client.get(
+		f"/episodes?project_id={project_id}&search=python",
+		headers=headers
+	)
+	assert response.status_code == 200
+	assert response.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_filter_by_date_from(client, project_and_auth):
+	"""Test filtering episodes by date_from."""
+	project_id, headers = project_and_auth
+
+	# Create episode (created_at is set automatically to now)
+	ep_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Recent Episode", "description": "Just created"}
+	})
+	assert ep_response.status_code == 201
+
+	# Filter with date_from set to past date - should include episode
+	response = await client.get(
+		f"/episodes?project_id={project_id}&date_from=2020-01-01T00:00:00",
+		headers=headers
+	)
+	assert response.status_code == 200
+	assert response.json()["total"] == 1
+
+	# Filter with date_from set to far future - should exclude episode
+	response = await client.get(
+		f"/episodes?project_id={project_id}&date_from=2099-01-01T00:00:00",
+		headers=headers
+	)
+	assert response.status_code == 200
+	assert response.json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_filter_by_date_to(client, project_and_auth):
+	"""Test filtering episodes by date_to."""
+	project_id, headers = project_and_auth
+
+	# Create episode
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Test Episode", "description": "Desc"}
+	})
+
+	# Filter with date_to in future - should include episode
+	response = await client.get(
+		f"/episodes?project_id={project_id}&date_to=2099-12-31T23:59:59",
+		headers=headers
+	)
+	assert response.status_code == 200
+	assert response.json()["total"] == 1
+
+	# Filter with date_to in the past - should exclude episode
+	response = await client.get(
+		f"/episodes?project_id={project_id}&date_to=2020-01-01T00:00:00",
+		headers=headers
+	)
+	assert response.status_code == 200
+	assert response.json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_filter_by_tags(client, project_and_auth):
+	"""Test filtering episodes by tags in episode_metadata."""
+	project_id, headers = project_and_auth
+
+	# Create episodes with tags
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {
+			"title": "Tech Episode",
+			"description": "About tech",
+			"tags": ["tech", "ai"]
+		}
+	})
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {
+			"title": "Music Episode",
+			"description": "About music",
+			"tags": ["music", "culture"]
+		}
+	})
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 3,
+		"episode_metadata": {
+			"title": "No Tags Episode",
+			"description": "No tags here"
+		}
+	})
+
+	# Filter by tag "tech"
+	response = await client.get(
+		f"/episodes?project_id={project_id}&tags=tech",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 1
+	assert data["episodes"][0]["episode_metadata"]["title"] == "Tech Episode"
+
+
+@pytest.mark.asyncio
+async def test_filter_by_multiple_tags(client, project_and_auth):
+	"""Test filtering by multiple tags (OR logic - any matching tag)."""
+	project_id, headers = project_and_auth
+
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Tech", "description": "Tech ep", "tags": ["tech"]}
+	})
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "Music", "description": "Music ep", "tags": ["music"]}
+	})
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 3,
+		"episode_metadata": {"title": "Other", "description": "Other ep", "tags": ["other"]}
+	})
+
+	# Filter by "tech" or "music"
+	response = await client.get(
+		f"/episodes?project_id={project_id}&tags=tech,music",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_filter_by_min_duration(client, project_and_auth):
+	"""Test filtering episodes by minimum duration."""
+	project_id, headers = project_and_auth
+
+	# Create episodes
+	ep1 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Short", "description": "Short ep"}
+	})
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "Long", "description": "Long ep"}
+	})
+
+	# Set durations via update
+	await client.put(f"/episodes/{ep1.json()['id']}", headers=headers, json={"duration_seconds": 120.0})
+	await client.put(f"/episodes/{ep2.json()['id']}", headers=headers, json={"duration_seconds": 3600.0})
+
+	# Filter min_duration=600
+	response = await client.get(
+		f"/episodes?project_id={project_id}&min_duration=600",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 1
+	assert data["episodes"][0]["episode_metadata"]["title"] == "Long"
+
+
+@pytest.mark.asyncio
+async def test_filter_by_max_duration(client, project_and_auth):
+	"""Test filtering episodes by maximum duration."""
+	project_id, headers = project_and_auth
+
+	ep1 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Short", "description": "Short ep"}
+	})
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "Long", "description": "Long ep"}
+	})
+
+	await client.put(f"/episodes/{ep1.json()['id']}", headers=headers, json={"duration_seconds": 120.0})
+	await client.put(f"/episodes/{ep2.json()['id']}", headers=headers, json={"duration_seconds": 3600.0})
+
+	# Filter max_duration=300
+	response = await client.get(
+		f"/episodes?project_id={project_id}&max_duration=300",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 1
+	assert data["episodes"][0]["episode_metadata"]["title"] == "Short"
+
+
+@pytest.mark.asyncio
+async def test_sort_by_created_at_asc(client, project_and_auth):
+	"""Test sorting episodes by created_at ascending."""
+	project_id, headers = project_and_auth
+
+	# Create 3 episodes
+	for i in range(1, 4):
+		await client.post("/episodes", headers=headers, json={
+			"project_id": project_id,
+			"episode_number": i,
+			"episode_metadata": {"title": f"Ep {i}", "description": "Desc"}
+		})
+
+	response = await client.get(
+		f"/episodes?project_id={project_id}&sort_by=created_at&sort_order=asc",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert len(data["episodes"]) == 3
+
+
+@pytest.mark.asyncio
+async def test_sort_order_desc(client, project_and_auth):
+	"""Test sorting episodes descending by episode_number."""
+	project_id, headers = project_and_auth
+
+	for i in range(1, 4):
+		await client.post("/episodes", headers=headers, json={
+			"project_id": project_id,
+			"episode_number": i,
+			"episode_metadata": {"title": f"Ep {i}", "description": "Desc"}
+		})
+
+	response = await client.get(
+		f"/episodes?project_id={project_id}&sort_by=episode_number&sort_order=desc",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["episodes"][0]["episode_number"] == 3
+	assert data["episodes"][2]["episode_number"] == 1
+
+
+@pytest.mark.asyncio
+async def test_combined_search_and_status_filter(client, project_and_auth):
+	"""Test combining search query with status filter."""
+	project_id, headers = project_and_auth
+
+	# Create episodes
+	ep1 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Science Complete", "description": "Complete science"}
+	})
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "Science Draft", "description": "Draft science"}
+	})
+
+	# Mark ep1 as complete
+	await client.put(f"/episodes/{ep1.json()['id']}", headers=headers, json={"generation_status": "complete"})
+
+	# Search "Science" AND status=complete
+	response = await client.get(
+		f"/episodes?project_id={project_id}&search=Science&status=complete",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 1
+	assert data["episodes"][0]["episode_metadata"]["title"] == "Science Complete"
+
+
+@pytest.mark.asyncio
+async def test_invalid_sort_by_returns_422(client, project_and_auth):
+	"""Test that invalid sort_by value returns 422."""
+	project_id, headers = project_and_auth
+
+	response = await client.get(
+		f"/episodes?project_id={project_id}&sort_by=invalid_field",
+		headers=headers
+	)
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_invalid_sort_order_returns_422(client, project_and_auth):
+	"""Test that invalid sort_order value returns 422."""
+	project_id, headers = project_and_auth
+
+	response = await client.get(
+		f"/episodes?project_id={project_id}&sort_order=sideways",
+		headers=headers
+	)
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_search_backward_compatible(client, project_and_auth):
+	"""Test that existing list endpoint still works without search params."""
+	project_id, headers = project_and_auth
+
+	for i in range(1, 4):
+		await client.post("/episodes", headers=headers, json={
+			"project_id": project_id,
+			"episode_number": i,
+			"episode_metadata": {"title": f"Ep {i}", "description": "Desc"}
+		})
+
+	# Original request without new params should work
+	response = await client.get(
+		f"/episodes?project_id={project_id}",
+		headers=headers
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 3
+	assert "episodes" in data
+	assert "total_pages" in data

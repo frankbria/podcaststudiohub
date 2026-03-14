@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
-from typing import Optional
+from datetime import datetime
+from typing import Optional, List
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
@@ -26,7 +27,9 @@ from ..services.episode_service import (
 	get_episodes,
 	get_episode_by_id,
 	update_episode,
-	delete_episode
+	delete_episode,
+	VALID_SORT_FIELDS,
+	VALID_SORT_ORDERS,
 )
 from ..services.storage_service import StorageService
 from ..utils.download_utils import get_episode_filename, parse_range_header, iter_s3_body
@@ -70,21 +73,37 @@ async def create_episode_endpoint(
 async def list_episodes(
 	project_id: Optional[UUID] = Query(None, description="Filter by project ID"),
 	status: Optional[str] = Query(None, description="Filter by generation status"),
+	search: Optional[str] = Query(None, description="Search term for title and description (case-insensitive)"),
+	date_from: Optional[datetime] = Query(None, description="Filter episodes created on or after this datetime (ISO 8601)"),
+	date_to: Optional[datetime] = Query(None, description="Filter episodes created on or before this datetime (ISO 8601)"),
+	tags: Optional[str] = Query(None, description="Comma-separated tags to filter by (OR logic)"),
+	min_duration: Optional[float] = Query(None, ge=0, description="Minimum duration in seconds"),
+	max_duration: Optional[float] = Query(None, ge=0, description="Maximum duration in seconds"),
+	sort_by: str = Query("episode_number", description="Sort field: episode_number, created_at, duration_seconds"),
+	sort_order: str = Query("asc", description="Sort direction: asc, desc"),
 	page: int = Query(1, ge=1, description="Page number (1-indexed)"),
 	page_size: int = Query(20, ge=1, le=100, description="Items per page"),
 	current_user: User = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db)
 ):
 	"""
-	List episodes with optional filtering and pagination.
+	List episodes with optional filtering, search, and pagination.
 
-	Filter by project_id and/or generation_status.
+	Supports full-text search on title/description, date range filtering,
+	tag filtering, duration filtering, and custom sort order.
 	Automatically filtered by user's tenant via RLS.
-	Results ordered by episode_number ascending.
 
 	Args:
 		project_id: Optional project ID to filter by
 		status: Optional generation status to filter by
+		search: Optional search term (searches title and description, case-insensitive)
+		date_from: Optional lower bound for created_at
+		date_to: Optional upper bound for created_at
+		tags: Optional comma-separated tags (OR logic)
+		min_duration: Optional minimum duration in seconds
+		max_duration: Optional maximum duration in seconds
+		sort_by: Field to sort by (episode_number, created_at, duration_seconds)
+		sort_order: Sort direction (asc, desc)
 		page: Page number (1-indexed)
 		page_size: Items per page (1-100)
 		current_user: Authenticated user (from JWT token)
@@ -93,13 +112,39 @@ async def list_episodes(
 	Returns:
 		Paginated list of episodes with metadata
 	"""
+	if sort_by not in VALID_SORT_FIELDS:
+		from fastapi import HTTPException
+		raise HTTPException(
+			status_code=422,
+			detail=f"Invalid sort_by '{sort_by}'. Must be one of: {', '.join(sorted(VALID_SORT_FIELDS))}"
+		)
+	if sort_order not in VALID_SORT_ORDERS:
+		from fastapi import HTTPException
+		raise HTTPException(
+			status_code=422,
+			detail=f"Invalid sort_order '{sort_order}'. Must be one of: {', '.join(sorted(VALID_SORT_ORDERS))}"
+		)
+
+	# Parse comma-separated tags
+	tag_list: Optional[List[str]] = None
+	if tags:
+		tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+
 	skip = (page - 1) * page_size
 	episodes, total = await get_episodes(
 		db=db,
 		project_id=project_id,
 		skip=skip,
 		limit=page_size,
-		status_filter=status
+		status_filter=status,
+		search=search,
+		date_from=date_from,
+		date_to=date_to,
+		tags=tag_list,
+		min_duration=min_duration,
+		max_duration=max_duration,
+		sort_by=sort_by,
+		sort_order=sort_order,
 	)
 
 	total_pages = (total + page_size - 1) // page_size  # Ceiling division

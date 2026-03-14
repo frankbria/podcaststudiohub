@@ -52,7 +52,7 @@ class AnalyticsEventResponse(BaseModel):
 	device_type: Optional[str]
 	app_name: Optional[str]
 	country: Optional[str]
-	metadata: Optional[Dict[str, Any]]
+	event_metadata: Optional[Dict[str, Any]]
 	created_at: datetime
 
 	model_config = {"from_attributes": True}

@@ -93,7 +93,7 @@ async def test_track_event_play(client, setup):
 	assert response.status_code == 201
 	data = response.json()
 	assert data["event_type"] == "play"
-	assert data["metadata"]["duration_listened_seconds"] == 300
+	assert data["event_metadata"]["duration_listened_seconds"] == 300
 
 
 @pytest.mark.asyncio

@@ -89,7 +89,7 @@ async def track_event(
 		ip_hash=ip_hash,
 		device_type=device_type,
 		app_name=app_name,
-		metadata=event_data.metadata,
+		event_metadata=event_data.metadata,
 	)
 	db.add(event)
 	await db.commit()

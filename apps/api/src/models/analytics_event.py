@@ -33,7 +33,7 @@ class AnalyticsEvent(Base):
 	app_name = Column(Text, nullable=True)  # Podcast app (Apple Podcasts, Spotify, etc.)
 
 	# Event metadata
-	metadata = Column(JSONB, nullable=True)  # {duration_listened: 120, completed: false, etc}
+	event_metadata = Column("metadata", JSONB, nullable=True)  # {duration_listened: 120, completed: false, etc}
 
 	created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 

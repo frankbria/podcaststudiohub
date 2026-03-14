@@ -334,16 +334,16 @@ jobs:
           if python3 -c "exit(0 if float('$COVERAGE') < $THRESHOLD else 1)"; then
             echo "Coverage ${COVERAGE}% is below ${THRESHOLD}% — filing issue"
 
-            TITLE="coverage: backend at ${COVERAGE}% (below ${THRESHOLD}% target)"
-            EXISTING=$(gh issue list --search "$TITLE" --state open --json number --jq 'length')
+            TITLE="coverage: backend below ${THRESHOLD}% target"
+            EXISTING=$(gh issue list --label "auto-coverage" --state open --json number --jq 'length')
             if [[ "$EXISTING" -gt 0 ]]; then
-              echo "Issue already exists — skipping"
+              echo "Coverage issue already open — skipping"
               exit 0
             fi
 
             gh issue create \
               --title "$TITLE" \
-              --label "priority-p2,tech-debt" \
+              --label "priority-p2,tech-debt,auto-coverage" \
               --body "$(cat <<EOF
           ## Backend test coverage has dropped below ${THRESHOLD}%
 
@@ -402,6 +402,8 @@ jobs:
         env:
           PORT: 3200
           NEXT_PUBLIC_API_URL: http://localhost:8200
+          NEXTAUTH_SECRET: test-nextauth-secret-for-ci
+          NEXTAUTH_URL: http://localhost:3200
         run: |
           npm start &
           echo "Waiting for frontend..."
@@ -433,6 +435,7 @@ jobs:
         id: e2e-tests
         env:
           BASE_URL: http://localhost:3200
+          NEXT_PUBLIC_API_URL: http://localhost:8200
           E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
         run: npx playwright test --project=chromium

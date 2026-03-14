@@ -100,41 +100,43 @@ async def create_checkout_session(
 
 	try:
 		import stripe
-		from ..config import settings
+		stripe_configured = True
+	except ImportError:
+		stripe_configured = False
 
-		if not getattr(settings, "STRIPE_SECRET_KEY", None):
-			raise ImportError("No Stripe key")
+	from ..config import settings
+	stripe_key = getattr(settings, "STRIPE_SECRET_KEY", None)
 
-		stripe.api_key = settings.STRIPE_SECRET_KEY
-
-		# Look up or create Stripe customer
-		if subscription.stripe_customer_id:
-			customer_id = subscription.stripe_customer_id
-		else:
-			# In a real implementation you would fetch the user's email here
-			customer = stripe.Customer.create(metadata={"user_id": str(user_id)})
-			customer_id = customer.id
-			subscription.stripe_customer_id = customer_id
-			await db.flush()
-
-		price_id = _get_stripe_price_id(tier)
-		session = stripe.checkout.Session.create(
-			customer=customer_id,
-			payment_method_types=["card"],
-			mode="subscription",
-			line_items=[{"price": price_id, "quantity": 1}],
-			success_url=f"{return_url}?session_id={{CHECKOUT_SESSION_ID}}",
-			cancel_url=return_url,
-			metadata={"user_id": str(user_id), "tier": tier},
-		)
-		return {"checkout_url": session.url}
-
-	except (ImportError, Exception) as exc:
+	if not stripe_configured or not stripe_key:
 		# Stripe not configured — return a placeholder URL for dev/test
-		logger.warning("Stripe not configured or error occurred: %s", exc)
+		logger.warning("Stripe not configured, returning mock checkout URL")
 		return {
 			"checkout_url": f"{return_url}?mock=true&tier={tier}&user_id={user_id}"
 		}
+
+	stripe.api_key = stripe_key
+
+	# Look up or create Stripe customer
+	if subscription.stripe_customer_id:
+		customer_id = subscription.stripe_customer_id
+	else:
+		# In a real implementation you would fetch the user's email here
+		customer = stripe.Customer.create(metadata={"user_id": str(user_id)})
+		customer_id = customer.id
+		subscription.stripe_customer_id = customer_id
+		await db.flush()
+
+	price_id = _get_stripe_price_id(tier)
+	session = stripe.checkout.Session.create(
+		customer=customer_id,
+		payment_method_types=["card"],
+		mode="subscription",
+		line_items=[{"price": price_id, "quantity": 1}],
+		success_url=f"{return_url}?session_id={{CHECKOUT_SESSION_ID}}",
+		cancel_url=return_url,
+		metadata={"user_id": str(user_id), "tier": tier},
+	)
+	return {"checkout_url": session.url}
 
 
 def _get_stripe_price_id(tier: str) -> str:

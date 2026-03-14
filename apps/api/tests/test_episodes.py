@@ -85,7 +85,7 @@ async def test_create_episode_with_optional_metadata(client, project_and_auth):
 	assert response.status_code == 201
 	data = response.json()
 	assert data["episode_metadata"]["format"] == "bonus"
-	assert data["episode_metadata"]["explicit"] == True
+	assert data["episode_metadata"]["explicit"] is True
 
 
 @pytest.mark.asyncio

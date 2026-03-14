@@ -11,6 +11,8 @@ from .rss_feed import RSSFeed
 from .audio_snippet import AudioSnippet
 from .episode_layout import EpisodeLayout
 from .episode_composition import EpisodeComposition
+from .billing_subscription import BillingSubscription, SubscriptionTier, SubscriptionStatus
+from .billing_usage import BillingUsage
 
 __all__ = [
     "User",
@@ -24,4 +26,8 @@ __all__ = [
     "AudioSnippet",
     "EpisodeLayout",
     "EpisodeComposition",
+    "BillingSubscription",
+    "SubscriptionTier",
+    "SubscriptionStatus",
+    "BillingUsage",
 ]

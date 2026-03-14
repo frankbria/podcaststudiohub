@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     SPOTIFY_CLIENT_SECRET: Optional[str] = None
     SPOTIFY_REDIRECT_URI: Optional[str] = None
 
+    # Stripe Billing
+    STRIPE_SECRET_KEY: Optional[str] = None
+    STRIPE_PUBLIC_KEY: Optional[str] = None
+    STRIPE_WEBHOOK_SECRET: Optional[str] = None
+    BILLING_ENABLED: bool = False
+
     # Logging
     LOG_LEVEL: str = "INFO"
 

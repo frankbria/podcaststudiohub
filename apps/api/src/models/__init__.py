@@ -11,6 +11,7 @@ from .rss_feed import RSSFeed
 from .audio_snippet import AudioSnippet
 from .episode_layout import EpisodeLayout
 from .episode_composition import EpisodeComposition
+from .analytics_event import AnalyticsEvent
 
 __all__ = [
     "User",
@@ -24,4 +25,5 @@ __all__ = [
     "AudioSnippet",
     "EpisodeLayout",
     "EpisodeComposition",
+    "AnalyticsEvent",
 ]

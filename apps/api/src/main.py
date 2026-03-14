@@ -94,6 +94,11 @@ app.include_router(conversation_templates.router)
 app.include_router(rss_feed_router)
 app.include_router(rss_public_router)
 
+# Analytics routers - GAP-049
+from src.routers.analytics import router as analytics_router, projects_analytics_router  # noqa: E402
+app.include_router(analytics_router)
+app.include_router(projects_analytics_router)
+
 
 if __name__ == "__main__":
     import uvicorn

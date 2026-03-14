@@ -335,4 +335,13 @@ async def accept_invitation(
 	invitation.accepted_at = now
 
 	await db.commit()
-	return member
+
+	# Re-fetch member with user relationship eagerly loaded to avoid
+	# async lazy-load errors when the caller accesses member.user.
+	from sqlalchemy.orm import selectinload
+	refreshed = await db.execute(
+		select(TeamMember)
+		.options(selectinload(TeamMember.user))
+		.where(TeamMember.id == member.id)
+	)
+	return refreshed.scalar_one()

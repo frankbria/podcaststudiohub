@@ -7,10 +7,14 @@ Tests verify:
 3. RLS policies enforce tenant data isolation
 4. Cross-tenant data access is blocked
 5. Different tenants cannot see each other's data
+6. Exception handling: expected errors logged, unexpected errors propagated
 """
+import logging
 import pytest
 import uuid
+from unittest.mock import patch, MagicMock
 from httpx import AsyncClient
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
@@ -376,3 +380,119 @@ async def test_set_tenant_context_validates_uuid():
 
         with pytest.raises(ValueError, match="Invalid tenant_id format"):
             await set_tenant_context(session, "")
+
+
+# =============================================================================
+# Middleware Exception Handling Tests (Issue #39)
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_middleware_handles_invalid_token_gracefully(client: AsyncClient):
+    """
+    Verify middleware continues without tenant context when token is malformed.
+
+    A malformed token should be caught as a ValueError (from verify_jwt_token),
+    logged at DEBUG level, and the request should proceed without tenant context.
+    The auth dependency (get_current_user) handles the actual 401 response.
+    """
+    response = await client.get(
+        "/projects",
+        headers={"Authorization": "Bearer not.a.valid.jwt.token"}
+    )
+    # Auth dependency rejects invalid token with 401
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_middleware_propagates_http_exceptions(client: AsyncClient):
+    """
+    Verify HTTPException raised during tenant extraction is NOT swallowed.
+
+    If a helper function raises HTTPException (e.g., 401 Unauthorized),
+    the middleware must re-raise it so the client gets the proper status code.
+    """
+    with patch(
+        "src.middleware.tenant.extract_token_from_header",
+        side_effect=HTTPException(status_code=401, detail="Token revoked"),
+    ):
+        response = await client.get(
+            "/projects",
+            headers={"Authorization": "Bearer some-token"}
+        )
+        assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_middleware_logs_and_reraises_unexpected_errors(client: AsyncClient):
+    """
+    Verify unexpected errors in tenant middleware are logged and re-raised.
+
+    If an unexpected exception (e.g., RuntimeError, ConnectionError) occurs
+    during tenant extraction, it must be logged at ERROR level with a stack
+    trace and then re-raised so it becomes a 500 response.
+    """
+    with patch(
+        "src.middleware.tenant.get_tenant_id_from_token",
+        side_effect=RuntimeError("database connection lost"),
+    ), patch(
+        "src.middleware.tenant.extract_token_from_header",
+        return_value="fake-token",
+    ), patch(
+        "src.middleware.tenant.logger"
+    ) as mock_logger:
+        response = await client.get(
+            "/projects",
+            headers={"Authorization": "Bearer some-token"}
+        )
+        assert response.status_code == 500
+        mock_logger.error.assert_called_once()
+        call_args = mock_logger.error.call_args
+        assert "Unexpected error in tenant middleware" in call_args[0][0]
+        assert call_args[1].get("exc_info") is True
+
+
+@pytest.mark.asyncio
+async def test_middleware_handles_missing_tenant_claim(client: AsyncClient):
+    """
+    Verify middleware handles a valid JWT that lacks a tenant_id claim.
+
+    If the JWT is valid but doesn't contain tenant_id, the middleware should
+    continue without setting tenant context (no error).
+    """
+    from jose import jwt
+    from src.config import settings
+
+    # Create a JWT without tenant_id claim
+    token = jwt.encode(
+        {"sub": str(uuid.uuid4()), "email": "test@example.com"},
+        settings.JWT_SECRET_KEY,
+        algorithm=settings.JWT_ALGORITHM,
+    )
+
+    response = await client.get(
+        "/projects",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    # Auth dependency may reject (no user in DB), but middleware shouldn't crash
+    # The key assertion is that we don't get a 500 error from the middleware
+    assert response.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_middleware_valid_token_still_extracts_tenant(client: AsyncClient):
+    """
+    Sanity check: valid token still extracts tenant_id correctly after refactor.
+    """
+    response = await client.post("/auth/register", json={
+        "email": f"exception_test_{uuid.uuid4()}@example.com",
+        "password": "SecurePass123!",
+        "full_name": "Exception Test User"
+    })
+    assert response.status_code == 201
+    token = response.json()["access_token"]
+
+    projects_response = await client.get(
+        "/projects",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    assert projects_response.status_code == 200

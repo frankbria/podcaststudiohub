@@ -49,12 +49,16 @@ def get_tenant_id_from_token(token: str) -> Optional[str]:
         token: JWT token string
 
     Returns:
-        Tenant ID string or None if token is invalid
+        Tenant ID string or None if token is invalid or missing tenant_id
+
+    Note:
+        Only catches ValueError (raised by verify_jwt_token for invalid/expired
+        tokens). All other exceptions propagate to the caller.
     """
     try:
         payload = verify_jwt_token(token)
         return payload.get("tenant_id")
-    except (ValueError, Exception):
+    except ValueError:
         return None
 
 

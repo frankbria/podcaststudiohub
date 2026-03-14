@@ -49,13 +49,13 @@ def get_tenant_id_from_token(token: str) -> Optional[str]:
         token: JWT token string
 
     Returns:
-        Tenant ID string or None if token is invalid
+        Tenant ID string or None if tenant_id claim is missing
+
+    Raises:
+        ValueError: If token is invalid or expired (from verify_jwt_token)
     """
-    try:
-        payload = verify_jwt_token(token)
-        return payload.get("tenant_id")
-    except (ValueError, Exception):
-        return None
+    payload = verify_jwt_token(token)
+    return payload.get("tenant_id")
 
 
 async def get_current_user(

@@ -4,11 +4,14 @@ Multi-tenant context injection middleware for Row-Level Security (RLS).
 This middleware extracts tenant_id from JWT tokens and stores it in request.state
 for use by the database dependency to configure PostgreSQL RLS context.
 """
+import logging
 from typing import Optional
-from fastapi import Request
+from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.middleware.auth import extract_token_from_header, get_tenant_id_from_token
+
+logger = logging.getLogger(__name__)
 
 
 class TenantContextMiddleware(BaseHTTPMiddleware):
@@ -63,10 +66,17 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
                     # Store tenant_id in request state for database dependency
                     request.state.tenant_id = tenant_id
                     request.state.set_tenant_context = True
-        except Exception:
-            # If token extraction fails, continue without tenant context
-            # The authentication middleware will handle invalid tokens
-            pass
+        except ValueError:
+            # Expected: invalid/expired token — continue without tenant context.
+            # The auth dependency (get_current_user) handles the actual 401.
+            logger.debug("Invalid token for %s", request.url.path)
+        except HTTPException:
+            # Auth-related HTTP errors must propagate (401, 403, etc.)
+            raise
+        except Exception as e:
+            # Unexpected errors must be visible, not silently swallowed
+            logger.error("Unexpected error in tenant middleware: %s", e, exc_info=True)
+            raise
 
         # Continue to route handler
         response = await call_next(request)

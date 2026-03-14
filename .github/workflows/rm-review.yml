@@ -335,7 +335,8 @@ jobs:
             echo "Coverage ${COVERAGE}% is below ${THRESHOLD}% — filing issue"
 
             TITLE="coverage: backend below ${THRESHOLD}% target"
-            EXISTING=$(gh issue list --search "$TITLE in:title" --state open --json number --jq '.[0].number // empty')
+            EXISTING=$(gh issue list --state open --limit 200 --json number,title \
+              | jq -r --arg title "$TITLE" '[.[] | select(.title == $title)][0].number // empty')
             if [[ -n "$EXISTING" ]]; then
               echo "Issue #$EXISTING already open — adding comment"
               gh issue comment "$EXISTING" --body "Coverage now at **${COVERAGE}%** (detected in PR #${{ needs.select-pr.outputs.pr_number }})"

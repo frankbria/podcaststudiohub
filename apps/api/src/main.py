@@ -79,6 +79,8 @@ from src.routers import auth, projects, episodes, content, generation, episode_l
 from src.routers.rss_feed import router as rss_feed_router, public_router as rss_public_router  # noqa: E402
 # Register routers - User Story 2 (Distribution Target Management, GAP-010)
 from src.routers import distribution_targets  # noqa: E402
+# Register routers - GAP-051 (Team Collaboration)
+from src.routers import teams  # noqa: E402
 
 app.include_router(auth.router)
 app.include_router(projects.router)
@@ -93,6 +95,9 @@ app.include_router(conversation_templates.router)
 # RSS Feed routers - GAP-011
 app.include_router(rss_feed_router)
 app.include_router(rss_public_router)
+
+# Team collaboration routers - GAP-051
+app.include_router(teams.router)
 
 
 if __name__ == "__main__":

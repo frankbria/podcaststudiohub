@@ -9,10 +9,9 @@ Tests verify:
 5. Different tenants cannot see each other's data
 6. Exception handling: expected errors logged, unexpected errors propagated
 """
-import logging
 import pytest
 import uuid
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from httpx import AsyncClient
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession

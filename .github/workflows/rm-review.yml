@@ -335,8 +335,7 @@ jobs:
             echo "Coverage ${COVERAGE}% is below ${THRESHOLD}% — filing issue"
 
             TITLE="coverage: backend below ${THRESHOLD}% target"
-            EXISTING=$(gh issue list --state open --limit 200 --json number,title \
-              | jq -r --arg title "$TITLE" '[.[] | select(.title == $title)][0].number // empty')
+            EXISTING=$(gh issue list --label "auto-coverage" --state open --json number --jq '.[0].number // empty')
             if [[ -n "$EXISTING" ]]; then
               echo "Issue #$EXISTING already open — adding comment"
               gh issue comment "$EXISTING" --body "Coverage now at **${COVERAGE}%** (detected in PR #${{ needs.select-pr.outputs.pr_number }})"
@@ -345,7 +344,7 @@ jobs:
 
             gh issue create \
               --title "$TITLE" \
-              --label "priority-p2,tech-debt" \
+              --label "priority-p2,tech-debt,auto-coverage" \
               --body "$(cat <<EOF
           ## Backend test coverage has dropped below ${THRESHOLD}%
 
@@ -404,6 +403,8 @@ jobs:
         env:
           PORT: 3200
           NEXT_PUBLIC_API_URL: http://localhost:8200
+          NEXTAUTH_SECRET: test-nextauth-secret-for-ci
+          NEXTAUTH_URL: http://localhost:3200
         run: |
           npm start &
           echo "Waiting for frontend..."
@@ -435,6 +436,7 @@ jobs:
         id: e2e-tests
         env:
           BASE_URL: http://localhost:3200
+          NEXT_PUBLIC_API_URL: http://localhost:8200
           E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
         run: npx playwright test --project=chromium

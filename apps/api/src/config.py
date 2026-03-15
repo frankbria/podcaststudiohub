@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     @field_validator("ENCRYPTION_KEY")
     @classmethod
     def validate_encryption_key_length(cls, v: str) -> str:
+        """Enforce minimum 32-character length for AES-256 encryption key."""
         if len(v) < 32:
             raise ValueError(
                 "ENCRYPTION_KEY must be at least 32 characters for secure AES encryption"

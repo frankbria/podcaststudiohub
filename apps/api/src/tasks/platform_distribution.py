@@ -210,7 +210,7 @@ def _distribute_via_webhook(episode_id: str, config: Dict, metadata: Dict, task:
     if method == "POST":
         response = requests.post(webhook_url, json=payload, headers=headers, timeout=30)
     else:
-        response = requests.get(webhook_url, headers=headers, timeout=30)
+        response = requests.get(webhook_url, headers=headers, params=payload, timeout=30)
 
     response.raise_for_status()
 

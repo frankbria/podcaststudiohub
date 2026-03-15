@@ -72,7 +72,7 @@ async def get_projects(
 	# Build base query
 	query = select(Project)
 	if not include_archived:
-		query = query.where(Project.is_archived.is_(False))  # noqa: E712
+		query = query.where(Project.is_archived.is_(False))
 
 	# Get total count (before pagination)
 	count_query = select(func.count()).select_from(query.subquery())

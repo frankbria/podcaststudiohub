@@ -118,7 +118,7 @@ async def test_tenant_isolation_registration_creates_separate_tenants(client: As
     })
     assert user1_response.status_code == 201
     user1_data = user1_response.json()
-    user1_data["access_token"]
+    assert "access_token" in user1_data
     tenant1_id = user1_data["user"]["tenant_id"]
 
     # Register second user
@@ -129,7 +129,7 @@ async def test_tenant_isolation_registration_creates_separate_tenants(client: As
     })
     assert user2_response.status_code == 201
     user2_data = user2_response.json()
-    user2_data["access_token"]
+    assert "access_token" in user2_data
     tenant2_id = user2_data["user"]["tenant_id"]
 
     # Verify different tenant IDs
@@ -249,7 +249,7 @@ async def test_middleware_extracts_tenant_id_from_token(client: AsyncClient):
     })
     assert response.status_code == 201
     token = response.json()["access_token"]
-    response.json()["user"]["tenant_id"]
+    assert "tenant_id" in response.json()["user"]
 
     # Make authenticated request
     protected_response = await client.get(
@@ -329,7 +329,6 @@ async def test_get_current_tenant_dependency():
     Verify get_current_tenant() dependency works correctly.
     """
     from src.dependencies import get_current_tenant
-    from fastapi import HTTPException
 
     # Test with tenant_id in request state
     class MockRequest:

@@ -61,7 +61,11 @@ async def _decrypt_sensitive_headers(db: AsyncSession, headers: dict) -> dict:
 	result = {}
 	for name, value in headers.items():
 		if is_sensitive_header(name):
-			result[name] = await decrypt_credential(db, value)
+			try:
+				result[name] = await decrypt_credential(db, value)
+			except Exception as e:
+				logger.error("Failed to decrypt header '%s': %s", name, type(e).__name__)
+				raise ValueError(f"Failed to decrypt header '{name}'") from e
 		else:
 			result[name] = value
 	return result

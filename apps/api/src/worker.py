@@ -2,6 +2,7 @@
 Celery worker configuration for background tasks
 """
 from celery import Celery
+from celery.schedules import crontab
 
 from src.config import settings
 
@@ -16,6 +17,7 @@ celery_app = Celery(
         "src.tasks.s3_upload",
         "src.tasks.platform_distribution",
         "src.tasks.content_extraction",
+        "src.tasks.oauth_token_refresh",
     ]
 )
 
@@ -51,13 +53,14 @@ celery_app.conf.task_routes = {
     "src.tasks.content_extraction.*": {"queue": "content_extraction"},
 }
 
-# Beat schedule (optional - for periodic tasks)
+# Beat schedule for periodic tasks
 celery_app.conf.beat_schedule = {
-    # Example: Clean up old temporary files every day
-    # "cleanup-temp-files": {
-    #     "task": "src.tasks.maintenance.cleanup_temp_files",
-    #     "schedule": crontab(hour=2, minute=0),  # 2 AM daily
-    # },
+    # Refresh expiring Spotify OAuth tokens every 6 hours
+    "refresh-oauth-tokens": {
+        "task": "refresh_oauth_tokens",
+        "schedule": crontab(hour="*/6"),
+        "options": {"queue": "distribution"},
+    },
 }
 
 if __name__ == "__main__":

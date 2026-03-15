@@ -716,13 +716,19 @@ jobs:
           BRANCH=$(gh pr view "$PR" --json headRefName --jq '.headRefName')
           git push origin --delete "$BRANCH" 2>/dev/null || true
 
-          # Reopen and comment on the linked issue
+          # Reopen and comment on the linked issue — but respect manual closures.
+          # If a human closed the issue as "completed", don't reopen it.
           if [[ -n "$ISSUE" && "$ISSUE" != "null" && "$ISSUE" != "" ]]; then
-            gh issue reopen "$ISSUE" 2>/dev/null || true
-            gh issue edit "$ISSUE" --remove-label "plan-ready" 2>/dev/null || true
-            gh issue edit "$ISSUE" --add-label "needs-retry" 2>/dev/null || true
+            CLOSE_REASON=$(gh issue view "$ISSUE" --json stateReason --jq '.stateReason // ""' 2>/dev/null || echo "")
+            if [[ "$CLOSE_REASON" == "COMPLETED" || "$CLOSE_REASON" == "completed" ]]; then
+              echo "::notice::Issue #$ISSUE was manually closed as completed — not reopening"
+              gh issue comment "$ISSUE" --body "PR #${PR} was closed (${REASON}), but this issue was already marked complete. Not reopening. — *repo-maintainer*" 2>/dev/null || true
+            else
+              gh issue reopen "$ISSUE" 2>/dev/null || true
+              gh issue edit "$ISSUE" --remove-label "plan-ready" 2>/dev/null || true
+              gh issue edit "$ISSUE" --add-label "needs-retry" 2>/dev/null || true
 
-            gh issue comment "$ISSUE" --body "$(cat <<EOF
+              gh issue comment "$ISSUE" --body "$(cat <<EOF
           ## @frankbria — Automated implementation failed
 
           PR #${PR} was closed after ${ROUND} review rounds.
@@ -741,5 +747,6 @@ jobs:
           ---
           *Refiled by repo-maintainer*
           EOF
-          )"
+              )"
+            fi
           fi

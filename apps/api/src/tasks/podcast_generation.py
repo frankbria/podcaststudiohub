@@ -5,7 +5,7 @@ Wraps the existing podcastfy CLI functionality
 import os
 import uuid as uuid_module
 import logging
-from celery import Task
+from celery import Task, chain
 from typing import Optional, List, Dict, Any
 from pydub import AudioSegment
 
@@ -364,3 +364,100 @@ def finalize_episode_generation_task(
             except Exception as db_err:
                 logger.error(f"Failed to update episode status after error: {db_err}")
             return {"status": "failed", "error": str(e)}
+
+
+def build_generation_workflow(
+	episode_id: str,
+	audio_file_path: str,
+	s3_bucket: Optional[str] = None,
+	enable_composition: bool = False,
+	composition_timeline: Optional[List[Dict[str, Any]]] = None,
+	output_path: Optional[str] = None,
+	enable_distribution: bool = False,
+	platforms: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> chain:
+	"""
+	Build a Celery workflow chain that uploads, optionally composes, and
+	optionally distributes a generated podcast episode, with success and error
+	callbacks updating the Episode record at each stage.
+
+	Args:
+		episode_id: UUID string of the episode.
+		audio_file_path: Local path to the generated audio file.
+		s3_bucket: S3 bucket name for upload.  Defaults to settings.AWS_S3_BUCKET.
+		enable_composition: Whether to include the audio-composition step.
+		composition_timeline: Timeline segments for merge_audio_snippets_task.
+		output_path: Output path for the composed audio file.
+		enable_distribution: Whether to include platform-distribution steps.
+		platforms: Mapping of platform_name → config dict for distribution.
+
+	Returns:
+		A Celery ``chain`` object ready to be called with ``.apply_async()``.
+	"""
+	from src.tasks.callbacks import (
+		on_composition_complete,
+		on_distribution_complete,
+		on_upload_complete,
+		on_workflow_complete,
+		on_workflow_failure,
+	)
+	from src.tasks.audio_composition import merge_audio_snippets_task
+	from src.tasks.platform_distribution import distribute_to_platform_task
+
+	bucket = s3_bucket or settings.AWS_S3_BUCKET or ""
+	s3_key = f"podcasts/episode-{episode_id}.mp3"
+
+	# Stage: S3 upload
+	upload_sig = upload_to_s3_task.s(
+		file_path=audio_file_path,
+		s3_key=s3_key,
+		bucket_name=bucket,
+		content_type="audio/mpeg",
+	).set(
+		link=on_upload_complete.s(episode_id=episode_id),
+		link_error=on_workflow_failure.s(episode_id=episode_id, task_name="upload_to_s3"),
+	)
+
+	workflow_tasks = [upload_sig]
+
+	# Stage: audio composition (optional)
+	if enable_composition:
+		composed_output = output_path or f"/tmp/composed_{episode_id}.mp3"
+		composition_sig = merge_audio_snippets_task.s(
+			episode_id=episode_id,
+			timeline=composition_timeline or [],
+			output_path=composed_output,
+		).set(
+			link=on_composition_complete.s(episode_id=episode_id),
+			link_error=on_workflow_failure.s(
+				episode_id=episode_id, task_name="merge_audio_snippets"
+			),
+		)
+		workflow_tasks.append(composition_sig)
+
+	# Stage: platform distribution (optional)
+	if enable_distribution and platforms:
+		for platform_name, platform_config in platforms.items():
+			dist_sig = distribute_to_platform_task.s(
+				episode_id=episode_id,
+				platform=platform_name,
+				platform_config=platform_config,
+				episode_metadata={},
+			).set(
+				link=on_distribution_complete.s(
+					episode_id=episode_id, platform=platform_name
+				),
+				link_error=on_workflow_failure.s(
+					episode_id=episode_id,
+					task_name=f"distribute_to_platform:{platform_name}",
+				),
+			)
+			workflow_tasks.append(dist_sig)
+
+	workflow = chain(*workflow_tasks)
+	workflow.link(on_workflow_complete.s(episode_id=episode_id))
+	workflow.link_error(
+		on_workflow_failure.s(episode_id=episode_id, task_name="workflow")
+	)
+
+	return workflow

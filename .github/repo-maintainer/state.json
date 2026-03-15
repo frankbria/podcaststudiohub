@@ -22,9 +22,10 @@
     "consecutive_successes": 10
   },
   "phases": {
-    "current_phase": "phase-2",
+    "current_phase": "phase-3",
     "completed_phases": [
-      "phase-1"
+      "phase-1",
+      "phase-2"
     ]
   },
   "feedback": {

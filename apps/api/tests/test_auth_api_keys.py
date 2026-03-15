@@ -16,17 +16,20 @@ from src.services.auth_service import (
 	delete_api_key,
 	list_api_key_providers,
 )
+from src.database import set_tenant_context
 
 
 @pytest.fixture
 async def test_user(test_db):
-	"""Create a test user and return the User model instance."""
+	"""Create a test user and set tenant context for RLS."""
 	user = await create_user(
 		session=test_db,
 		email=f"apikey_test_{uuid4()}@example.com",
 		password="SecurePass123!",
 		full_name="API Key Test User",
 	)
+	# Set tenant context so RLS allows subsequent operations on this user
+	await set_tenant_context(test_db, str(user.tenant_id))
 	return user
 
 

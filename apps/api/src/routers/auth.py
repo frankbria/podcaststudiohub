@@ -2,15 +2,13 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.exc import IntegrityError
 
 from ..database import get_db
 from ..schemas.auth import UserRegister, UserLogin, UserResponse, TokenResponse
 from ..services.auth_service import (
     create_user,
     authenticate_user,
-    create_jwt_token,
-    get_user_by_id
+    create_jwt_token
 )
 from ..models.user import User
 from ..middleware.auth import get_current_user

@@ -9,7 +9,7 @@ from uuid import uuid4, UUID as PyUUID
 from datetime import timedelta
 from sqlalchemy import update
 
-from src.services.auth_service import create_jwt_token, create_user
+from src.services.auth_service import create_jwt_token
 from src.models.episode import Episode
 
 

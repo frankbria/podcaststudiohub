@@ -15,7 +15,7 @@ All file I/O and episode_service functions are mocked to avoid external dependen
 """
 
 import pytest
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock, MagicMock
 from uuid import uuid4
 import xml.etree.ElementTree as ET
 

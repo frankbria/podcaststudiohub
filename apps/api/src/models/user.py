@@ -1,7 +1,6 @@
 """User model for authentication and multi-tenancy"""
 
 from datetime import datetime
-from typing import Optional
 from sqlalchemy import Column, String, DateTime, Boolean
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship

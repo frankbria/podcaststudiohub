@@ -13,7 +13,7 @@ maintain async compatibility with the FastAPI application.
 
 import asyncio
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from requests.exceptions import RequestException, Timeout, HTTPError
@@ -206,7 +206,7 @@ class ContentExtractionService:
 			)
 			return ExtractionResult(success=True, content=extracted_text)
 
-		except FileNotFoundError as e:
+		except FileNotFoundError:
 			error_msg = f"PDF file not found: {file_path}"
 			logger.error(f"File error extracting {filename}: {error_msg}")
 			await self._update_extraction_failed(db, content_source, error_msg)

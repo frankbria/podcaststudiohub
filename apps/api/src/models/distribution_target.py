@@ -1,8 +1,7 @@
 """DistributionTarget model for platform connections and webhooks"""
 
 from datetime import datetime
-from typing import Optional
-from sqlalchemy import Column, String, Text, DateTime, Boolean, ForeignKey
+from sqlalchemy import Column, Text, DateTime, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid

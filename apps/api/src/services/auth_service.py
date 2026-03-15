@@ -10,8 +10,11 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException
 
+from sqlalchemy.orm.attributes import flag_modified
+
 from ..models.user import User
 from ..config import settings
+from ..utils.encryption import encrypt_credential, decrypt_credential
 
 
 # ============================================================================
@@ -237,3 +240,125 @@ async def get_user_by_id(session: AsyncSession, user_id: UUID) -> Optional[User]
         select(User).where(User.id == user_id)
     )
     return result.scalar_one_or_none()
+
+
+# ============================================================================
+# API Key Encryption Functions
+# ============================================================================
+
+async def store_api_key(
+    session: AsyncSession,
+    user_id: UUID,
+    provider: str,
+    api_key: str,
+) -> None:
+    """
+    Encrypt and store an API key for a third-party provider.
+
+    Args:
+        session: Database session
+        user_id: User's UUID
+        provider: Provider name (e.g. "openai", "elevenlabs", "gemini")
+        api_key: Plain text API key to encrypt and store
+
+    Raises:
+        HTTPException: 404 if user not found
+    """
+    user = await get_user_by_id(session, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    encrypted = await encrypt_credential(session, api_key)
+
+    if user.encrypted_api_keys is None:
+        user.encrypted_api_keys = {}
+
+    user.encrypted_api_keys[provider] = encrypted
+    flag_modified(user, "encrypted_api_keys")
+    await session.commit()
+
+
+async def get_api_key(
+    session: AsyncSession,
+    user_id: UUID,
+    provider: str,
+) -> Optional[str]:
+    """
+    Retrieve and decrypt an API key for a provider.
+
+    Args:
+        session: Database session
+        user_id: User's UUID
+        provider: Provider name
+
+    Returns:
+        Decrypted API key string, or None if provider not stored
+
+    Raises:
+        HTTPException: 404 if user not found
+    """
+    user = await get_user_by_id(session, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    encrypted = (user.encrypted_api_keys or {}).get(provider)
+    if encrypted is None:
+        return None
+
+    return await decrypt_credential(session, encrypted)
+
+
+async def delete_api_key(
+    session: AsyncSession,
+    user_id: UUID,
+    provider: str,
+) -> bool:
+    """
+    Remove the stored API key for a provider.
+
+    Args:
+        session: Database session
+        user_id: User's UUID
+        provider: Provider name to remove
+
+    Returns:
+        True if the key was deleted, False if provider wasn't stored
+
+    Raises:
+        HTTPException: 404 if user not found
+    """
+    user = await get_user_by_id(session, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if provider not in (user.encrypted_api_keys or {}):
+        return False
+
+    del user.encrypted_api_keys[provider]
+    flag_modified(user, "encrypted_api_keys")
+    await session.commit()
+    return True
+
+
+async def list_api_key_providers(
+    session: AsyncSession,
+    user_id: UUID,
+) -> list[str]:
+    """
+    List provider names that have stored API keys (no key values).
+
+    Args:
+        session: Database session
+        user_id: User's UUID
+
+    Returns:
+        List of provider name strings
+
+    Raises:
+        HTTPException: 404 if user not found
+    """
+    user = await get_user_by_id(session, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return list((user.encrypted_api_keys or {}).keys())

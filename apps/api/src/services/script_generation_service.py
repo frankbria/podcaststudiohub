@@ -263,7 +263,7 @@ class ScriptGenerationService:
 				filename = source_data.get('filename', 'Unknown')
 				parts.append(f"=== Source: PDF - {filename} ===\n")
 			elif source_type == 'text':
-				parts.append(f"=== Source: Text Content ===\n")
+				parts.append("=== Source: Text Content ===\n")
 
 			# Add extracted content
 			parts.append(source.extracted_content)

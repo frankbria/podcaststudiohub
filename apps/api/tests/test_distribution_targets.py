@@ -850,3 +850,116 @@ def test_distribution_target_update_empty():
 	from src.schemas.distribution_target import DistributionTargetUpdate
 	schema = DistributionTargetUpdate()
 	assert schema.is_active is None
+
+
+# ============================================================================
+# WEBHOOK HEADER ENCRYPTION TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_webhook_sensitive_headers_not_in_db_plaintext(client, auth_headers, test_db):
+	"""Test that sensitive header values are encrypted before storage in DB."""
+	from sqlalchemy import select
+	from src.models.distribution_target import DistributionTarget
+
+	plaintext_token = "super-secret-bearer-token-12345"
+	response = await client.post("/distribution-targets/webhook", headers=auth_headers, json={
+		"name": "Encrypted Headers Webhook",
+		"url": "https://hooks.example.com/encrypted",
+		"method": "POST",
+		"headers": {
+			"Authorization": f"Bearer {plaintext_token}",
+			"X-API-Key": "my-api-key-value"
+		}
+	})
+	assert response.status_code == 201
+	target_id = response.json()["id"]
+
+	# Query DB directly to check stored config
+	result = await test_db.execute(
+		select(DistributionTarget).where(DistributionTarget.id == target_id)
+	)
+	target = result.scalar_one()
+	stored_headers = target.config.get("headers", {})
+
+	# Sensitive header values must NOT be stored as plaintext
+	assert stored_headers.get("Authorization") != f"Bearer {plaintext_token}", \
+		"Authorization header was stored in plaintext"
+	assert stored_headers.get("X-API-Key") != "my-api-key-value", \
+		"X-API-Key header was stored in plaintext"
+
+
+@pytest.mark.asyncio
+async def test_webhook_nonsensitive_headers_stored_plaintext(client, auth_headers, test_db):
+	"""Test that non-sensitive header values are stored as-is."""
+	from sqlalchemy import select
+	from src.models.distribution_target import DistributionTarget
+
+	response = await client.post("/distribution-targets/webhook", headers=auth_headers, json={
+		"name": "Plaintext Headers Webhook",
+		"url": "https://hooks.example.com/plain",
+		"method": "POST",
+		"headers": {
+			"Content-Type": "application/json",
+			"Accept": "application/json"
+		}
+	})
+	assert response.status_code == 201
+	target_id = response.json()["id"]
+
+	# Query DB directly to check stored config
+	result = await test_db.execute(
+		select(DistributionTarget).where(DistributionTarget.id == target_id)
+	)
+	target = result.scalar_one()
+	stored_headers = target.config.get("headers", {})
+
+	# Non-sensitive headers should remain plaintext
+	assert stored_headers.get("Content-Type") == "application/json"
+	assert stored_headers.get("Accept") == "application/json"
+
+
+@pytest.mark.asyncio
+async def test_webhook_connection_test_with_encrypted_headers(client, auth_headers):
+	"""Test that test_connection decrypts headers before sending the test request."""
+	# Create webhook with sensitive header
+	create_response = await client.post("/distribution-targets/webhook", headers=auth_headers, json={
+		"name": "Decrypt Test Webhook",
+		"url": "https://hooks.example.com/decrypt-test",
+		"method": "POST",
+		"headers": {
+			"Authorization": "Bearer my-secret-token",
+			"Content-Type": "application/json"
+		}
+	})
+	assert create_response.status_code == 201
+	target_id = create_response.json()["id"]
+
+	# Mock httpx for the test connection call and capture what headers are sent
+	with patch("src.services.distribution_target_service.httpx") as mock_httpx:
+		mock_client = AsyncMock()
+		mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
+		mock_httpx.AsyncClient.return_value.__aexit__.return_value = None
+		mock_httpx.HTTPStatusError = Exception
+
+		test_resp = MagicMock()
+		test_resp.status_code = 200
+		test_resp.raise_for_status = MagicMock()
+		mock_client.post.return_value = test_resp
+
+		response = await client.post(
+			f"/distribution-targets/{target_id}/test",
+			headers=auth_headers
+		)
+
+	assert response.status_code == 200
+	data = response.json()
+	assert data["success"] is True
+
+	# Verify the headers passed to httpx.post contain decrypted values
+	call_args = mock_client.post.call_args
+	sent_headers = call_args.kwargs.get("headers", {}) if call_args.kwargs else call_args[1].get("headers", {})
+	assert sent_headers.get("Authorization") == "Bearer my-secret-token", \
+		"Authorization header was not decrypted before sending test request"
+	assert sent_headers.get("Content-Type") == "application/json", \
+		"Content-Type header should remain as-is"

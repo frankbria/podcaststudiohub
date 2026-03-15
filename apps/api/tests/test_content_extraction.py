@@ -15,14 +15,13 @@ Podcastfy modules are mocked to avoid external dependencies.
 import pytest
 from unittest.mock import Mock, patch, AsyncMock
 from uuid import uuid4
-from requests.exceptions import Timeout, HTTPError, RequestException
+from requests.exceptions import Timeout, HTTPError
 
 from src.services.content_extraction_service import (
 	ContentExtractionService,
 	ExtractionResult
 )
 from src.models import ContentSource
-from src.schemas.content import ContentSourceUpdate
 
 
 # ============================================================================
@@ -200,7 +199,7 @@ async def test_extract_from_url_403_error(
 	http_error.response = Mock(status_code=403)
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
-		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
+		 patch('src.services.content_extraction_service.update_content_source'), \
 		 patch.object(extraction_service.website_extractor, 'extract_content', side_effect=http_error):
 
 		mock_get.return_value = url_content_source
@@ -223,7 +222,7 @@ async def test_extract_from_url_500_error(
 	http_error.response = Mock(status_code=500)
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
-		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
+		 patch('src.services.content_extraction_service.update_content_source'), \
 		 patch.object(extraction_service.website_extractor, 'extract_content', side_effect=http_error):
 
 		mock_get.return_value = url_content_source

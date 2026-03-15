@@ -4,7 +4,6 @@ FastAPI dependency injection helpers
 This module provides authentication and tenant context dependencies.
 """
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 # Re-export authentication dependencies from middleware

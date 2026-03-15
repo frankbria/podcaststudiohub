@@ -1,8 +1,7 @@
 """EpisodeComposition model for final composition state"""
 
 from datetime import datetime
-from typing import Optional
-from sqlalchemy import Column, String, Text, DateTime, Numeric, ForeignKey
+from sqlalchemy import Column, Text, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid

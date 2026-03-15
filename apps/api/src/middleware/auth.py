@@ -8,7 +8,7 @@ from sqlalchemy import select
 from uuid import UUID
 
 from ..database import get_db
-from ..services.auth_service import verify_jwt_token, get_user_by_id
+from ..services.auth_service import verify_jwt_token
 from ..models.user import User
 
 # HTTPBearer security scheme for extracting Authorization header

@@ -9,12 +9,9 @@ Tests cover:
 - Return value structure
 """
 
-import sys
-import types
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-import pytest
 
 from src.tasks.content_extraction import extract_content_task
 

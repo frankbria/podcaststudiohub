@@ -1,16 +1,14 @@
 """Generation router for podcast generation and progress tracking"""
 
+import asyncio
+import json
+import logging
 from uuid import UUID
-from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-import asyncio
-import json
-import logging
-
-logger = logging.getLogger(__name__)
 
 from ..database import get_db
 from ..models.episode import Episode
@@ -19,6 +17,8 @@ from ..models.user import User
 from ..dependencies import get_current_user
 from ..middleware.auth import get_current_user_from_query
 from ..tasks.podcast_generation import generate_podcast_task
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generation", tags=["Generation"])
 

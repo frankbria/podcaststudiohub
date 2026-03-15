@@ -62,6 +62,17 @@ class Settings(BaseSettings):
     SPOTIFY_CLIENT_SECRET: Optional[str] = None
     SPOTIFY_REDIRECT_URI: Optional[str] = None
 
+    # Rate Limiting
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_LOGIN_REQUESTS: int = 5
+    RATE_LIMIT_LOGIN_WINDOW_MINUTES: int = 5
+    RATE_LIMIT_REGISTER_REQUESTS: int = 3
+    RATE_LIMIT_REGISTER_WINDOW_MINUTES: int = 60
+    RATE_LIMIT_RESEND_REQUESTS: int = 5
+    RATE_LIMIT_RESEND_WINDOW_MINUTES: int = 60
+    RATE_LIMIT_TRUST_PROXY: bool = True
+    RATE_LIMIT_PROXY_COUNT: int = 1
+
     # Logging
     LOG_LEVEL: str = "INFO"
 

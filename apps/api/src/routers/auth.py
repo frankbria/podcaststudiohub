@@ -12,14 +12,34 @@ from ..services.auth_service import (
 )
 from ..models.user import User
 from ..middleware.auth import get_current_user
+from ..dependencies import create_rate_limit_dependency
+from ..config import settings
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+# Rate limit dependencies — instantiated once at import time
+_rate_limit_login = create_rate_limit_dependency(
+    "login",
+    settings.RATE_LIMIT_LOGIN_REQUESTS,
+    settings.RATE_LIMIT_LOGIN_WINDOW_MINUTES,
+)
+_rate_limit_register = create_rate_limit_dependency(
+    "register",
+    settings.RATE_LIMIT_REGISTER_REQUESTS,
+    settings.RATE_LIMIT_REGISTER_WINDOW_MINUTES,
+)
+_rate_limit_resend = create_rate_limit_dependency(
+    "resend",
+    settings.RATE_LIMIT_RESEND_REQUESTS,
+    settings.RATE_LIMIT_RESEND_WINDOW_MINUTES,
+)
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(
     user_data: UserRegister,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_rate_limit_register),
 ):
     """
     Register a new user account.
@@ -67,7 +87,8 @@ async def register(
 @router.post("/login", response_model=TokenResponse)
 async def login(
     credentials: UserLogin,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_rate_limit_login),
 ):
     """
     Authenticate user and return JWT access token.
@@ -123,3 +144,22 @@ async def get_current_user_info(
     Example: Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
     """
     return UserResponse.model_validate(current_user)
+
+
+@router.post("/resend-verification-email", status_code=status.HTTP_200_OK)
+async def resend_verification_email(
+    current_user: User = Depends(get_current_user),
+    _: None = Depends(_rate_limit_resend),
+):
+    """
+    Resend the email verification link to the currently authenticated user.
+
+    Requires valid JWT token in Authorization header.
+    Rate limited to 5 requests per 60 minutes per IP.
+    """
+    if current_user.is_verified:
+        return {"message": "Email is already verified."}
+
+    # Verification email sending would be triggered here via a background task.
+    # Placeholder response until email service is wired up.
+    return {"message": "Verification email sent."}

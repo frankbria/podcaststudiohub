@@ -3,6 +3,7 @@ Configuration management for Podcastfy API
 Loads environment variables and provides application settings
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 from typing import Optional
 
 
@@ -63,6 +64,15 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
+
+    @field_validator("ENCRYPTION_KEY")
+    @classmethod
+    def validate_encryption_key_length(cls, v: str) -> str:
+        if len(v) < 32:
+            raise ValueError(
+                "ENCRYPTION_KEY must be at least 32 characters for secure AES encryption"
+            )
+        return v
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -6,8 +6,63 @@ from typing import Dict, Any
 import logging
 
 from src.worker import celery_app
+from src.database import SyncSessionLocal
+from src.utils.encryption import decrypt_credential_sync
 
 logger = logging.getLogger(__name__)
+
+
+# Header keys whose values are encrypted at rest
+_SENSITIVE_HEADER_PATTERNS = {"authorization", "api-key", "api_key", "secret", "token", "x-api-key"}
+
+
+def _is_sensitive_header(header_name: str) -> bool:
+    lower = header_name.lower()
+    return any(pattern in lower for pattern in _SENSITIVE_HEADER_PATTERNS)
+
+
+def _decrypt_platform_config(config: Dict[str, Any], platform: str) -> Dict[str, Any]:
+    """
+    Decrypt encrypted credentials in a platform config dict.
+
+    Uses a synchronous DB session since Celery tasks run outside async context.
+    Only decrypts fields known to be encrypted by the distribution target service.
+
+    Args:
+        config: Platform config dict (may contain encrypted values)
+        platform: Platform type for determining which fields to decrypt
+
+    Returns:
+        Config dict with credentials decrypted
+    """
+    decrypted = dict(config)
+    session = SyncSessionLocal()
+    try:
+        if platform == "spotify":
+            oauth = decrypted.get("oauth_tokens", {})
+            if oauth.get("access_token"):
+                oauth["access_token"] = decrypt_credential_sync(session, oauth["access_token"])
+            if oauth.get("refresh_token"):
+                oauth["refresh_token"] = decrypt_credential_sync(session, oauth["refresh_token"])
+            decrypted["oauth_tokens"] = oauth
+
+        elif platform == "apple_podcasts":
+            creds = decrypted.get("credentials", {})
+            if creds.get("api_key"):
+                creds["api_key"] = decrypt_credential_sync(session, creds["api_key"])
+            decrypted["credentials"] = creds
+
+        elif platform == "webhook":
+            headers = decrypted.get("headers", {})
+            for key, value in headers.items():
+                if _is_sensitive_header(key) and value:
+                    headers[key] = decrypt_credential_sync(session, value)
+            decrypted["headers"] = headers
+
+    finally:
+        session.close()
+
+    return decrypted
 
 
 @celery_app.task(bind=True, name="distribute_to_platform", time_limit=300)
@@ -41,6 +96,19 @@ def distribute_to_platform_task(
                 'status': f'Starting distribution to {platform}...'
             }
         )
+
+        # Decrypt any encrypted credentials in the config
+        try:
+            platform_config = _decrypt_platform_config(platform_config, platform)
+        except Exception as e:
+            logger.error(f"Failed to decrypt credentials for {platform}: {e}")
+            return {
+                "status": "failed",
+                "platform": platform,
+                "platform_episode_id": None,
+                "platform_url": None,
+                "error": f"Credential decryption failed: {type(e).__name__}"
+            }
 
         if platform == "spotify":
             result = _distribute_to_spotify(episode_id, platform_config, episode_metadata, self)
@@ -133,20 +201,24 @@ def _distribute_via_webhook(episode_id: str, config: Dict, metadata: Dict, task:
         }
     )
 
-    webhook_url = config.get('webhook_url')
+    webhook_url = config.get('url') or config.get('webhook_url')
     if not webhook_url:
         raise ValueError("Webhook URL not provided in config")
 
+    headers = config.get('headers', {})
+    method = config.get('method', 'POST')
+
+    payload = {
+        "episode_id": episode_id,
+        "metadata": metadata,
+        "event": "episode_published"
+    }
+
     # Send webhook with episode data
-    response = requests.post(
-        webhook_url,
-        json={
-            "episode_id": episode_id,
-            "metadata": metadata,
-            "event": "episode_published"
-        },
-        timeout=30
-    )
+    if method == "POST":
+        response = requests.post(webhook_url, json=payload, headers=headers, timeout=30)
+    else:
+        response = requests.get(webhook_url, headers=headers, timeout=30)
 
     response.raise_for_status()
 

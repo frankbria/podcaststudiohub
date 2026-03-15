@@ -2,6 +2,7 @@
 Credential encryption utilities using PostgreSQL pgcrypto
 """
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from src.config import settings
@@ -59,6 +60,27 @@ async def encrypt_api_keys(db: AsyncSession, api_keys: dict) -> dict:
         if key_value:
             encrypted_keys[key_name] = await encrypt_credential(db, key_value)
     return encrypted_keys
+
+
+def decrypt_credential_sync(db: Session, encrypted_credential: str) -> str:
+    """
+    Decrypt a credential using PostgreSQL pgcrypto (synchronous version).
+
+    Use this in Celery tasks or other synchronous contexts where async
+    sessions are not available.
+
+    Args:
+        db: Synchronous database session
+        encrypted_credential: Base64-encoded encrypted credential
+
+    Returns:
+        Decrypted plain text credential
+    """
+    result = db.execute(
+        text("SELECT decrypt_credential(:encrypted_credential, :key)"),
+        {"encrypted_credential": encrypted_credential, "key": settings.ENCRYPTION_KEY}
+    )
+    return result.scalar_one()
 
 
 async def decrypt_api_keys(db: AsyncSession, encrypted_keys: dict) -> dict:

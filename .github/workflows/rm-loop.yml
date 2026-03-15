@@ -171,17 +171,40 @@ jobs:
             - Keep changes under ${{ steps.prompt.outputs.max_lines }} lines and ${{ steps.prompt.outputs.max_files }} files
             - Create branch: `maintainer/issue-${{ needs.select-issue.outputs.issue_number }}-${{ steps.prompt.outputs.slug }}`
 
-            ## Testing
-            - Python: `cd apps/api && uv run pytest`
-            - TypeScript: `cd apps/web && npm test`
-            - Linting: `cd apps/api && uv run ruff check .` and `cd apps/web && npm run lint`
+            ## MANDATORY: Pre-PR Verification
+            Before creating the PR, you MUST run and pass these checks:
+
+            If you changed Python files (apps/api/):
+            ```bash
+            cd apps/api && uv run pytest tests/ -x --tb=short
+            cd apps/api && uv run ruff check src/ tests/
+            ```
+
+            If you changed TypeScript/frontend files (apps/web/):
+            ```bash
+            cd apps/web && npm test -- --passWithNoTests --watchAll=false
+            cd apps/web && npm run lint
+            cd apps/web && npm run build
+            ```
+
+            If tests fail, fix them before creating the PR. You have 2 attempts.
+            Do NOT create a PR with failing tests.
+
+            ## CI Verification Context
+            After your PR is created, the review workflow will verify:
+            - Backend-only PRs: pytest + ruff (no E2E)
+            - Frontend PRs: jest + lint + build + health checks + Playwright E2E
+            - Full-stack PRs: all of the above
+
+            E2E tests start both API (port 8200) and frontend (port 3200) servers,
+            then run Playwright against them. If your PR is backend-only, E2E is skipped.
 
             ## PR Creation
             Create a ${{ steps.prompt.outputs.pr_type }} PR that closes #${{ needs.select-issue.outputs.issue_number }}.
             Include a summary, list of changes, and test plan.
             Add footer: `Automated by repo-maintainer (${{ needs.select-issue.outputs.tier }})`
 
-            If tests fail after 2 attempts, create a draft PR explaining the issue.
+            If tests still fail after 2 attempts, create a draft PR explaining what failed.
           claude_args: '--model sonnet --allowedTools "Bash,Read,Write,Edit,Glob,Grep" --max-turns 100'
 
       - name: Get PR number from output

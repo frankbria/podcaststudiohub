@@ -298,8 +298,22 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
+      - name: Detect changed areas
+        id: changes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          FILES=$(gh pr diff "$PR" --name-only)
+          HAS_BACKEND=$(echo "$FILES" | grep -q '^apps/api/' && echo "true" || echo "false")
+          HAS_FRONTEND=$(echo "$FILES" | grep -q '^apps/web/' && echo "true" || echo "false")
+          echo "has_backend=$HAS_BACKEND" >> $GITHUB_OUTPUT
+          echo "has_frontend=$HAS_FRONTEND" >> $GITHUB_OUTPUT
+          echo "Changed areas — backend: $HAS_BACKEND, frontend: $HAS_FRONTEND"
+
       - name: Run backend tests
         id: backend-tests
+        if: steps.changes.outputs.has_backend == 'true'
         working-directory: apps/api
         env:
           DATABASE_URL: postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy
@@ -369,16 +383,19 @@ jobs:
 
       - name: Run frontend tests
         id: frontend-tests
+        if: steps.changes.outputs.has_frontend == 'true'
         working-directory: apps/web
         run: npm test -- --passWithNoTests --watchAll=false
 
       - name: Build frontend
+        if: steps.changes.outputs.has_frontend == 'true'
         working-directory: apps/web
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8200
         run: npm run build
 
       - name: Start API server
+        if: steps.changes.outputs.has_frontend == 'true'
         working-directory: apps/api
         env:
           DATABASE_URL: postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy
@@ -399,6 +416,7 @@ jobs:
           done
 
       - name: Start frontend server
+        if: steps.changes.outputs.has_frontend == 'true'
         working-directory: apps/web
         env:
           PORT: 3200
@@ -418,6 +436,7 @@ jobs:
 
       - name: Health checks
         id: health
+        if: steps.changes.outputs.has_frontend == 'true'
         run: |
           API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8200/health)
           WEB_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3200)
@@ -430,10 +449,12 @@ jobs:
           echo "passed=true" >> $GITHUB_OUTPUT
 
       - name: Install Playwright browsers
+        if: steps.changes.outputs.has_frontend == 'true'
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright E2E tests
         id: e2e-tests
+        if: steps.changes.outputs.has_frontend == 'true'
         env:
           BASE_URL: http://localhost:3200
           NEXT_PUBLIC_API_URL: http://localhost:8200
@@ -443,7 +464,7 @@ jobs:
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.changes.outputs.has_frontend == 'true'
         with:
           name: verification-playwright-report
           path: playwright-report/
@@ -453,18 +474,41 @@ jobs:
         id: verdict
         if: always()
         run: |
+          HAS_BACKEND="${{ steps.changes.outputs.has_backend }}"
+          HAS_FRONTEND="${{ steps.changes.outputs.has_frontend }}"
           BACKEND="${{ steps.backend-tests.outcome }}"
           FRONTEND="${{ steps.frontend-tests.outcome }}"
           HEALTH="${{ steps.health.outcome }}"
           E2E="${{ steps.e2e-tests.outcome }}"
 
           echo "Backend: $BACKEND, Frontend: $FRONTEND, Health: $HEALTH, E2E: $E2E"
+          echo "Changed areas — backend: $HAS_BACKEND, frontend: $HAS_FRONTEND"
 
-          if [[ "$BACKEND" == "success" && "$FRONTEND" == "success" && "$HEALTH" == "success" && "$E2E" == "success" ]]; then
-            echo "passed=true" >> $GITHUB_OUTPUT
-          else
-            echo "passed=false" >> $GITHUB_OUTPUT
+          PASSED=true
+
+          # Backend tests must pass if backend changed
+          if [[ "$HAS_BACKEND" == "true" && "$BACKEND" != "success" ]]; then
+            echo "::error::Backend tests failed"
+            PASSED=false
           fi
+
+          # Frontend tests, health, and E2E must pass if frontend changed
+          if [[ "$HAS_FRONTEND" == "true" ]]; then
+            if [[ "$FRONTEND" != "success" ]]; then
+              echo "::error::Frontend tests failed"
+              PASSED=false
+            fi
+            if [[ "$HEALTH" != "success" ]]; then
+              echo "::error::Health checks failed"
+              PASSED=false
+            fi
+            if [[ "$E2E" != "success" ]]; then
+              echo "::error::E2E tests failed"
+              PASSED=false
+            fi
+          fi
+
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
 
       - name: Post verification report on PR
         if: always()
@@ -575,7 +619,7 @@ jobs:
           )"
           echo "::notice::PR #$PR auto-merged"
 
-  # -- Job 6: Refile on Failure --
+  # -- Job 6: Handle Failure (retry or refile) --
   refile:
     needs: [select-pr, fix-reviews, verify]
     if: >-
@@ -583,8 +627,7 @@ jobs:
       needs.select-pr.outputs.pr_number != '' &&
       (needs.fix-reviews.result == 'failure' ||
        needs.verify.result == 'failure' ||
-       needs.verify.outputs.verification_passed == 'false' ||
-       needs.select-pr.outputs.round == '3')
+       needs.verify.outputs.verification_passed == 'false')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -593,7 +636,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Determine failure reason
+      - name: Determine failure reason and action
         id: reason
         run: |
           FIX_RESULT="${{ needs.fix-reviews.result }}"
@@ -603,17 +646,47 @@ jobs:
 
           if [[ "$FIX_RESULT" == "failure" ]]; then
             echo "reason=Failed to address review feedback" >> $GITHUB_OUTPUT
-          elif [[ "$VERIFY_RESULT" == "failure" ]]; then
+          elif [[ "$VERIFY_RESULT" == "failure" || "$VERIFY_PASSED" == "false" ]]; then
             echo "reason=CI verification failed (tests, health checks, or E2E)" >> $GITHUB_OUTPUT
-          elif [[ "$VERIFY_PASSED" == "false" ]]; then
-            echo "reason=CI verification did not pass all checks" >> $GITHUB_OUTPUT
-          elif [[ "$ROUND" == "3" ]]; then
-            echo "reason=Maximum review rounds (3) reached without resolution" >> $GITHUB_OUTPUT
           else
             echo "reason=Unknown failure" >> $GITHUB_OUTPUT
           fi
 
-      - name: Close PR and refile issue
+          # Only close after round 3; otherwise just label for retry
+          if [[ "$ROUND" -ge 3 ]]; then
+            echo "action=close" >> $GITHUB_OUTPUT
+          else
+            echo "action=retry" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Label for retry (rounds 1-2)
+        if: steps.reason.outputs.action == 'retry'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          ROUND="${{ needs.select-pr.outputs.round }}"
+          REASON="${{ steps.reason.outputs.reason }}"
+
+          # Add round label so next review picks up at next round
+          gh pr edit "$PR" --add-label "review-round-${ROUND}" 2>/dev/null || true
+
+          gh pr comment "$PR" --body "$(cat <<EOF
+          ## Review Round ${ROUND}: Verification Failed
+
+          **Reason:** ${REASON}
+
+          This PR will be retried in the next review cycle (round $((ROUND + 1)) of 3).
+          The fix-reviews job will attempt to resolve the issues before re-verification.
+
+          ---
+          *Repo-maintainer will retry automatically*
+          EOF
+          )"
+          echo "::notice::PR #$PR failed round $ROUND — will retry (round $((ROUND + 1)))"
+
+      - name: Close PR and refile issue (round 3+)
+        if: steps.reason.outputs.action == 'close'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -631,8 +704,8 @@ jobs:
           **Round:** ${ROUND}
           **Tier:** ${TIER}
 
-          This PR has been closed and the linked issue refiled for retry.
-          The branch will be deleted to keep the repo clean.
+          This PR was given ${ROUND} review rounds but could not pass verification.
+          The linked issue has been refiled for a fresh implementation attempt.
 
           ---
           *Closed by repo-maintainer*
@@ -645,25 +718,20 @@ jobs:
 
           # Reopen and comment on the linked issue
           if [[ -n "$ISSUE" && "$ISSUE" != "null" && "$ISSUE" != "" ]]; then
-            # Ensure the issue is open
             gh issue reopen "$ISSUE" 2>/dev/null || true
-
-            # Remove plan-ready so it gets re-triaged
             gh issue edit "$ISSUE" --remove-label "plan-ready" 2>/dev/null || true
             gh issue edit "$ISSUE" --add-label "needs-retry" 2>/dev/null || true
 
-            # Notify the human
             gh issue comment "$ISSUE" --body "$(cat <<EOF
           ## @frankbria — Automated implementation failed
 
-          PR #${PR} was closed after failing to complete.
+          PR #${PR} was closed after ${ROUND} review rounds.
 
           **Reason:** ${REASON}
-          **Attempts:** Round ${ROUND}
 
           ### What happened
           The repo-maintainer agent attempted to implement this issue but could not
-          produce a PR that passes all checks (review feedback, tests, CI verification).
+          produce a PR that passes all checks after ${ROUND} rounds of review and fixes.
 
           ### Next steps
           - Review the closed PR #${PR} for context on what went wrong

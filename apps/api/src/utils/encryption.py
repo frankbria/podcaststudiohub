@@ -7,6 +7,19 @@ from sqlalchemy import text
 
 from src.config import settings
 
+# Header names (case-insensitive) containing any of these patterns are sensitive.
+# Shared between async service layer and sync Celery tasks to ensure consistent
+# encrypt/decrypt behaviour — keep this as the single source of truth.
+SENSITIVE_HEADER_PATTERNS = frozenset(
+    {"authorization", "api-key", "api_key", "secret", "token", "x-api-key"}
+)
+
+
+def is_sensitive_header(header_name: str) -> bool:
+    """Check whether a header name indicates a sensitive value."""
+    lower = header_name.lower()
+    return any(pattern in lower for pattern in SENSITIVE_HEADER_PATTERNS)
+
 
 async def encrypt_credential(db: AsyncSession, credential: str) -> str:
     """

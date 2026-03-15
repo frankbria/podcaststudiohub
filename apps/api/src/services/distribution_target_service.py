@@ -22,18 +22,9 @@ from ..schemas.distribution_target import (
 	AppleDistributionCreate,
 	DistributionTargetUpdate,
 )
-from ..utils.encryption import encrypt_credential, decrypt_credential
+from ..utils.encryption import encrypt_credential, decrypt_credential, is_sensitive_header
 
 logger = logging.getLogger(__name__)
-
-# Header names (case-insensitive) containing any of these patterns are sensitive
-_SENSITIVE_HEADER_PATTERNS = {"authorization", "api-key", "api_key", "secret", "token", "x-api-key"}
-
-
-def _is_sensitive_header(header_name: str) -> bool:
-	"""Check whether a header name indicates a sensitive value."""
-	lower = header_name.lower()
-	return any(pattern in lower for pattern in _SENSITIVE_HEADER_PATTERNS)
 
 
 async def _encrypt_sensitive_headers(db: AsyncSession, headers: dict) -> dict:
@@ -49,7 +40,7 @@ async def _encrypt_sensitive_headers(db: AsyncSession, headers: dict) -> dict:
 	"""
 	result = {}
 	for name, value in headers.items():
-		if _is_sensitive_header(name):
+		if is_sensitive_header(name):
 			result[name] = await encrypt_credential(db, value)
 		else:
 			result[name] = value
@@ -69,7 +60,7 @@ async def _decrypt_sensitive_headers(db: AsyncSession, headers: dict) -> dict:
 	"""
 	result = {}
 	for name, value in headers.items():
-		if _is_sensitive_header(name):
+		if is_sensitive_header(name):
 			result[name] = await decrypt_credential(db, value)
 		else:
 			result[name] = value

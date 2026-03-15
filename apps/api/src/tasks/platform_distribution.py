@@ -1,24 +1,16 @@
 """
 Celery tasks for podcast platform distribution
 """
+import copy
 from celery import Task
 from typing import Dict, Any
 import logging
 
 from src.worker import celery_app
 from src.database import SyncSessionLocal
-from src.utils.encryption import decrypt_credential_sync
+from src.utils.encryption import decrypt_credential_sync, is_sensitive_header
 
 logger = logging.getLogger(__name__)
-
-
-# Header keys whose values are encrypted at rest
-_SENSITIVE_HEADER_PATTERNS = {"authorization", "api-key", "api_key", "secret", "token", "x-api-key"}
-
-
-def _is_sensitive_header(header_name: str) -> bool:
-    lower = header_name.lower()
-    return any(pattern in lower for pattern in _SENSITIVE_HEADER_PATTERNS)
 
 
 def _decrypt_platform_config(config: Dict[str, Any], platform: str) -> Dict[str, Any]:
@@ -35,7 +27,7 @@ def _decrypt_platform_config(config: Dict[str, Any], platform: str) -> Dict[str,
     Returns:
         Config dict with credentials decrypted
     """
-    decrypted = dict(config)
+    decrypted = copy.deepcopy(config)
     session = SyncSessionLocal()
     try:
         if platform == "spotify":
@@ -55,7 +47,7 @@ def _decrypt_platform_config(config: Dict[str, Any], platform: str) -> Dict[str,
         elif platform == "webhook":
             headers = decrypted.get("headers", {})
             for key, value in headers.items():
-                if _is_sensitive_header(key) and value:
+                if is_sensitive_header(key) and value:
                     headers[key] = decrypt_credential_sync(session, value)
             decrypted["headers"] = headers
 

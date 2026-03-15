@@ -859,7 +859,7 @@ def test_distribution_target_update_empty():
 @pytest.mark.asyncio
 async def test_webhook_sensitive_headers_not_in_db_plaintext(client, auth_headers, test_db):
 	"""Test that sensitive header values are encrypted before storage in DB."""
-	from sqlalchemy import select, text
+	from sqlalchemy import select
 	from src.models.distribution_target import DistributionTarget
 
 	plaintext_token = "super-secret-bearer-token-12345"

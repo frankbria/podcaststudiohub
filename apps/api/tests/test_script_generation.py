@@ -16,9 +16,8 @@ Podcastfy ContentGenerator and all services are mocked to avoid external depende
 """
 
 import pytest
-from unittest.mock import Mock, patch, AsyncMock, mock_open
+from unittest.mock import patch, AsyncMock, mock_open
 from uuid import uuid4
-from datetime import datetime
 
 from src.services.script_generation_service import (
 	ScriptGenerationService,
@@ -154,7 +153,7 @@ async def test_generate_script_success(
 		 patch('src.services.script_generation_service.update_episode') as mock_update_episode, \
 		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status, \
 		 patch.object(generation_service, '_call_gemini_api', return_value=valid_transcript) as mock_gemini, \
-		 patch('builtins.open', mock_open()) as mock_file:
+		 patch('builtins.open', mock_open()):
 
 		mock_get_episode.return_value = draft_episode
 		mock_get_sources.return_value = ([url_content_source], 1)
@@ -417,7 +416,7 @@ async def test_generate_script_only_pending_sources(
 
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status:
+		 patch('src.services.script_generation_service.update_generation_status'):
 
 		mock_get_episode.return_value = draft_episode
 		mock_get_sources.return_value = ([url_content_source], 1)
@@ -472,7 +471,7 @@ async def test_generate_script_invalid_transcript_missing_person2(
 
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status, \
+		 patch('src.services.script_generation_service.update_generation_status'), \
 		 patch.object(generation_service, '_call_gemini_api', return_value=invalid_transcript):
 
 		mock_get_episode.return_value = draft_episode
@@ -591,7 +590,7 @@ async def test_generate_script_gemini_api_error(
 	"""Test generation handles Gemini API general errors."""
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status, \
+		 patch('src.services.script_generation_service.update_generation_status'), \
 		 patch.object(generation_service, '_call_gemini_api', side_effect=Exception("API rate limit exceeded")):
 
 		mock_get_episode.return_value = draft_episode
@@ -649,7 +648,7 @@ async def test_save_transcript_creates_directory(
 	transcript = "<Person1>Test</Person1><Person2>Test</Person2>"
 
 	with patch('pathlib.Path.mkdir') as mock_mkdir, \
-		 patch('builtins.open', mock_open()) as mock_file:
+		 patch('builtins.open', mock_open()):
 
 		await generation_service._save_transcript(episode_id, transcript)
 

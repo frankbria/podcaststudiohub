@@ -10,8 +10,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from src.main import app
-from src.database import Base, get_db
-from src.config import settings
+from src.database import get_db
 
 
 # Test database URL (use PostgreSQL test database)

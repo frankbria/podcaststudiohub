@@ -32,7 +32,6 @@ import xml.etree.ElementTree as ET
 from typing import Optional, Dict, Any, List
 from pathlib import Path
 from dataclasses import dataclass, asdict
-from datetime import datetime
 import statistics
 
 from sqlalchemy.ext.asyncio import AsyncSession

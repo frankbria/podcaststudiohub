@@ -16,10 +16,7 @@ Tests cover:
 import pytest
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
-from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.models import ContentSource, Episode
 
 
 # ============================================================================

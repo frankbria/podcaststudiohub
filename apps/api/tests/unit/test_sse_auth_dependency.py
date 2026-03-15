@@ -8,11 +8,11 @@ These tests run without a database by testing the dependency logic in isolation.
 """
 import inspect
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 from datetime import timedelta
 
-from src.middleware.auth import get_current_user_from_query, get_current_user
+from src.middleware.auth import get_current_user_from_query
 from src.services.auth_service import create_jwt_token, verify_jwt_token
 
 

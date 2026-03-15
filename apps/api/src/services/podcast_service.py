@@ -1,7 +1,6 @@
 """Podcast generation service wrapping existing podcastfy CLI"""
 
 from typing import Optional, List, Dict, Any
-from pathlib import Path
 import tempfile
 
 # Import existing podcastfy functionality

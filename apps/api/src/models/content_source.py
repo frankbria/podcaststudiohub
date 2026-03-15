@@ -1,8 +1,7 @@
 """ContentSource model for episode input sources"""
 
 from datetime import datetime
-from typing import Optional
-from sqlalchemy import Column, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Text, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid

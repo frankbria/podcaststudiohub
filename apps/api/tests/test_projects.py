@@ -45,7 +45,7 @@ async def test_create_project(client, auth_headers):
 	assert data["podcast_metadata"]["show_title"] == "Test Show"
 	assert data["podcast_metadata"]["author"] == "Test Author"
 	assert data["podcast_metadata"]["description"] == "Test Description"
-	assert data["is_archived"] == False
+	assert not data["is_archived"]
 	assert "id" in data
 	assert "user_id" in data
 	assert "tenant_id" in data
@@ -239,7 +239,7 @@ async def test_archive_project(client, auth_headers):
 	archived_list = await client.get("/projects?include_archived=true", headers=auth_headers)
 	assert archived_list.status_code == 200
 	assert archived_list.json()["total"] == 1
-	assert archived_list.json()["projects"][0]["is_archived"] == True
+	assert archived_list.json()["projects"][0]["is_archived"]
 
 
 @pytest.mark.asyncio
@@ -270,7 +270,7 @@ async def test_restore_archived_project(client, auth_headers):
 		"is_archived": False
 	})
 	assert response.status_code == 200
-	assert response.json()["is_archived"] == False
+	assert not response.json()["is_archived"]
 
 	# Verify in default list again
 	list_response = await client.get("/projects", headers=auth_headers)

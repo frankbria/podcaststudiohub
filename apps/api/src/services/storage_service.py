@@ -1,7 +1,6 @@
 """Storage service for S3 operations"""
 
-from typing import Optional, BinaryIO
-from pathlib import Path
+from typing import Optional
 import boto3
 from botocore.exceptions import ClientError
 

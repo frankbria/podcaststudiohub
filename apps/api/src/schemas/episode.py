@@ -165,3 +165,34 @@ class EpisodeListResponse(BaseModel):
 	page: int = Field(..., description="Current page number")
 	page_size: int = Field(..., description="Items per page")
 	total_pages: int = Field(..., description="Total number of pages")
+
+
+class BatchEpisodeCreate(BaseModel):
+	"""Schema for batch episode creation request."""
+
+	episodes: list[EpisodeCreate] = Field(
+		...,
+		min_length=1,
+		max_length=50,
+		description="List of episodes to create (max 50)"
+	)
+
+
+class BatchEpisodeResult(BaseModel):
+	"""Result for a single episode in a batch creation."""
+
+	index: int = Field(..., description="Zero-based index in the request array")
+	episode_id: Optional[str] = Field(None, description="Created episode UUID (null if failed)")
+	status: str = Field(..., description="'created' or 'failed'")
+	error: Optional[str] = Field(None, description="Error message if status is 'failed'")
+
+
+class BatchEpisodeResponse(BaseModel):
+	"""Schema for batch episode creation response."""
+
+	batch_id: str = Field(..., description="Unique ID for this batch operation")
+	status: str = Field(..., description="'complete' or 'partial' (partial if some failed)")
+	total_episodes: int = Field(..., description="Total episodes submitted")
+	created_count: int = Field(..., description="Number of episodes successfully created")
+	failed_count: int = Field(..., description="Number of episodes that failed")
+	results: list[BatchEpisodeResult] = Field(..., description="Per-episode results")

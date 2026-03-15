@@ -730,6 +730,156 @@ async def test_episode_response_has_non_null_episode_number(client, project_and_
 
 
 # ============================================================================
+# BATCH CREATION TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_batch_create_episodes(client, project_and_auth):
+	"""Test successful batch episode creation."""
+	project_id, headers = project_and_auth
+
+	response = await client.post("/episodes/batch", headers=headers, json={
+		"episodes": [
+			{
+				"project_id": project_id,
+				"episode_metadata": {"title": "Batch Ep 1", "description": "Desc 1"}
+			},
+			{
+				"project_id": project_id,
+				"episode_metadata": {"title": "Batch Ep 2", "description": "Desc 2"}
+			},
+			{
+				"project_id": project_id,
+				"episode_metadata": {"title": "Batch Ep 3", "description": "Desc 3"}
+			}
+		]
+	})
+	assert response.status_code == 202
+	data = response.json()
+	assert "batch_id" in data
+	assert data["status"] == "complete"
+	assert data["total_episodes"] == 3
+	assert data["created_count"] == 3
+	assert data["failed_count"] == 0
+	assert len(data["results"]) == 3
+	for i, result in enumerate(data["results"]):
+		assert result["index"] == i
+		assert result["status"] == "created"
+		assert result["episode_id"] is not None
+		assert result["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_batch_create_episodes_partial_failure(client, project_and_auth):
+	"""Test batch creation with partial failure (some invalid episodes)."""
+	project_id, headers = project_and_auth
+	fake_project_id = str(uuid4())
+
+	response = await client.post("/episodes/batch", headers=headers, json={
+		"episodes": [
+			{
+				"project_id": project_id,
+				"episode_metadata": {"title": "Valid Episode", "description": "Desc"}
+			},
+			{
+				"project_id": fake_project_id,  # Non-existent project
+				"episode_metadata": {"title": "Invalid Episode", "description": "Desc"}
+			}
+		]
+	})
+	assert response.status_code == 202
+	data = response.json()
+	assert data["status"] == "partial"
+	assert data["total_episodes"] == 2
+	assert data["created_count"] == 1
+	assert data["failed_count"] == 1
+	assert data["results"][0]["status"] == "created"
+	assert data["results"][1]["status"] == "failed"
+	assert data["results"][1]["error"] is not None
+
+
+@pytest.mark.asyncio
+async def test_batch_create_episodes_exceeds_max(client, project_and_auth):
+	"""Test that batch requests with more than 50 episodes are rejected."""
+	project_id, headers = project_and_auth
+
+	episodes = [
+		{
+			"project_id": project_id,
+			"episode_metadata": {"title": f"Episode {i}", "description": "Desc"}
+		}
+		for i in range(51)
+	]
+
+	response = await client.post("/episodes/batch", headers=headers, json={
+		"episodes": episodes
+	})
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_batch_create_episodes_empty_list(client, project_and_auth):
+	"""Test that batch request with empty list is rejected."""
+	_, headers = project_and_auth
+
+	response = await client.post("/episodes/batch", headers=headers, json={
+		"episodes": []
+	})
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_batch_create_episodes_requires_auth(client):
+	"""Test that batch endpoint requires authentication."""
+	response = await client.post("/episodes/batch", json={
+		"episodes": [
+			{
+				"project_id": str(uuid4()),
+				"episode_metadata": {"title": "Test", "description": "Desc"}
+			}
+		]
+	})
+	assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_batch_create_returns_unique_batch_id(client, project_and_auth):
+	"""Test that each batch request returns a unique batch_id."""
+	project_id, headers = project_and_auth
+
+	payload = {
+		"episodes": [
+			{
+				"project_id": project_id,
+				"episode_metadata": {"title": "Ep", "description": "Desc"}
+			}
+		]
+	}
+
+	resp1 = await client.post("/episodes/batch", headers=headers, json=payload)
+	resp2 = await client.post("/episodes/batch", headers=headers, json=payload)
+	assert resp1.status_code == 202
+	assert resp2.status_code == 202
+	assert resp1.json()["batch_id"] != resp2.json()["batch_id"]
+
+
+@pytest.mark.asyncio
+async def test_batch_create_episodes_invalid_metadata(client, project_and_auth):
+	"""Test batch with invalid episode metadata returns 422."""
+	project_id, headers = project_and_auth
+
+	response = await client.post("/episodes/batch", headers=headers, json={
+		"episodes": [
+			{
+				"project_id": project_id,
+				"episode_metadata": {"title": "Missing description only"}
+			}
+		]
+	})
+	assert response.status_code == 422
+
+
+# ============================================================================
 # TENANT ISOLATION TESTS (SKIPPED)
 # ============================================================================
 

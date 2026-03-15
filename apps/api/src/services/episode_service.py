@@ -8,12 +8,12 @@ status filtering, and generation status management. RLS ensures tenant isolation
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import Optional
 from fastapi import HTTPException, status
 
 from ..models import Episode, Project
-from ..schemas.episode import EpisodeCreate, EpisodeUpdate
+from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate, BatchEpisodeResult, BatchEpisodeResponse
 
 
 async def create_episode(
@@ -196,6 +196,77 @@ async def delete_episode(
 	"""
 	await db.delete(episode)
 	await db.commit()
+
+
+async def batch_create_episodes(
+	db: AsyncSession,
+	user_id: UUID,
+	tenant_id: UUID,
+	batch_data: BatchEpisodeCreate
+) -> BatchEpisodeResponse:
+	"""
+	Create multiple episodes in a single batch operation.
+
+	Processes all episode configs, creating valid ones and reporting failures
+	for invalid ones. Partial success is supported: valid episodes are created
+	even if some fail validation or DB constraints.
+
+	Args:
+		db: Database session
+		user_id: ID of user creating the episodes
+		tenant_id: Tenant ID for isolation
+		batch_data: Batch creation request with list of episode configs
+
+	Returns:
+		BatchEpisodeResponse with per-episode results and summary counts
+	"""
+	batch_id = str(uuid4())
+	results: list[BatchEpisodeResult] = []
+	created_count = 0
+	failed_count = 0
+
+	for index, episode_data in enumerate(batch_data.episodes):
+		try:
+			episode = await create_episode(
+				db=db,
+				user_id=user_id,
+				tenant_id=tenant_id,
+				episode_data=episode_data
+			)
+			results.append(BatchEpisodeResult(
+				index=index,
+				episode_id=str(episode.id),
+				status="created",
+				error=None
+			))
+			created_count += 1
+		except HTTPException as e:
+			results.append(BatchEpisodeResult(
+				index=index,
+				episode_id=None,
+				status="failed",
+				error=e.detail
+			))
+			failed_count += 1
+		except Exception as e:
+			results.append(BatchEpisodeResult(
+				index=index,
+				episode_id=None,
+				status="failed",
+				error=str(e)
+			))
+			failed_count += 1
+
+	batch_status = "complete" if failed_count == 0 else "partial"
+
+	return BatchEpisodeResponse(
+		batch_id=batch_id,
+		status=batch_status,
+		total_episodes=len(batch_data.episodes),
+		created_count=created_count,
+		failed_count=failed_count,
+		results=results
+	)
 
 
 async def update_generation_status(

@@ -19,14 +19,17 @@ from ..schemas.episode import (
 	EpisodeCreate,
 	EpisodeUpdate,
 	EpisodeResponse,
-	EpisodeListResponse
+	EpisodeListResponse,
+	BatchEpisodeCreate,
+	BatchEpisodeResponse
 )
 from ..services.episode_service import (
 	create_episode,
 	get_episodes,
 	get_episode_by_id,
 	update_episode,
-	delete_episode
+	delete_episode,
+	batch_create_episodes
 )
 from ..services.storage_service import StorageService
 from ..utils.download_utils import get_episode_filename, parse_range_header, iter_s3_body
@@ -110,6 +113,38 @@ async def list_episodes(
 		page=page,
 		page_size=page_size,
 		total_pages=total_pages
+	)
+
+
+@router.post("/batch", response_model=BatchEpisodeResponse, status_code=status.HTTP_202_ACCEPTED)
+async def batch_create_episodes_endpoint(
+	batch_data: BatchEpisodeCreate,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db)
+):
+	"""
+	Create multiple episodes in a single batch request.
+
+	Accepts an array of up to 50 episode creation payloads. Processes all items
+	and returns per-episode results. Partial success is supported: valid episodes
+	are created even if some fail.
+
+	Args:
+		batch_data: Batch request with list of episode configs (max 50)
+		current_user: Authenticated user (from JWT token)
+		db: Database session
+
+	Returns:
+		Batch response with batch_id, counts, and per-episode results (202 Accepted)
+
+	Raises:
+		HTTPException: 422 if request validation fails (e.g. more than 50 episodes)
+	"""
+	return await batch_create_episodes(
+		db=db,
+		user_id=current_user.id,
+		tenant_id=current_user.tenant_id,
+		batch_data=batch_data
 	)
 
 

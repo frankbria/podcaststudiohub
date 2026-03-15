@@ -716,37 +716,20 @@ jobs:
           BRANCH=$(gh pr view "$PR" --json headRefName --jq '.headRefName')
           git push origin --delete "$BRANCH" 2>/dev/null || true
 
-          # Reopen and comment on the linked issue — but respect manual closures.
-          # If a human closed the issue as "completed", don't reopen it.
+          # Comment on the linked issue so there's a record of the failure.
+          # Do NOT reopen or relabel — the issue was never closed by the bot.
+          # Only a successful merge (via "Closes #N") closes issues.
           if [[ -n "$ISSUE" && "$ISSUE" != "null" && "$ISSUE" != "" ]]; then
-            CLOSE_REASON=$(gh issue view "$ISSUE" --json stateReason --jq '.stateReason // ""' 2>/dev/null || echo "")
-            if [[ "$CLOSE_REASON" == "COMPLETED" || "$CLOSE_REASON" == "completed" ]]; then
-              echo "::notice::Issue #$ISSUE was manually closed as completed — not reopening"
-              gh issue comment "$ISSUE" --body "PR #${PR} was closed (${REASON}), but this issue was already marked complete. Not reopening. — *repo-maintainer*" 2>/dev/null || true
-            else
-              gh issue reopen "$ISSUE" 2>/dev/null || true
-              gh issue edit "$ISSUE" --remove-label "plan-ready" 2>/dev/null || true
-              gh issue edit "$ISSUE" --add-label "needs-retry" 2>/dev/null || true
-
-              gh issue comment "$ISSUE" --body "$(cat <<EOF
-          ## @frankbria — Automated implementation failed
-
-          PR #${PR} was closed after ${ROUND} review rounds.
+            gh issue comment "$ISSUE" --body "$(cat <<EOF
+          ## Automated PR #${PR} closed (round ${ROUND})
 
           **Reason:** ${REASON}
 
-          ### What happened
-          The repo-maintainer agent attempted to implement this issue but could not
-          produce a PR that passes all checks after ${ROUND} rounds of review and fixes.
-
-          ### Next steps
-          - Review the closed PR #${PR} for context on what went wrong
-          - Either re-plan this issue with simpler acceptance criteria, or
-          - Implement manually: \`claude -p "/implementing-issue-plans #${ISSUE}"\`
+          The repo-maintainer will attempt a fresh implementation on its next cycle.
+          Review the [closed PR](#${PR}) for context if needed.
 
           ---
-          *Refiled by repo-maintainer*
+          *Reported by repo-maintainer*
           EOF
-              )"
-            fi
+            )" 2>/dev/null || true
           fi

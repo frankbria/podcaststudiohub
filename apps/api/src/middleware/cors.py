@@ -9,10 +9,11 @@ from src.config import settings
 
 def setup_cors(app: FastAPI) -> None:
     """
-    Configure CORS middleware for the FastAPI application.
+    Configure CORS middleware with restricted, explicit permissions.
 
-    This allows the frontend (deployed at a different URL) to make
-    requests to the backend API.
+    Only the methods and headers required by the frontend are allowed.
+    This follows the principle of least privilege and reduces the attack
+    surface for cross-origin requests.
 
     Args:
         app: FastAPI application instance
@@ -23,4 +24,10 @@ def setup_cors(app: FastAPI) -> None:
         allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
         allow_methods=settings.CORS_ALLOW_METHODS,
         allow_headers=settings.CORS_ALLOW_HEADERS,
+        max_age=3600,  # Cache preflight requests for 1 hour
+        expose_headers=[
+            "X-Total-Count",
+            "X-Page-Number",
+            "Content-Disposition",
+        ],
     )

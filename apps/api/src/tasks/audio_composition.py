@@ -6,11 +6,12 @@ from typing import List, Dict, Any
 import logging
 
 from src.worker import celery_app
+from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, name="merge_audio_snippets", time_limit=300)
+@celery_app.task(bind=True, name="merge_audio_snippets", time_limit=300, max_retries=2)
 def merge_audio_snippets_task(
     self: Task,
     episode_id: str,
@@ -92,11 +93,21 @@ def merge_audio_snippets_task(
         }
 
     except Exception as e:
-        logger.error(f"Audio composition failed for episode {episode_id}: {str(e)}")
-        return {
-            "status": "failed",
-            "output_path": None,
-            "duration_seconds": 0,
-            "file_size_bytes": 0,
-            "error": str(e)
-        }
+        logger.warning(
+            f"Audio composition error for episode {episode_id}, "
+            f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
+        )
+        try:
+            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
+        except self.MaxRetriesExceededError:
+            logger.error(
+                f"Audio composition failed after {self.max_retries} retries "
+                f"for episode {episode_id}: {e}"
+            )
+            return {
+                "status": "failed",
+                "output_path": None,
+                "duration_seconds": 0,
+                "file_size_bytes": 0,
+                "error": str(e)
+            }

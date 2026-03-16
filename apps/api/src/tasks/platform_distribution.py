@@ -9,6 +9,7 @@ import logging
 from src.worker import celery_app
 from src.database import SyncSessionLocal
 from src.utils.encryption import decrypt_credential_sync, is_sensitive_header
+from src.tasks.retry_utils import calculate_backoff, should_retry_exception
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def _decrypt_platform_config(config: Dict[str, Any], platform: str) -> Dict[str,
     return decrypted
 
 
-@celery_app.task(bind=True, name="distribute_to_platform", time_limit=300)
+@celery_app.task(bind=True, name="distribute_to_platform", time_limit=300, max_retries=5)
 def distribute_to_platform_task(
     self: Task,
     episode_id: str,
@@ -124,14 +125,37 @@ def distribute_to_platform_task(
         return result
 
     except Exception as e:
-        logger.error(f"Distribution to {platform} failed for episode {episode_id}: {str(e)}")
-        return {
-            "status": "failed",
-            "platform": platform,
-            "platform_episode_id": None,
-            "platform_url": None,
-            "error": str(e)
-        }
+        if not should_retry_exception(e):
+            # Permanent error (validation, unsupported platform, etc.) — don't retry
+            logger.error(
+                f"Permanent error distributing to {platform} for episode {episode_id}: {e}"
+            )
+            return {
+                "status": "failed",
+                "platform": platform,
+                "platform_episode_id": None,
+                "platform_url": None,
+                "error": str(e)
+            }
+        # Transient error — retry with exponential backoff
+        logger.warning(
+            f"Transient error distributing to {platform} for episode {episode_id}, "
+            f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
+        )
+        try:
+            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
+        except self.MaxRetriesExceededError:
+            logger.error(
+                f"Distribution to {platform} failed after {self.max_retries} retries "
+                f"for episode {episode_id}: {e}"
+            )
+            return {
+                "status": "failed",
+                "platform": platform,
+                "platform_episode_id": None,
+                "platform_url": None,
+                "error": str(e)
+            }
 
 
 def _distribute_to_spotify(episode_id: str, config: Dict, metadata: Dict, task: Task) -> Dict:

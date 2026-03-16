@@ -14,11 +14,12 @@ from src.config import settings
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
 from src.tasks.s3_upload import upload_to_s3_task
+from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, name="generate_podcast", time_limit=600)
+@celery_app.task(bind=True, name="generate_podcast", time_limit=600, max_retries=3)
 def generate_podcast_task(
     self: Task,
     episode_id: str,
@@ -194,27 +195,46 @@ def generate_podcast_task(
         return generation_result
 
     except Exception as e:
-        logger.error(f"Podcast generation failed for episode {episode_id}: {str(e)}")
+        logger.warning(
+            f"Podcast generation error for episode {episode_id}, "
+            f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
+        )
         self.update_state(
-            state='FAILURE',
+            state='PROGRESS',
             meta={
                 'episode_id': episode_id,
-                'stage': 'failed',
+                'stage': 'retrying',
                 'progress': 0,
-                'status': f'Generation failed: {str(e)}'
+                'status': f'Retrying after error: {str(e)}'
             }
         )
-        return {
-            "status": "failed",
-            "audio_file_path": None,
-            "transcript_path": None,
-            "duration_seconds": 0,
-            "file_size_bytes": 0,
-            "error": str(e)
-        }
+        try:
+            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
+        except self.MaxRetriesExceededError:
+            logger.error(
+                f"Podcast generation failed after {self.max_retries} retries "
+                f"for episode {episode_id}: {e}"
+            )
+            self.update_state(
+                state='FAILURE',
+                meta={
+                    'episode_id': episode_id,
+                    'stage': 'failed',
+                    'progress': 0,
+                    'status': f'Generation failed: {str(e)}'
+                }
+            )
+            return {
+                "status": "failed",
+                "audio_file_path": None,
+                "transcript_path": None,
+                "duration_seconds": 0,
+                "file_size_bytes": 0,
+                "error": str(e)
+            }
 
 
-@celery_app.task(bind=True, name="finalize_episode_generation", time_limit=360)
+@celery_app.task(bind=True, name="finalize_episode_generation", time_limit=360, max_retries=3)
 def finalize_episode_generation_task(
     self: Task,
     episode_id: str,
@@ -350,20 +370,30 @@ def finalize_episode_generation_task(
             }
 
         except Exception as e:
-            logger.error(f"Error finalizing episode {episode_id}: {str(e)}")
+            logger.warning(
+                f"Finalization error for episode {episode_id}, "
+                f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
+            )
             try:
-                episode = db.get(Episode, uuid_module.UUID(episode_id))
-                if episode:
-                    episode.generation_status = "failed"
-                    episode.generation_progress = {
-                        **dict(episode.generation_progress or {}),
-                        "stage": "failed",
-                        "error_message": f"Finalization error: {str(e)}",
-                    }
-                    db.commit()
-            except Exception as db_err:
-                logger.error(f"Failed to update episode status after error: {db_err}")
-            return {"status": "failed", "error": str(e)}
+                raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
+            except self.MaxRetriesExceededError:
+                logger.error(
+                    f"Finalization failed after {self.max_retries} retries "
+                    f"for episode {episode_id}: {e}"
+                )
+                try:
+                    episode = db.get(Episode, uuid_module.UUID(episode_id))
+                    if episode:
+                        episode.generation_status = "failed"
+                        episode.generation_progress = {
+                            **dict(episode.generation_progress or {}),
+                            "stage": "failed",
+                            "error_message": f"Finalization error: {str(e)}",
+                        }
+                        db.commit()
+                except Exception as db_err:
+                    logger.error(f"Failed to update episode status after error: {db_err}")
+                return {"status": "failed", "error": str(e)}
 
 
 def build_generation_workflow(

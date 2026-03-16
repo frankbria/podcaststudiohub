@@ -132,16 +132,24 @@ class TestUploadToS3Task:
         assert result["error"] is None
 
     def test_upload_fails_gracefully_on_generic_exception(self):
-        """upload_to_s3_task returns failed status when upload raises."""
+        """upload_to_s3_task returns failed status after retries are exhausted."""
+        from src.tasks.s3_upload import upload_to_s3_task
+
         with (
             patch("src.tasks.s3_upload.settings") as mock_settings,
             patch("src.tasks.s3_upload.boto3") as mock_boto,
             patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
+            patch.object(
+                upload_to_s3_task,
+                "retry",
+                side_effect=upload_to_s3_task.MaxRetriesExceededError(),
+            ),
         ):
             mock_settings.AWS_REGION = "us-east-1"
             mock_s3 = MagicMock()
             mock_s3.upload_file.side_effect = RuntimeError("Connection timeout")
             mock_boto.client.return_value = mock_s3
+            upload_to_s3_task.request.update(retries=3)
 
             result = self._invoke_upload(
                 file_path="/tmp/audio.mp3",
@@ -536,8 +544,10 @@ class TestNonRetryableS3Errors:
                     bucket_name="nonexistent-bucket",
                 )
 
-    def test_retryable_client_error_returns_failed_dict(self):
-        """Retryable S3 errors (e.g. InternalError) return a failed dict, not raise."""
+    def test_retryable_client_error_returns_failed_dict_after_max_retries(self):
+        """Retryable S3 errors return a failed dict after all retries are exhausted."""
+        from src.tasks.s3_upload import upload_to_s3_task
+
         error_response = {"Error": {"Code": "InternalError", "Message": "Internal error"}}
         client_error = ClientError(error_response, "PutObject")
 
@@ -545,11 +555,17 @@ class TestNonRetryableS3Errors:
             patch("src.tasks.s3_upload.settings") as mock_settings,
             patch("src.tasks.s3_upload.boto3") as mock_boto,
             patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
+            patch.object(
+                upload_to_s3_task,
+                "retry",
+                side_effect=upload_to_s3_task.MaxRetriesExceededError(),
+            ),
         ):
             mock_settings.AWS_REGION = "us-east-1"
             mock_s3 = MagicMock()
             mock_s3.upload_file.side_effect = client_error
             mock_boto.client.return_value = mock_s3
+            upload_to_s3_task.request.update(retries=3)
 
             result = self._invoke_upload(
                 file_path="/tmp/audio.mp3",

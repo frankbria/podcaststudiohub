@@ -128,7 +128,7 @@ class TestMergeAudioSnippetsTask:
 		empty_seg.export.assert_called_once()
 
 	def test_error_path_returns_correct_shape(self):
-		"""When from_file raises, task returns failed status with error details."""
+		"""When from_file raises, task retries and returns failed status after exhaustion."""
 		mock_cls, mock_modules = _mock_pydub_modules()
 		mock_cls.empty.return_value = _make_mock_audio_segment()
 		mock_cls.from_file.side_effect = RuntimeError("FFmpeg not found")
@@ -136,7 +136,12 @@ class TestMergeAudioSnippetsTask:
 		timeline = [{"file_path": "/tmp/bad.mp3"}]
 
 		with patch.object(merge_audio_snippets_task, "update_state"), \
-			 patch.dict(sys.modules, mock_modules):
+			 patch.dict(sys.modules, mock_modules), \
+			 patch.object(
+				merge_audio_snippets_task,
+				"retry",
+				side_effect=merge_audio_snippets_task.MaxRetriesExceededError(),
+			 ):
 
 			result = merge_audio_snippets_task.run(
 				episode_id="ep-004",

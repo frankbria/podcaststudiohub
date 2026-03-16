@@ -200,14 +200,19 @@ def test_task_returns_success_result():
 
 
 def test_task_returns_failed_result_on_exception():
-	"""Task must return dict with status=failed when an exception occurs."""
+	"""Task must return dict with status=failed after retries exhausted."""
 	episode_id = str(uuid4())
 
 	mock_client, mock_modules = _mock_podcastfy_modules()
 	mock_client.generate_podcast = MagicMock(side_effect=RuntimeError("Podcastfy crashed"))
 
 	with patch.object(generate_podcast_task, 'update_state'), \
-		 patch.dict(sys.modules, mock_modules):
+		 patch.dict(sys.modules, mock_modules), \
+		 patch.object(
+			generate_podcast_task,
+			"retry",
+			side_effect=generate_podcast_task.MaxRetriesExceededError(),
+		 ):
 
 		result = generate_podcast_task.run(
 			episode_id=episode_id,

@@ -11,11 +11,12 @@ from botocore.exceptions import ClientError
 
 from src.worker import celery_app
 from src.config import settings
+from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, name="upload_to_s3", time_limit=300)
+@celery_app.task(bind=True, name="upload_to_s3", time_limit=300, max_retries=3)
 def upload_to_s3_task(
     self: Task,
     file_path: str,
@@ -94,24 +95,39 @@ def upload_to_s3_task(
             "SignatureDoesNotMatch", "AccessDenied",
         })
         if error_code in NON_RETRYABLE_CODES:
-            # Re-raise non-retryable errors so they are never retried,
-            # even if autoretry_for is added to this task in the future.
+            # Permanent errors are never retried.
             logger.error(f"S3 upload failed with non-retryable error ({error_code}): {e}")
             raise
-        logger.error(f"S3 upload failed for {file_path}: {str(e)}")
-        return {
-            "status": "failed",
-            "s3_key": None,
-            "s3_url": None,
-            "file_size_bytes": 0,
-            "error": str(e)
-        }
+        # Retryable S3 error — retry with exponential backoff
+        logger.warning(
+            f"Retryable S3 error ({error_code}) for {file_path}, "
+            f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
+        )
+        try:
+            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
+        except self.MaxRetriesExceededError:
+            logger.error(f"S3 upload failed after {self.max_retries} retries for {file_path}: {e}")
+            return {
+                "status": "failed",
+                "s3_key": None,
+                "s3_url": None,
+                "file_size_bytes": 0,
+                "error": str(e)
+            }
     except Exception as e:
-        logger.error(f"S3 upload failed for {file_path}: {str(e)}")
-        return {
-            "status": "failed",
-            "s3_key": None,
-            "s3_url": None,
-            "file_size_bytes": 0,
-            "error": str(e)
-        }
+        # Retry on any other transient failure
+        logger.warning(
+            f"S3 upload error for {file_path}, "
+            f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
+        )
+        try:
+            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
+        except self.MaxRetriesExceededError:
+            logger.error(f"S3 upload failed after {self.max_retries} retries for {file_path}: {e}")
+            return {
+                "status": "failed",
+                "s3_key": None,
+                "s3_url": None,
+                "file_size_bytes": 0,
+                "error": str(e)
+            }

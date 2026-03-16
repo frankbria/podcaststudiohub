@@ -5,11 +5,12 @@ import json
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from ..config import settings
 from ..database import get_db
 from ..models.episode import Episode
 from ..models.content_source import ContentSource
@@ -26,6 +27,14 @@ router = APIRouter(prefix="/generation", tags=["Generation"])
 @router.post("/episodes/{episode_id}/generate", status_code=status.HTTP_202_ACCEPTED)
 async def generate_podcast(
     episode_id: UUID,
+    enable_composition: bool = Query(
+        default=False,
+        description="Merge audio snippets after generation (requires ENABLE_AUDIO_COMPOSITION)",
+    ),
+    enable_distribution: bool = Query(
+        default=False,
+        description="Distribute to platforms after generation (requires ENABLE_PLATFORM_DISTRIBUTION)",
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -88,12 +97,19 @@ async def generate_podcast(
             elif source.source_type == "text":
                 text_content.append(source.source_data.get("content"))
 
+    # Resolve composition / distribution flags against global feature settings.
+    # Per-request flags are only honoured when the feature is globally enabled.
+    use_composition = enable_composition and settings.ENABLE_AUDIO_COMPOSITION
+    use_distribution = enable_distribution and settings.ENABLE_PLATFORM_DISTRIBUTION
+
     # Start Celery task
     task = generate_podcast_task.delay(
         episode_id=str(episode_id),
         urls=urls if urls else None,
         file_paths=file_paths if file_paths else None,
         text_content="\n\n".join(text_content) if text_content else None,
+        enable_composition=use_composition,
+        enable_distribution=use_distribution,
     )
 
     # Update episode status

@@ -48,7 +48,8 @@ class Episode(Base):
     transcript_path = Column(Text, nullable=True)
 
     # Generation status tracking
-    # Values: 'draft', 'queued', 'extracting', 'generating', 'synthesizing', 'complete', 'failed'
+    # Values: 'draft', 'queued', 'extracting', 'generating', 'synthesizing',
+    #         'uploading', 'composing', 'distributing', 'complete', 'failed'
     generation_status = Column(Text, nullable=False, default='draft', index=True)
 
     # Generation progress tracking
@@ -60,6 +61,13 @@ class Episode(Base):
     #   "completed_at": "timestamp"
     # }
     generation_progress = Column(JSONB, nullable=False, default=dict)
+
+    # Platform distribution tracking - maps platform name → platform episode ID
+    # Example: {"spotify": "abc123", "apple_podcasts": "xyz789", "webhook": null}
+    platform_ids = Column(JSONB, nullable=False, default=dict)
+
+    # Error details when generation_status = 'failed'
+    error_message = Column(Text, nullable=True)
 
     # Configuration overrides
     tts_config_id = Column(UUID(as_uuid=True), ForeignKey("tts_configurations.id", ondelete="SET NULL"), nullable=True)

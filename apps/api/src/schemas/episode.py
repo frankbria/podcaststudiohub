@@ -151,6 +151,9 @@ class EpisodeResponse(BaseModel):
 	transcript_path: Optional[str]
 	tts_config_id: Optional[UUID]
 	template_id: Optional[UUID]
+	# Workflow tracking fields
+	platform_ids: Optional[dict] = None
+	error_message: Optional[str] = None
 	created_at: datetime
 	updated_at: datetime
 

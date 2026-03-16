@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_TRUST_PROXY: bool = True
     RATE_LIMIT_PROXY_COUNT: int = 1
 
+    # Workflow feature flags
+    ENABLE_AUDIO_COMPOSITION: bool = False
+    ENABLE_PLATFORM_DISTRIBUTION: bool = False
+
     # Logging
     LOG_LEVEL: str = "INFO"
 

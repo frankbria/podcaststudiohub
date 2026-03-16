@@ -31,13 +31,22 @@ def generate_podcast_task(
     topic: Optional[str] = None,
     tts_model: str = "openai",
     conversation_config: Optional[Dict[str, Any]] = None,
-    longform: bool = False
+    longform: bool = False,
+    enable_composition: bool = False,
+    composition_timeline: Optional[List[Dict[str, Any]]] = None,
+    enable_distribution: bool = False,
+    platforms: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Generate a podcast episode using the existing Podcastfy CLI.
 
     This task wraps the existing generate_podcast() function from the CLI
     and provides progress tracking for the GUI.
+
+    After successful generation, optionally triggers downstream workflow steps:
+    - S3 upload (always, via finalize_episode_generation_task or build_generation_workflow)
+    - Audio composition (if enable_composition=True)
+    - Platform distribution (if enable_distribution=True and platforms provided)
 
     Args:
         self: Celery task instance (for progress updates)
@@ -51,6 +60,10 @@ def generate_podcast_task(
         tts_model: TTS provider (openai, elevenlabs, gemini, etc.)
         conversation_config: Custom conversation configuration
         longform: Whether to generate long-form content
+        enable_composition: Whether to merge audio snippets after generation
+        composition_timeline: Timeline segments for audio composition
+        enable_distribution: Whether to distribute to platforms after generation
+        platforms: Platform name → config dict for distribution
 
     Returns:
         Dictionary with generation results:
@@ -167,30 +180,63 @@ def generate_podcast_task(
             "error": None
         }
 
-        # Chain the finalization task (S3 upload + DB update).
-        # Isolated try/except: a broker hiccup must not mark a successful
-        # generation as "failed" or orphan the audio file.
-        try:
-            finalize_episode_generation_task.delay(
-                episode_id=episode_id,
-                generation_result=generation_result,
-            )
-        except Exception as broker_err:
-            logger.critical(
-                "Celery broker unavailable after successful generation for "
-                "episode %s — falling back to synchronous finalization: %s",
-                episode_id, broker_err,
+        # Determine whether to use the enhanced workflow chain
+        # (composition/distribution) or the simpler finalization task.
+        use_workflow_chain = enable_composition or (
+            enable_distribution and bool(platforms)
+        )
+
+        if use_workflow_chain:
+            # Trigger the full workflow: S3 upload → [composition] → [distribution]
+            # Isolated try/except so a broker hiccup cannot mark a successful
+            # generation as "failed" or orphan the audio file.
+            logger.info(
+                "Episode %s: triggering workflow chain "
+                "(composition=%s, distribution=%s, platforms=%s)",
+                episode_id, enable_composition, enable_distribution,
+                list(platforms.keys()) if platforms else [],
             )
             try:
-                finalize_episode_generation_task(
+                build_generation_workflow(
+                    episode_id=episode_id,
+                    audio_file_path=audio_file_path,
+                    s3_bucket=settings.AWS_S3_BUCKET,
+                    enable_composition=enable_composition,
+                    composition_timeline=composition_timeline,
+                    enable_distribution=enable_distribution,
+                    platforms=platforms,
+                ).apply_async()
+            except Exception as broker_err:
+                logger.critical(
+                    "Celery broker unavailable after successful generation for "
+                    "episode %s — workflow chain could not be dispatched: %s",
+                    episode_id, broker_err,
+                )
+        else:
+            # Default path: simple S3 upload + DB update via finalization task.
+            # Isolated try/except: a broker hiccup must not mark a successful
+            # generation as "failed" or orphan the audio file.
+            try:
+                finalize_episode_generation_task.delay(
                     episode_id=episode_id,
                     generation_result=generation_result,
                 )
-            except Exception as sync_err:
+            except Exception as broker_err:
                 logger.critical(
-                    "Synchronous finalization also failed for episode %s: %s",
-                    episode_id, sync_err,
+                    "Celery broker unavailable after successful generation for "
+                    "episode %s — falling back to synchronous finalization: %s",
+                    episode_id, broker_err,
                 )
+                try:
+                    finalize_episode_generation_task(
+                        episode_id=episode_id,
+                        generation_result=generation_result,
+                    )
+                except Exception as sync_err:
+                    logger.critical(
+                        "Synchronous finalization also failed for episode %s: %s",
+                        episode_id, sync_err,
+                    )
 
         return generation_result
 

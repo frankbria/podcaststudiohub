@@ -1,0 +1,656 @@
+"""
+Integration tests for the Celery podcast generation workflow [GAP-026].
+
+Verifies that generate_podcast_task correctly chains downstream tasks:
+  generation → S3 upload → [optional composition] → [optional distribution]
+
+All database and external service interactions are mocked so no real
+infrastructure is required.
+"""
+import uuid
+from unittest.mock import MagicMock, patch
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_mock_episode(episode_id: str, user_id: str = None) -> MagicMock:
+    """Return a MagicMock that behaves like an Episode ORM object."""
+    ep = MagicMock()
+    ep.id = uuid.UUID(episode_id)
+    ep.user_id = uuid.UUID(user_id) if user_id else uuid.uuid4()
+    ep.generation_status = "generating"
+    ep.generation_progress = {}
+    ep.file_path = None
+    ep.s3_url = None
+    ep.s3_key = None
+    ep.duration_seconds = None
+    ep.file_size_bytes = None
+    ep.transcript_path = None
+    ep.platform_ids = {}
+    ep.error_message = None
+    return ep
+
+
+def _invoke_task(task, **kwargs):
+    """
+    Invoke a bind=True Celery task's run() method without a real broker.
+
+    Sets a fake request ID and patches update_state so progress calls succeed.
+    """
+    task.request.update(id="test-" + str(uuid.uuid4()))
+    with patch.object(task, "update_state", MagicMock()):
+        return task.run(**kwargs)
+
+
+def _make_generation_result(audio_file_path: str = "/tmp/episode.mp3") -> dict:
+    return {
+        "status": "success",
+        "audio_file_path": audio_file_path,
+        "transcript_path": audio_file_path.replace(".mp3", "_transcript.txt"),
+        "duration_seconds": 300.0,
+        "file_size_bytes": 5_000_000,
+        "error": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Test 1: Full workflow chain (generation → upload → composition → distribution)
+# ---------------------------------------------------------------------------
+
+class TestFullWorkflowChain:
+    """Verify generate_podcast_task dispatches the full chain when all stages enabled."""
+
+    def test_workflow_chain_dispatched_when_composition_enabled(self):
+        """When enable_composition=True, build_generation_workflow is called."""
+        import sys
+        import types
+
+        episode_id = str(uuid.uuid4())
+        mock_audio_path = "/tmp/test_podcast.mp3"
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=60_000)
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+
+        mock_chain = MagicMock()
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+            patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+        ):
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_composition=True,
+                composition_timeline=[{"file_path": "/tmp/intro.mp3"}],
+                enable_distribution=False,
+            )
+
+        assert result["status"] == "success"
+        mock_builder.assert_called_once()
+        call_kwargs = mock_builder.call_args.kwargs
+        assert call_kwargs["episode_id"] == episode_id
+        assert call_kwargs["audio_file_path"] == mock_audio_path
+        assert call_kwargs["enable_composition"] is True
+        assert call_kwargs["enable_distribution"] is False
+        mock_chain.apply_async.assert_called_once()
+
+    def test_workflow_chain_dispatched_when_distribution_enabled(self):
+        """When enable_distribution=True with platforms, build_generation_workflow is called."""
+        import sys
+        import types
+
+        episode_id = str(uuid.uuid4())
+        mock_audio_path = "/tmp/dist_test.mp3"
+        platforms = {"spotify": {"oauth_tokens": {}}, "webhook": {"url": "https://hook.example.com"}}
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=120_000)
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+
+        mock_chain = MagicMock()
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=2000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+            patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+        ):
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_composition=False,
+                enable_distribution=True,
+                platforms=platforms,
+            )
+
+        assert result["status"] == "success"
+        mock_builder.assert_called_once()
+        call_kwargs = mock_builder.call_args.kwargs
+        assert call_kwargs["enable_distribution"] is True
+        assert call_kwargs["platforms"] == platforms
+        mock_chain.apply_async.assert_called_once()
+
+    def test_finalize_task_used_when_no_composition_or_distribution(self):
+        """Default path (no composition, no distribution) uses finalize_episode_generation_task."""
+        import sys
+        import types
+
+        episode_id = str(uuid.uuid4())
+        mock_audio_path = "/tmp/simple.mp3"
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=60_000)
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+            patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task") as mock_finalize,
+        ):
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_composition=False,
+                enable_distribution=False,
+            )
+
+        assert result["status"] == "success"
+        # Workflow chain should NOT be used
+        mock_builder.assert_not_called()
+        # Simple finalization task should be used
+        mock_finalize.delay.assert_called_once()
+
+    def test_finalize_task_used_when_distribution_enabled_but_no_platforms(self):
+        """enable_distribution=True but platforms=None falls back to finalize task."""
+        import sys
+        import types
+
+        episode_id = str(uuid.uuid4())
+        mock_audio_path = "/tmp/no_platforms.mp3"
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=60_000)
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+            patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task") as mock_finalize,
+        ):
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_distribution=True,
+                platforms=None,  # No platforms configured
+            )
+
+        assert result["status"] == "success"
+        mock_builder.assert_not_called()
+        mock_finalize.delay.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Test 2: build_generation_workflow chain structure
+# ---------------------------------------------------------------------------
+
+class TestWorkflowChainStructure:
+    """Verify build_generation_workflow builds the correct task chain."""
+
+    def test_upload_only_chain(self):
+        """Default chain contains only the S3 upload task."""
+        from celery import chain as celery_chain
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "test-bucket"
+            workflow = build_generation_workflow(
+                episode_id=str(uuid.uuid4()),
+                audio_file_path="/tmp/podcast.mp3",
+            )
+
+        assert isinstance(workflow, celery_chain)
+        task_names = [t.task for t in workflow.tasks]
+        assert "upload_to_s3" in task_names
+        assert "merge_audio_snippets" not in task_names
+        assert "distribute_to_platform" not in task_names
+
+    def test_composition_added_when_enabled(self):
+        """merge_audio_snippets is in chain when enable_composition=True."""
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                episode_id=str(uuid.uuid4()),
+                audio_file_path="/tmp/audio.mp3",
+                enable_composition=True,
+                composition_timeline=[],
+            )
+
+        task_names = [t.task for t in workflow.tasks]
+        assert "merge_audio_snippets" in task_names
+
+    def test_composition_excluded_when_disabled(self):
+        """merge_audio_snippets is NOT in chain when enable_composition=False."""
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                episode_id=str(uuid.uuid4()),
+                audio_file_path="/tmp/audio.mp3",
+                enable_composition=False,
+            )
+
+        task_names = [t.task for t in workflow.tasks]
+        assert "merge_audio_snippets" not in task_names
+
+    def test_distribution_tasks_for_each_platform(self):
+        """One distribute_to_platform task per platform when distribution enabled."""
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        platforms = {
+            "spotify": {"oauth_tokens": {}},
+            "apple_podcasts": {"credentials": {}},
+            "webhook": {"url": "https://hook.example.com"},
+        }
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                episode_id=str(uuid.uuid4()),
+                audio_file_path="/tmp/audio.mp3",
+                enable_distribution=True,
+                platforms=platforms,
+            )
+
+        task_names = [t.task for t in workflow.tasks]
+        assert task_names.count("distribute_to_platform") == 3
+
+    def test_distribution_excluded_when_no_platforms(self):
+        """distribute_to_platform not included when platforms is empty/None."""
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                episode_id=str(uuid.uuid4()),
+                audio_file_path="/tmp/audio.mp3",
+                enable_distribution=True,
+                platforms={},  # Empty platforms dict
+            )
+
+        task_names = [t.task for t in workflow.tasks]
+        assert "distribute_to_platform" not in task_names
+
+    def test_s3_key_contains_episode_id(self):
+        """Generated S3 key includes episode_id for uniqueness."""
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        episode_id = str(uuid.uuid4())
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                episode_id=episode_id,
+                audio_file_path="/tmp/audio.mp3",
+            )
+
+        upload_task = workflow.tasks[0]
+        s3_key = upload_task.kwargs.get("s3_key", "")
+        assert episode_id in s3_key
+
+    def test_explicit_s3_bucket_overrides_settings(self):
+        """Explicit s3_bucket parameter takes precedence over settings.AWS_S3_BUCKET."""
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "default-bucket"
+            workflow = build_generation_workflow(
+                episode_id=str(uuid.uuid4()),
+                audio_file_path="/tmp/audio.mp3",
+                s3_bucket="override-bucket",
+            )
+
+        upload_task = workflow.tasks[0]
+        assert upload_task.kwargs.get("bucket_name") == "override-bucket"
+
+
+# ---------------------------------------------------------------------------
+# Test 3: Conditional composition
+# ---------------------------------------------------------------------------
+
+class TestConditionalComposition:
+    """Verify composition stage is properly conditional."""
+
+    def test_generate_task_passes_composition_timeline(self):
+        """Task passes composition_timeline to build_generation_workflow."""
+        import sys
+        import types
+
+        episode_id = str(uuid.uuid4())
+        timeline = [
+            {"file_path": "/tmp/intro.mp3", "normalize": True},
+            {"file_path": "/tmp/body.mp3", "fade_out_ms": 500},
+        ]
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=60_000)
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(return_value="/tmp/audio.mp3")
+
+        mock_chain = MagicMock()
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+            patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+        ):
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+
+            _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_composition=True,
+                composition_timeline=timeline,
+            )
+
+        call_kwargs = mock_builder.call_args.kwargs
+        assert call_kwargs["composition_timeline"] == timeline
+
+
+# ---------------------------------------------------------------------------
+# Test 4: Error handling
+# ---------------------------------------------------------------------------
+
+class TestErrorHandling:
+    """Verify errors in generate_podcast_task don't trigger workflow chain."""
+
+    def test_workflow_chain_not_called_on_generation_failure(self):
+        """If podcast generation fails, build_generation_workflow is never called."""
+        import sys
+        import types
+
+        episode_id = str(uuid.uuid4())
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(side_effect=RuntimeError("LLM API error"))
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+            patch.object(
+                generate_podcast_task,
+                "retry",
+                side_effect=generate_podcast_task.MaxRetriesExceededError(),
+            ),
+        ):
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_composition=True,
+            )
+
+        assert result["status"] == "failed"
+        mock_builder.assert_not_called()
+
+    def test_broker_error_during_workflow_dispatch_does_not_fail_generation(self):
+        """A broker failure when dispatching the workflow chain does not change generation result."""
+        import sys
+        import types
+
+        episode_id = str(uuid.uuid4())
+        mock_audio_path = "/tmp/podcast.mp3"
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=60_000)
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+
+        mock_chain = MagicMock()
+        mock_chain.apply_async.side_effect = ConnectionError("Redis unavailable")
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+            patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain),
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+        ):
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+
+            # Even though the broker is down, generation result should still be success
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_composition=True,
+            )
+
+        assert result["status"] == "success"
+
+
+# ---------------------------------------------------------------------------
+# Test 5: Multiple platform distribution
+# ---------------------------------------------------------------------------
+
+class TestMultiplePlatformDistribution:
+    """Verify multi-platform distribution creates parallel tasks."""
+
+    def test_two_platforms_create_two_distribution_tasks(self):
+        """Each configured platform gets its own distribute_to_platform task."""
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        platforms = {
+            "spotify": {"oauth_tokens": {"access_token": "tok"}},
+            "webhook": {"url": "https://hook.example.com"},
+        }
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                episode_id=str(uuid.uuid4()),
+                audio_file_path="/tmp/audio.mp3",
+                enable_distribution=True,
+                platforms=platforms,
+            )
+
+        dist_tasks = [t for t in workflow.tasks if t.task == "distribute_to_platform"]
+        assert len(dist_tasks) == 2
+        platform_names = {t.kwargs.get("platform") for t in dist_tasks}
+        assert platform_names == {"spotify", "webhook"}
+
+    def test_distribution_tasks_include_episode_metadata(self):
+        """Each distribution task has episode_id in kwargs."""
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        episode_id = str(uuid.uuid4())
+        platforms = {"spotify": {}}
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                episode_id=episode_id,
+                audio_file_path="/tmp/audio.mp3",
+                enable_distribution=True,
+                platforms=platforms,
+            )
+
+        dist_task = next(t for t in workflow.tasks if t.task == "distribute_to_platform")
+        assert dist_task.kwargs.get("episode_id") == episode_id
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Episode model has new fields
+# ---------------------------------------------------------------------------
+
+class TestEpisodeModelWorkflowFields:
+    """Verify the Episode model has the workflow tracking fields."""
+
+    def test_episode_model_has_platform_ids(self):
+        """Episode model includes platform_ids column."""
+        from src.models.episode import Episode
+        assert hasattr(Episode, "platform_ids"), "Episode must have platform_ids column"
+
+    def test_episode_model_has_error_message(self):
+        """Episode model includes error_message column."""
+        from src.models.episode import Episode
+        assert hasattr(Episode, "error_message"), "Episode must have error_message column"
+
+    def test_episode_schema_exposes_platform_ids(self):
+        """EpisodeResponse schema includes platform_ids field."""
+        from src.schemas.episode import EpisodeResponse
+        assert "platform_ids" in EpisodeResponse.model_fields
+
+    def test_episode_schema_exposes_error_message(self):
+        """EpisodeResponse schema includes error_message field."""
+        from src.schemas.episode import EpisodeResponse
+        assert "error_message" in EpisodeResponse.model_fields
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Config settings
+# ---------------------------------------------------------------------------
+
+class TestWorkflowConfigSettings:
+    """Verify workflow feature flags are present in settings."""
+
+    def test_enable_audio_composition_setting_exists(self):
+        """Settings has ENABLE_AUDIO_COMPOSITION flag, defaulting to False."""
+        from src.config import Settings
+        # Pydantic v2 stores fields in model_fields
+        assert "ENABLE_AUDIO_COMPOSITION" in Settings.model_fields
+        # Create a minimal settings instance to verify the default value
+        import os
+        with patch.dict(os.environ, {
+            "DATABASE_URL": "postgresql+asyncpg://x:x@localhost/x",
+            "ENCRYPTION_KEY": "a" * 32,
+            "JWT_SECRET_KEY": "test",
+        }):
+            s = Settings()
+            assert s.ENABLE_AUDIO_COMPOSITION is False
+
+    def test_enable_platform_distribution_setting_exists(self):
+        """Settings has ENABLE_PLATFORM_DISTRIBUTION flag, defaulting to False."""
+        from src.config import Settings
+        assert "ENABLE_PLATFORM_DISTRIBUTION" in Settings.model_fields
+        import os
+        with patch.dict(os.environ, {
+            "DATABASE_URL": "postgresql+asyncpg://x:x@localhost/x",
+            "ENCRYPTION_KEY": "a" * 32,
+            "JWT_SECRET_KEY": "test",
+        }):
+            s = Settings()
+            assert s.ENABLE_PLATFORM_DISTRIBUTION is False
+
+
+# ---------------------------------------------------------------------------
+# Test 8: generate_podcast_task parameter acceptance
+# ---------------------------------------------------------------------------
+
+class TestGeneratePodcastTaskWorkflowParameters:
+    """Verify generate_podcast_task signature has workflow parameters."""
+
+    def test_task_accepts_enable_composition(self):
+        """generate_podcast_task must accept enable_composition parameter."""
+        import inspect
+        from src.tasks.podcast_generation import generate_podcast_task
+        sig = inspect.signature(generate_podcast_task.run)
+        assert "enable_composition" in sig.parameters
+
+    def test_task_accepts_enable_distribution(self):
+        """generate_podcast_task must accept enable_distribution parameter."""
+        import inspect
+        from src.tasks.podcast_generation import generate_podcast_task
+        sig = inspect.signature(generate_podcast_task.run)
+        assert "enable_distribution" in sig.parameters
+
+    def test_task_accepts_platforms(self):
+        """generate_podcast_task must accept platforms parameter."""
+        import inspect
+        from src.tasks.podcast_generation import generate_podcast_task
+        sig = inspect.signature(generate_podcast_task.run)
+        assert "platforms" in sig.parameters
+
+    def test_task_accepts_composition_timeline(self):
+        """generate_podcast_task must accept composition_timeline parameter."""
+        import inspect
+        from src.tasks.podcast_generation import generate_podcast_task
+        sig = inspect.signature(generate_podcast_task.run)
+        assert "composition_timeline" in sig.parameters
+
+    def test_workflow_params_default_to_disabled(self):
+        """All workflow params default to disabled/None."""
+        import inspect
+        from src.tasks.podcast_generation import generate_podcast_task
+        sig = inspect.signature(generate_podcast_task.run)
+        assert sig.parameters["enable_composition"].default is False
+        assert sig.parameters["enable_distribution"].default is False
+        assert sig.parameters["platforms"].default is None
+        assert sig.parameters["composition_timeline"].default is None

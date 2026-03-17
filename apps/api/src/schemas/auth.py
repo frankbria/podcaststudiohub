@@ -102,3 +102,20 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(None, max_length=255, description="Updated display name")
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class VerificationResponse(BaseModel):
+    """Schema for email verification response"""
+    message: str
+    verified: bool
+
+
+class ResendVerificationRequest(BaseModel):
+    """Schema for resending a verification email"""
+    email: EmailStr = Field(..., description="Email address to resend verification to")
+
+
+class ResendVerificationResponse(BaseModel):
+    """Schema for resend verification response"""
+    message: str
+    email: str

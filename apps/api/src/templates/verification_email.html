@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Verify your Podcastfy account</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 0; }
+    .container { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; }
+    .header { background: #6366f1; padding: 24px; text-align: center; color: #ffffff; }
+    .header h1 { margin: 0; font-size: 24px; }
+    .body { padding: 32px; color: #333333; line-height: 1.6; }
+    .btn { display: inline-block; margin: 24px 0; padding: 14px 28px; background: #6366f1; color: #ffffff;
+           text-decoration: none; border-radius: 6px; font-weight: bold; }
+    .footer { padding: 16px 32px; background: #f4f4f4; font-size: 12px; color: #888888; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Podcastfy</h1>
+    </div>
+    <div class="body">
+      <p>Hi {{ user_name }},</p>
+      <p>Thanks for signing up! Please verify your email address to activate your account.</p>
+      <p>
+        <a class="btn" href="{{ verification_url }}">Verify Email Address</a>
+      </p>
+      <p>Or copy and paste this link into your browser:</p>
+      <p style="word-break: break-all;"><a href="{{ verification_url }}">{{ verification_url }}</a></p>
+      <p><strong>This link expires in 24 hours.</strong></p>
+      <p>If you did not create an account with Podcastfy, you can safely ignore this email.</p>
+    </div>
+    <div class="footer">
+      &copy; Podcastfy. Need help? Contact support.
+    </div>
+  </div>
+</body>
+</html>

@@ -1,19 +1,36 @@
 """Authentication router for user registration and login"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
-from ..schemas.auth import UserRegister, UserLogin, UserResponse, TokenResponse
-from ..services.auth_service import (
-    create_user,
-    authenticate_user,
-    create_jwt_token
+from ..schemas.auth import (
+    ResendVerificationRequest,
+    ResendVerificationResponse,
+    TokenResponse,
+    UserLogin,
+    UserRegister,
+    UserResponse,
+    VerificationResponse,
 )
+from ..services.auth_service import (
+    authenticate_user,
+    create_jwt_token,
+    create_user,
+    create_verification_token,
+    get_user_by_email,
+    mark_user_verified,
+    verify_verification_token,
+)
+from ..services.email_service import send_verification_email
 from ..models.user import User
 from ..middleware.auth import get_current_user
 from ..dependencies import create_rate_limit_dependency
 from ..config import settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -48,7 +65,8 @@ async def register(
     - **password**: Minimum 8 characters with uppercase, lowercase, digit, and special character
     - **full_name**: User display name
 
-    Returns JWT access token and user data.
+    Returns JWT access token and user data. A verification email is sent asynchronously;
+    the user must verify their email before logging in.
     """
     try:
         # Create user in database (includes password hashing)
@@ -58,6 +76,12 @@ async def register(
             password=user_data.password,
             full_name=user_data.full_name
         )
+
+        # Send verification email (failure is non-fatal)
+        verification_token = create_verification_token(user.id, user.email)
+        sent = send_verification_email(user.email, user.full_name or user.email, verification_token)
+        if not sent:
+            logger.warning("Failed to send verification email to %s", user.email)
 
         # Generate JWT token
         access_token = create_jwt_token(
@@ -118,6 +142,12 @@ async def login(
             detail="Account is inactive. Contact administrator."
         )
 
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Email not verified. Please check your email for the verification link.",
+        )
+
     # Generate JWT token
     access_token = create_jwt_token(
         user_id=user.id,
@@ -146,20 +176,76 @@ async def get_current_user_info(
     return UserResponse.model_validate(current_user)
 
 
-@router.post("/resend-verification-email", status_code=status.HTTP_200_OK)
+@router.get("/verify-email", response_model=VerificationResponse)
+async def verify_email(
+    token: str = Query(..., description="Email verification token from the link in your inbox"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Verify a user's email address using the token sent during registration.
+
+    - **token**: JWT verification token (from the ?token= query parameter in the email link)
+
+    Returns 200 on success, 400 for invalid/expired tokens, 404 if user not found.
+    """
+    try:
+        payload = verify_verification_token(token)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token.",
+        )
+
+    from uuid import UUID
+
+    try:
+        user_id = UUID(payload["sub"])
+    except (KeyError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired verification token.",
+        )
+
+    # mark_user_verified raises 404 if user not found
+    await mark_user_verified(db, user_id)
+
+    return VerificationResponse(message="Email verified successfully.", verified=True)
+
+
+@router.post("/resend-verification-email", response_model=ResendVerificationResponse, status_code=status.HTTP_200_OK)
 async def resend_verification_email(
-    current_user: User = Depends(get_current_user),
+    body: ResendVerificationRequest,
+    db: AsyncSession = Depends(get_db),
     _: None = Depends(_rate_limit_resend),
 ):
     """
-    Resend the email verification link to the currently authenticated user.
+    Resend the email verification link to the given email address.
 
-    Requires valid JWT token in Authorization header.
-    Rate limited to 5 requests per 60 minutes per IP.
+    - **email**: Email address of the unverified account
+
+    Rate limited to prevent abuse. Returns 200 even when the email service
+    is disabled or fails, to avoid leaking whether an address is registered.
     """
-    if current_user.is_verified:
-        return {"message": "Email is already verified."}
+    user = await get_user_by_email(db, body.email)
 
-    # Verification email sending would be triggered here via a background task.
-    # Placeholder response until email service is wired up.
-    return {"message": "Verification email sent."}
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No account found with that email address.",
+        )
+
+    if user.is_verified:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email address is already verified.",
+        )
+
+    verification_token = create_verification_token(user.id, user.email)
+    sent = send_verification_email(user.email, user.full_name or user.email, verification_token)
+    if not sent:
+        logger.warning("Failed to resend verification email to %s", user.email)
+
+    return ResendVerificationResponse(
+        message="Verification email sent.",
+        email=user.email,
+    )

@@ -77,6 +77,18 @@ class Settings(BaseSettings):
     ENABLE_AUDIO_COMPOSITION: bool = False
     ENABLE_PLATFORM_DISTRIBUTION: bool = False
 
+    # Email / SMTP
+    EMAIL_ENABLED: bool = False
+    SMTP_HOST: str = "localhost"
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: Optional[str] = None
+    SMTP_PASSWORD: Optional[str] = None
+    SMTP_USE_TLS: bool = True
+    EMAIL_FROM: str = "noreply@podcaststudiohub.com"
+    EMAIL_FROM_NAME: str = "Podcastfy"
+    FRONTEND_URL: str = "http://localhost:3000"
+    EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS: int = 24
+
     # Logging
     LOG_LEVEL: str = "INFO"
 

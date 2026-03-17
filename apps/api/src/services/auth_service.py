@@ -123,6 +123,97 @@ def verify_jwt_token(token: str) -> dict:
 
 
 # ============================================================================
+# Email Verification Token Functions
+# ============================================================================
+
+def create_verification_token(user_id: UUID, email: str) -> str:
+    """
+    Create a short-lived JWT token for email verification.
+
+    Args:
+        user_id: User's UUID
+        email: User's email address
+
+    Returns:
+        Encoded JWT token string (expires in EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS)
+    """
+    expire = datetime.utcnow() + timedelta(hours=settings.EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS)
+
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "exp": expire,
+        "iat": datetime.utcnow(),
+        "type": "verification",
+    }
+
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def verify_verification_token(token: str) -> dict:
+    """
+    Decode and validate an email verification JWT token.
+
+    Args:
+        token: JWT verification token string
+
+    Returns:
+        Decoded payload dict containing 'sub' (user_id) and 'email'
+
+    Raises:
+        ValueError: If token is invalid, expired, or wrong type
+    """
+    payload = verify_jwt_token(token)  # raises ValueError on bad token
+
+    if payload.get("type") != "verification":
+        raise ValueError("Invalid token type")
+
+    return payload
+
+
+async def mark_user_verified(session: AsyncSession, user_id: UUID) -> "User":
+    """
+    Mark a user as email-verified.
+
+    Args:
+        session: Database session
+        user_id: User's UUID
+
+    Returns:
+        Updated User instance
+
+    Raises:
+        HTTPException: 404 if user not found
+    """
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.is_verified = True
+    user.updated_at = datetime.utcnow()
+    await session.commit()
+
+    return user
+
+
+async def get_user_by_email(session: AsyncSession, email: str) -> Optional["User"]:
+    """
+    Retrieve a user by email address.
+
+    Args:
+        session: Database session
+        email: Email address to look up
+
+    Returns:
+        User instance or None if not found
+    """
+    result = await session.execute(select(User).where(User.email == email))
+    return result.scalar_one_or_none()
+
+
+# ============================================================================
 # User Management Functions
 # ============================================================================
 

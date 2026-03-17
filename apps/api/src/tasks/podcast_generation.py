@@ -88,12 +88,6 @@ def generate_podcast_task(
             }
         )
 
-        # Import the existing CLI function
-        # Note: This imports from the existing podcastfy package
-        import sys
-        # Add the root directory to path to import podcastfy
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../../..'))
-
         from podcastfy.client import generate_podcast
 
         # Update progress after extraction

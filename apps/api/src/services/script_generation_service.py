@@ -34,6 +34,7 @@ from ..models import Episode
 from ..schemas.episode import EpisodeUpdate
 from .episode_service import get_episode_by_id, update_episode, update_generation_status
 from .content_service import get_content_sources
+from ..config import settings
 
 
 logger = logging.getLogger(__name__)
@@ -209,6 +210,19 @@ class ScriptGenerationService:
 				transcript_path=transcript_path
 			)
 
+		except TimeoutError as e:
+			error_msg = str(e)
+			logger.error(f"Script generation timeout for episode {episode_id}: {error_msg}")
+			await self._update_status(
+				db, episode, 'failed',
+				{
+					"stage": "generating",
+					"progress": 0,
+					"error_message": error_msg
+				}
+			)
+			return GenerationResult(success=False, error_message=error_msg)
+
 		except Exception as e:
 			# Handle API failures
 			error_msg = f"Gemini API error: {str(e)}"
@@ -275,12 +289,87 @@ class ScriptGenerationService:
 		self,
 		input_content: str,
 		template_config: Optional[Dict[str, Any]],
+		longform: bool,
+		max_retries: Optional[int] = None,
+		timeout_seconds: Optional[int] = None
+	) -> str:
+		"""
+		Call Gemini API via Podcastfy to generate transcript with timeout and retry logic.
+
+		Wraps synchronous Podcastfy ContentGenerator with async, adding configurable
+		timeout protection and exponential backoff retry logic.
+
+		Args:
+			input_content: Combined content to generate from
+			template_config: Optional conversation configuration
+			longform: Whether to generate long-form content
+			max_retries: Maximum retry attempts (defaults to settings.GEMINI_API_MAX_RETRIES)
+			timeout_seconds: Timeout in seconds per attempt (defaults to settings.GEMINI_API_TIMEOUT)
+
+		Returns:
+			Generated transcript XML string
+
+		Raises:
+			TimeoutError: If all retry attempts exceed the timeout
+			Exception: If all retry attempts fail with non-timeout errors
+		"""
+		if max_retries is None:
+			max_retries = settings.GEMINI_API_MAX_RETRIES
+		if timeout_seconds is None:
+			timeout_seconds = settings.GEMINI_API_TIMEOUT
+
+		for attempt in range(1, max_retries + 1):
+			try:
+				logger.info(
+					f"Gemini API call attempt {attempt}/{max_retries} "
+					f"(timeout: {timeout_seconds}s)"
+				)
+
+				transcript = await asyncio.wait_for(
+					asyncio.to_thread(self._call_gemini_sync, input_content, template_config, longform),
+					timeout=timeout_seconds
+				)
+
+				logger.info(f"Gemini API call succeeded on attempt {attempt}")
+				return transcript
+
+			except asyncio.TimeoutError:
+				logger.warning(
+					f"Gemini API timeout on attempt {attempt}/{max_retries}"
+				)
+
+				if attempt == max_retries:
+					error_msg = (
+						f"Gemini API request exceeded {timeout_seconds} second timeout "
+						f"after {max_retries} attempts"
+					)
+					logger.error(error_msg)
+					raise TimeoutError(error_msg)
+
+				backoff_delay = 5 * (2 ** (attempt - 1))
+				logger.info(f"Retrying after {backoff_delay}s delay...")
+				await asyncio.sleep(backoff_delay)
+
+			except Exception as e:
+				logger.error(f"Gemini API error on attempt {attempt}/{max_retries}: {str(e)}")
+
+				if attempt == max_retries:
+					raise
+
+				backoff_delay = 5 * (2 ** (attempt - 1))
+				logger.info(f"Retrying after {backoff_delay}s delay...")
+				await asyncio.sleep(backoff_delay)
+
+		raise RuntimeError("Script generation exhausted all retries")
+
+	def _call_gemini_sync(
+		self,
+		input_content: str,
+		template_config: Optional[Dict[str, Any]],
 		longform: bool
 	) -> str:
 		"""
-		Call Gemini API via Podcastfy to generate transcript.
-
-		Wraps synchronous Podcastfy ContentGenerator with async.
+		Synchronous wrapper for Gemini API call via Podcastfy.
 
 		Args:
 			input_content: Combined content to generate from
@@ -289,27 +378,17 @@ class ScriptGenerationService:
 
 		Returns:
 			Generated transcript XML string
-
-		Raises:
-			Exception: If Gemini API call fails
 		"""
-		# Initialize ContentGenerator with config
-		# NOTE: Podcastfy's ContentGenerator is synchronous
-		def _generate():
-			generator = ContentGenerator(
-				is_local=False,
-				model_name=os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro-latest"),
-				api_key_label="GEMINI_API_KEY",
-				conversation_config=template_config
-			)
-			return generator.generate_qa_content(
-				input_texts=input_content,
-				longform=longform
-			)
-
-		# Wrap in async thread
-		transcript = await asyncio.to_thread(_generate)
-		return transcript
+		generator = ContentGenerator(
+			is_local=False,
+			model_name=os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro-latest"),
+			api_key_label="GEMINI_API_KEY",
+			conversation_config=template_config
+		)
+		return generator.generate_qa_content(
+			input_texts=input_content,
+			longform=longform
+		)
 
 	def _validate_transcript(self, transcript: str) -> bool:
 		"""

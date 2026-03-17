@@ -792,3 +792,181 @@ async def test_delete_episode_requires_auth(client):
 	response = await client.delete(f"/episodes/{fake_id}")
 	# Auth middleware returns 403 Forbidden when no valid token provided
 	assert response.status_code == 403
+
+
+# ============================================================================
+# CELERY TASK TRACKING TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_episode_created_with_null_task_fields(client, project_and_auth):
+	"""Verify task_id, task_started_at, task_completed_at are null on creation."""
+	project_id, headers = project_and_auth
+
+	response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Task Test", "description": "Desc"}
+	})
+	assert response.status_code == 201
+	data = response.json()
+
+	assert data["task_id"] is None
+	assert data["task_started_at"] is None
+	assert data["task_completed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_task_id(client, project_and_auth):
+	"""Test storing a Celery task UUID in task_id field."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Task Test", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	celery_task_uuid = "550e8400-e29b-41d4-a716-446655440000"
+	update_response = await client.put(
+		f"/episodes/{episode_id}",
+		headers=headers,
+		json={
+			"task_id": celery_task_uuid,
+			"generation_status": "queued"
+		}
+	)
+	assert update_response.status_code == 200
+	data = update_response.json()
+	assert data["task_id"] == celery_task_uuid
+	assert data["generation_status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_update_task_started_at(client, project_and_auth):
+	"""Test storing task_started_at timestamp when Celery task is submitted."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Task Start Test", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	started_at = "2026-03-17T10:00:00+00:00"
+	update_response = await client.put(
+		f"/episodes/{episode_id}",
+		headers=headers,
+		json={
+			"task_id": "abc-123-def-456",
+			"task_started_at": started_at,
+			"generation_status": "queued"
+		}
+	)
+	assert update_response.status_code == 200
+	data = update_response.json()
+	assert data["task_started_at"] is not None
+	assert data["task_id"] == "abc-123-def-456"
+
+
+@pytest.mark.asyncio
+async def test_update_task_completed_at(client, project_and_auth):
+	"""Test storing task_completed_at timestamp when Celery task finishes."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Task Complete Test", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	# Simulate task submission
+	await client.put(
+		f"/episodes/{episode_id}",
+		headers=headers,
+		json={
+			"task_id": "abc-123-def-456",
+			"task_started_at": "2026-03-17T10:00:00+00:00",
+			"generation_status": "generating"
+		}
+	)
+
+	# Simulate task completion
+	completed_at = "2026-03-17T10:05:00+00:00"
+	update_response = await client.put(
+		f"/episodes/{episode_id}",
+		headers=headers,
+		json={
+			"task_completed_at": completed_at,
+			"generation_status": "complete"
+		}
+	)
+	assert update_response.status_code == 200
+	data = update_response.json()
+	assert data["task_completed_at"] is not None
+	assert data["generation_status"] == "complete"
+	# task_id should remain from previous update
+	assert data["task_id"] == "abc-123-def-456"
+
+
+@pytest.mark.asyncio
+async def test_task_fields_returned_in_get_episode(client, project_and_auth):
+	"""Test that task tracking fields are returned when fetching an episode."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Get Task Test", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	celery_task_uuid = "deadbeef-dead-beef-dead-beefdeadbeef"
+	await client.put(
+		f"/episodes/{episode_id}",
+		headers=headers,
+		json={
+			"task_id": celery_task_uuid,
+			"task_started_at": "2026-03-17T09:00:00+00:00",
+			"generation_status": "generating"
+		}
+	)
+
+	get_response = await client.get(f"/episodes/{episode_id}", headers=headers)
+	assert get_response.status_code == 200
+	data = get_response.json()
+	assert data["task_id"] == celery_task_uuid
+	assert data["task_started_at"] is not None
+	assert data["task_completed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_task_fields_in_list_response(client, project_and_auth):
+	"""Test that task tracking fields are included in list responses."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "List Task Test", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	await client.put(
+		f"/episodes/{episode_id}",
+		headers=headers,
+		json={"task_id": "task-uuid-123"}
+	)
+
+	list_response = await client.get(
+		f"/episodes?project_id={project_id}",
+		headers=headers
+	)
+	assert list_response.status_code == 200
+	episodes = list_response.json()["episodes"]
+	assert len(episodes) == 1
+	assert "task_id" in episodes[0]
+	assert episodes[0]["task_id"] == "task-uuid-123"

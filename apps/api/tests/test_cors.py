@@ -3,9 +3,8 @@ CORS configuration tests - GAP-034
 Verifies that CORS middleware is configured with explicit, restricted permissions.
 """
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import AsyncClient
 
-from src.main import app
 from src.config import settings
 
 

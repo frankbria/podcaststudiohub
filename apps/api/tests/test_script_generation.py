@@ -129,11 +129,20 @@ def text_content_source():
 
 @pytest.fixture
 def valid_transcript():
-	"""Sample valid transcript with Person1/Person2 tags."""
-	return """<Person1>Welcome to the podcast!</Person1>
-<Person2>Thanks for having me!</Person2>
-<Person1>Let's discuss the topic.</Person1>
-<Person2>Sure, I'd love to share my thoughts.</Person2>"""
+	"""Sample valid transcript with sufficient content, balanced speakers, and multiple turns."""
+	return (
+		"<Person1>Welcome to today's podcast! We're going to explore the fascinating world "
+		"of artificial intelligence and its broad impact on modern society and everyday life.</Person1>"
+		"<Person2>Thanks so much for having me! I truly believe artificial intelligence is one "
+		"of the most transformative technologies of our time. There are so many ways it is "
+		"reshaping how we work, communicate, and solve complex problems around the globe.</Person2>"
+		"<Person1>Absolutely! From machine learning to natural language processing, the field has "
+		"advanced tremendously over the past decade. Can you tell our listeners about some specific "
+		"applications you find most exciting right now?</Person1>"
+		"<Person2>Of course! I am particularly excited about AI applications in healthcare, where "
+		"algorithms are helping doctors diagnose diseases earlier and more accurately than ever "
+		"before. It is truly revolutionizing patient care in remarkable and meaningful ways.</Person2>"
+	)
 
 
 # ============================================================================
@@ -439,7 +448,7 @@ async def test_generate_script_invalid_transcript_missing_person1(
 	draft_episode,
 	url_content_source
 ):
-	"""Test generation fails when transcript missing Person1 tag."""
+	"""Test generation fails when transcript missing Person1 tag (after all retries)."""
 	invalid_transcript = "<Person2>Only Person2 speaking</Person2>"
 
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
@@ -450,10 +459,14 @@ async def test_generate_script_invalid_transcript_missing_person1(
 		mock_get_episode.return_value = draft_episode
 		mock_get_sources.return_value = ([url_content_source], 1)
 
-		result = await generation_service.generate_script(mock_db, draft_episode.id)
+		result = await generation_service.generate_script(
+			mock_db,
+			draft_episode.id,
+			max_validation_retries=1
+		)
 
 		assert result.success is False
-		assert "missing Person1/Person2 tags" in result.error_message
+		assert "Person1" in result.error_message
 
 		# Verify status updated to failed
 		final_call = mock_update_status.call_args_list[-1]
@@ -467,7 +480,7 @@ async def test_generate_script_invalid_transcript_missing_person2(
 	draft_episode,
 	url_content_source
 ):
-	"""Test generation fails when transcript missing Person2 tag."""
+	"""Test generation fails when transcript missing Person2 tag (after all retries)."""
 	invalid_transcript = "<Person1>Only Person1 speaking</Person1>"
 
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
@@ -478,10 +491,14 @@ async def test_generate_script_invalid_transcript_missing_person2(
 		mock_get_episode.return_value = draft_episode
 		mock_get_sources.return_value = ([url_content_source], 1)
 
-		result = await generation_service.generate_script(mock_db, draft_episode.id)
+		result = await generation_service.generate_script(
+			mock_db,
+			draft_episode.id,
+			max_validation_retries=1
+		)
 
 		assert result.success is False
-		assert "missing Person1/Person2 tags" in result.error_message
+		assert "Person2" in result.error_message
 
 
 # ============================================================================
@@ -787,31 +804,336 @@ def test_generation_result_failure():
 # VALIDATE TRANSCRIPT METHOD TESTS
 # ============================================================================
 
+VALID_LONG_TRANSCRIPT = (
+	"<Person1>Welcome to today's podcast! We're going to explore the fascinating world "
+	"of artificial intelligence and its broad impact on modern society and everyday life.</Person1>"
+	"<Person2>Thanks so much for having me! I truly believe artificial intelligence is one "
+	"of the most transformative technologies of our time. There are so many ways it is "
+	"reshaping how we work, communicate, and solve complex problems around the globe.</Person2>"
+	"<Person1>Absolutely! From machine learning to natural language processing, the field has "
+	"advanced tremendously over the past decade. Can you tell our listeners about some specific "
+	"applications you find most exciting right now?</Person1>"
+	"<Person2>Of course! I am particularly excited about AI applications in healthcare, where "
+	"algorithms are helping doctors diagnose diseases earlier and more accurately than ever "
+	"before. It is truly revolutionizing patient care in remarkable and meaningful ways.</Person2>"
+)
+
+
 def test_validate_transcript_valid(generation_service):
-	"""Test transcript validation with valid transcript."""
-	valid = "<Person1>Hello</Person1><Person2>Hi</Person2>"
-	assert generation_service._validate_transcript(valid) is True
+	"""Test transcript validation returns (True, None) for a valid transcript."""
+	is_valid, error_msg = generation_service._validate_transcript(VALID_LONG_TRANSCRIPT)
+	assert is_valid is True
+	assert error_msg is None
 
 
 def test_validate_transcript_missing_person1(generation_service):
-	"""Test transcript validation fails without Person1."""
-	invalid = "<Person2>Hi</Person2>"
-	assert generation_service._validate_transcript(invalid) is False
+	"""Test transcript validation returns failure without Person1."""
+	invalid = "<Person2>Hi there only Person2 speaking</Person2>"
+	is_valid, error_msg = generation_service._validate_transcript(invalid)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "Person1" in error_msg
 
 
 def test_validate_transcript_missing_person2(generation_service):
-	"""Test transcript validation fails without Person2."""
-	invalid = "<Person1>Hello</Person1>"
-	assert generation_service._validate_transcript(invalid) is False
+	"""Test transcript validation returns failure without Person2."""
+	invalid = "<Person1>Hello only Person1 here speaking</Person1>"
+	is_valid, error_msg = generation_service._validate_transcript(invalid)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "Person2" in error_msg
 
 
 def test_validate_transcript_empty(generation_service):
-	"""Test transcript validation fails with empty string."""
-	assert generation_service._validate_transcript("") is False
+	"""Test transcript validation returns failure for empty string."""
+	is_valid, error_msg = generation_service._validate_transcript("")
+	assert is_valid is False
+	assert error_msg is not None
 
 
 # ============================================================================
-# TIMEOUT AND RETRY TESTS
+# ENHANCED VALIDATION UNIT TESTS (GAP-025)
+# ============================================================================
+
+def test_validate_transcript_invalid_xml(generation_service):
+	"""Test that malformed XML structure is detected."""
+	malformed = "<Person1>Content<Person2>More content</Person2>"
+	is_valid, error_msg = generation_service._validate_transcript(malformed)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "XML" in error_msg or "xml" in error_msg.lower()
+
+
+def test_validate_transcript_empty_person1_content(generation_service):
+	"""Test that empty Person1 dialogue is detected."""
+	transcript = "<Person1></Person1><Person2>Person2 has content here</Person2>"
+	is_valid, error_msg = generation_service._validate_transcript(transcript)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "Person1" in error_msg
+
+
+def test_validate_transcript_empty_person2_content(generation_service):
+	"""Test that empty Person2 dialogue is detected."""
+	transcript = "<Person1>Person1 has content here</Person1><Person2></Person2>"
+	is_valid, error_msg = generation_service._validate_transcript(transcript)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "Person2" in error_msg
+
+
+def test_validate_transcript_too_short(generation_service):
+	"""Test that transcripts below minimum word count are rejected."""
+	short = "<Person1>Hello there friend.</Person1><Person2>Hi back to you.</Person2><Person1>Bye.</Person1>"
+	is_valid, error_msg = generation_service._validate_transcript(short)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "short" in error_msg.lower() or "words" in error_msg.lower()
+
+
+def test_validate_transcript_person1_dominates(generation_service):
+	"""Test that Person1 dominating more than MAX_SPEAKER_IMBALANCE_PERCENT is rejected."""
+	# Person1 speaks 85%+ of words, Person2 only 15%
+	person1_text = " ".join(["word"] * 85)
+	person2_text = " ".join(["word"] * 15)
+	transcript = (
+		f"<Person1>{person1_text}</Person1>"
+		f"<Person2>{person2_text}</Person2>"
+		f"<Person1>Extra words here to make it longer</Person1>"
+	)
+	is_valid, error_msg = generation_service._validate_transcript(transcript)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "imbalance" in error_msg.lower() or "Person1" in error_msg
+
+
+def test_validate_transcript_person2_dominates(generation_service):
+	"""Test that Person2 dominating more than MAX_SPEAKER_IMBALANCE_PERCENT is rejected."""
+	person1_text = " ".join(["word"] * 15)
+	person2_text = " ".join(["word"] * 85)
+	transcript = (
+		f"<Person1>{person1_text}</Person1>"
+		f"<Person2>{person2_text}</Person2>"
+		f"<Person2>More words to extend the imbalance further here</Person2>"
+	)
+	is_valid, error_msg = generation_service._validate_transcript(transcript)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "imbalance" in error_msg.lower() or "Person2" in error_msg
+
+
+def test_validate_transcript_ai_artifact_apology(generation_service):
+	"""Test detection of AI apology artifact."""
+	person1_words = " ".join(["content"] * 50)
+	person2_words = " ".join(["content"] * 50)
+	transcript = (
+		f"<Person1>{person1_words}</Person1>"
+		f"<Person2>I apologize for the confusion, {person2_words}</Person2>"
+		f"<Person1>That is alright.</Person1>"
+	)
+	is_valid, error_msg = generation_service._validate_transcript(transcript)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "artifact" in error_msg.lower()
+
+
+def test_validate_transcript_ai_artifact_self_reference(generation_service):
+	"""Test detection of 'as an AI' self-referential artifact."""
+	person1_words = " ".join(["content"] * 50)
+	person2_words = " ".join(["content"] * 50)
+	transcript = (
+		f"<Person1>{person1_words}</Person1>"
+		f"<Person2>As an AI I can tell you that {person2_words}</Person2>"
+		f"<Person1>Interesting point there.</Person1>"
+	)
+	is_valid, error_msg = generation_service._validate_transcript(transcript)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "artifact" in error_msg.lower()
+
+
+def test_validate_transcript_insufficient_turns(generation_service):
+	"""Test that transcripts with too few conversational turns are rejected."""
+	# Only 2 turns (1 Person1 + 1 Person2) - below minimum of 3
+	person1_words = " ".join(["content"] * 55)
+	person2_words = " ".join(["content"] * 55)
+	transcript = f"<Person1>{person1_words}</Person1><Person2>{person2_words}</Person2>"
+	is_valid, error_msg = generation_service._validate_transcript(transcript)
+	assert is_valid is False
+	assert error_msg is not None
+	assert "turn" in error_msg.lower()
+
+
+def test_extract_speaker_content(generation_service):
+	"""Test _extract_speaker_content extracts all turns for a speaker."""
+	transcript = (
+		"<Person1>First turn.</Person1>"
+		"<Person2>Response.</Person2>"
+		"<Person1>Second turn.</Person1>"
+	)
+	content = generation_service._extract_speaker_content(transcript, 'Person1')
+	assert "First turn." in content
+	assert "Second turn." in content
+	assert "Response." not in content
+
+
+def test_check_for_ai_artifacts_no_artifacts(generation_service):
+	"""Test _check_for_ai_artifacts returns None for clean text."""
+	clean_text = "This is a normal conversation about technology and innovation."
+	result = generation_service._check_for_ai_artifacts(clean_text)
+	assert result is None
+
+
+def test_check_for_ai_artifacts_detects_apology(generation_service):
+	"""Test _check_for_ai_artifacts detects apology pattern."""
+	text = "I apologize for any misunderstanding in my previous statement."
+	result = generation_service._check_for_ai_artifacts(text)
+	assert result is not None
+
+
+def test_count_speaker_turns(generation_service):
+	"""Test _count_speaker_turns counts all turns correctly."""
+	transcript = (
+		"<Person1>Turn 1</Person1>"
+		"<Person2>Turn 2</Person2>"
+		"<Person1>Turn 3</Person1>"
+		"<Person2>Turn 4</Person2>"
+	)
+	count = generation_service._count_speaker_turns(transcript)
+	assert count == 4
+
+
+# ============================================================================
+# RETRY LOGIC TESTS (GAP-025)
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_generate_script_retry_on_validation_failure(
+	generation_service,
+	mock_db,
+	draft_episode,
+	url_content_source,
+	valid_transcript
+):
+	"""Test that generation retries when first attempt fails validation."""
+	invalid_transcript = "<Person2>Only Person2 speaking</Person2>"
+
+	# First call returns invalid, second returns valid
+	side_effects = [invalid_transcript, valid_transcript]
+
+	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
+		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
+		 patch('src.services.script_generation_service.update_episode'), \
+		 patch('src.services.script_generation_service.update_generation_status'), \
+		 patch.object(generation_service, '_call_gemini_api', side_effect=side_effects) as mock_gemini, \
+		 patch('builtins.open', mock_open()):
+
+		mock_get_episode.return_value = draft_episode
+		mock_get_sources.return_value = ([url_content_source], 1)
+
+		result = await generation_service.generate_script(
+			mock_db,
+			draft_episode.id,
+			max_validation_retries=2
+		)
+
+		assert result.success is True
+		assert mock_gemini.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_script_retry_exhausted(
+	generation_service,
+	mock_db,
+	draft_episode,
+	url_content_source
+):
+	"""Test that generation fails after all retries are exhausted."""
+	invalid_transcript = "<Person2>Only Person2 speaking</Person2>"
+
+	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
+		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
+		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status, \
+		 patch.object(generation_service, '_call_gemini_api', return_value=invalid_transcript) as mock_gemini:
+
+		mock_get_episode.return_value = draft_episode
+		mock_get_sources.return_value = ([url_content_source], 1)
+
+		result = await generation_service.generate_script(
+			mock_db,
+			draft_episode.id,
+			max_validation_retries=3
+		)
+
+		assert result.success is False
+		assert result.error_message is not None
+		# Gemini API should have been called max_validation_retries times
+		assert mock_gemini.call_count == 3
+		# Final status should be failed
+		final_call = mock_update_status.call_args_list[-1]
+		assert final_call[0][2] == 'failed'
+
+
+@pytest.mark.asyncio
+async def test_generate_script_custom_max_retries(
+	generation_service,
+	mock_db,
+	draft_episode,
+	url_content_source
+):
+	"""Test that custom max_validation_retries parameter is respected."""
+	invalid_transcript = "<Person2>Only Person2 speaking</Person2>"
+
+	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
+		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
+		 patch('src.services.script_generation_service.update_generation_status'), \
+		 patch.object(generation_service, '_call_gemini_api', return_value=invalid_transcript) as mock_gemini:
+
+		mock_get_episode.return_value = draft_episode
+		mock_get_sources.return_value = ([url_content_source], 1)
+
+		# Use custom retry count of 2
+		result = await generation_service.generate_script(
+			mock_db,
+			draft_episode.id,
+			max_validation_retries=2
+		)
+
+		assert result.success is False
+		# Should have tried exactly 2 times
+		assert mock_gemini.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_generate_script_no_retry_on_api_exception(
+	generation_service,
+	mock_db,
+	draft_episode,
+	url_content_source
+):
+	"""Test that API exceptions do not trigger retry logic (only validation failures do)."""
+	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
+		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
+		 patch('src.services.script_generation_service.update_generation_status'), \
+		 patch.object(generation_service, '_call_gemini_api', side_effect=Exception("API error")) as mock_gemini:
+
+		mock_get_episode.return_value = draft_episode
+		mock_get_sources.return_value = ([url_content_source], 1)
+
+		result = await generation_service.generate_script(
+			mock_db,
+			draft_episode.id,
+			max_validation_retries=3
+		)
+
+		assert result.success is False
+		assert "API error" in result.error_message
+		# Should NOT have retried - only one call made
+		assert mock_gemini.call_count == 1
+
+
+# ============================================================================
+# TIMEOUT AND RETRY TESTS (GAP-023)
 # ============================================================================
 
 @pytest.mark.asyncio

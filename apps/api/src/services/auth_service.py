@@ -1,6 +1,6 @@
 """Authentication service for password hashing, JWT tokens, and user management"""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 import bcrypt
@@ -78,14 +78,14 @@ def create_jwt_token(
     if expires_delta is None:
         expires_delta = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
 
-    expire = datetime.utcnow() + expires_delta
+    expire = datetime.now(timezone.utc) + expires_delta
 
     payload = {
         "sub": str(user_id),  # Subject (user ID)
         "tenant_id": str(tenant_id),  # For RLS enforcement in Task 2.4
         "email": email,
         "exp": expire,  # Expiration time
-        "iat": datetime.utcnow(),  # Issued at
+        "iat": datetime.now(timezone.utc),  # Issued at
         "type": "access"  # Token type
     }
 
@@ -120,6 +120,99 @@ def verify_jwt_token(token: str) -> dict:
         return payload
     except JWTError as e:
         raise ValueError(f"Invalid token: {str(e)}")
+
+
+# ============================================================================
+# Email Verification Token Functions
+# ============================================================================
+
+def create_verification_token(user_id: UUID, email: str, tenant_id: UUID) -> str:
+    """
+    Create a short-lived JWT token for email verification.
+
+    Args:
+        user_id: User's UUID
+        email: User's email address
+        tenant_id: User's tenant UUID (required to set RLS context during verification)
+
+    Returns:
+        Encoded JWT token string (expires in EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS)
+    """
+    expire = datetime.now(timezone.utc) + timedelta(hours=settings.EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS)
+
+    payload = {
+        "sub": str(user_id),
+        "email": email,
+        "tenant_id": str(tenant_id),
+        "exp": expire,
+        "iat": datetime.now(timezone.utc),
+        "type": "verification",
+    }
+
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def verify_verification_token(token: str) -> dict:
+    """
+    Decode and validate an email verification JWT token.
+
+    Args:
+        token: JWT verification token string
+
+    Returns:
+        Decoded payload dict containing 'sub' (user_id) and 'email'
+
+    Raises:
+        ValueError: If token is invalid, expired, or wrong type
+    """
+    payload = verify_jwt_token(token)  # raises ValueError on bad token
+
+    if payload.get("type") != "verification":
+        raise ValueError("Invalid token type")
+
+    return payload
+
+
+async def mark_user_verified(session: AsyncSession, user_id: UUID) -> "User":
+    """
+    Mark a user as email-verified.
+
+    Args:
+        session: Database session
+        user_id: User's UUID
+
+    Returns:
+        Updated User instance
+
+    Raises:
+        HTTPException: 404 if user not found
+    """
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.is_verified = True
+    user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    await session.commit()
+
+    return user
+
+
+async def get_user_by_email(session: AsyncSession, email: str) -> Optional["User"]:
+    """
+    Retrieve a user by email address.
+
+    Args:
+        session: Database session
+        email: Email address to look up
+
+    Returns:
+        User instance or None if not found
+    """
+    result = await session.execute(select(User).where(User.email == email))
+    return result.scalar_one_or_none()
 
 
 # ============================================================================
@@ -159,10 +252,10 @@ async def create_user(
             full_name=full_name,
             tenant_id=tenant_id,
             is_active=True,
-            is_verified=False,  # Email verification pending
+            is_verified=not settings.EMAIL_ENABLED,  # Auto-verify when email is disabled
             encrypted_api_keys={},
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
         )
 
         session.add(user)
@@ -219,7 +312,7 @@ async def authenticate_user(
 
     # Set tenant context so the UPDATE is allowed by RLS, then update last_login
     await session.execute(text(f"SET LOCAL app.tenant_id = '{user.tenant_id}'"))
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
     await session.commit()
 
     return user

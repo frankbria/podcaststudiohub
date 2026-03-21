@@ -21,7 +21,9 @@ from src.services.auth_service import (
     create_jwt_token,
     verify_jwt_token,
     create_user,
-    authenticate_user
+    authenticate_user,
+    create_verification_token,
+    verify_verification_token,
 )
 
 
@@ -160,11 +162,13 @@ async def test_register_success(client: AsyncClient):
     assert data["expires_in"] == 86400
 
     # Verify user data
+    from src.config import settings as _settings
     user = data["user"]
     assert user["email"] == "newuser@example.com"
     assert user["full_name"] == "New User"
     assert user["is_active"] is True
-    assert user["is_verified"] is False
+    # When EMAIL_ENABLED=False, users are auto-verified at registration
+    assert user["is_verified"] is (not _settings.EMAIL_ENABLED)
     assert "id" in user
     assert "tenant_id" in user
     assert "password_hash" not in user  # Should never be exposed
@@ -308,15 +312,26 @@ async def test_register_missing_full_name(client: AsyncClient):
 # =============================================================================
 
 @pytest.mark.asyncio
-async def test_login_success(client: AsyncClient):
-    """Test successful user login"""
+async def test_login_success(client: AsyncClient, test_db: AsyncSession):
+    """Test successful user login after email verification"""
+    from sqlalchemy import update, text
+
     # First register a user
     register_data = {
         "email": "loginuser@example.com",
         "password": "LoginPass123!",
         "full_name": "Login User"
     }
-    await client.post("/auth/register", json=register_data)
+    reg_resp = await client.post("/auth/register", json=register_data)
+    user_id = reg_resp.json()["user"]["id"]
+    tenant_id = reg_resp.json()["user"]["tenant_id"]
+
+    # Verify the user so login is allowed
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(
+        update(User).where(User.id == UUID(user_id)).values(is_verified=True)
+    )
+    await test_db.commit()
 
     # Now login
     response = await client.post(
@@ -599,12 +614,14 @@ async def test_create_user_service(test_db: AsyncSession):
     )
 
     # Verify user was created
+    from src.config import settings as _settings
     assert user.id is not None
     assert user.email == "serviceuser@example.com"
     assert user.full_name == "Service User"
     assert user.tenant_id is not None
     assert user.is_active is True
-    assert user.is_verified is False
+    # When EMAIL_ENABLED=False, users are auto-verified at registration
+    assert user.is_verified is (not _settings.EMAIL_ENABLED)
 
     # Verify password was hashed
     assert user.password_hash.startswith("$2b$")
@@ -737,3 +754,276 @@ async def test_different_users_get_different_tenant_ids(client: AsyncClient):
 
     # Each user should have different tenant_id
     assert tenant1 != tenant2
+
+
+# =============================================================================
+# Email Verification Token Tests (unit-level, no DB)
+# =============================================================================
+
+
+def test_create_verification_token():
+    """Verification token has correct type claim and three JWT parts"""
+    token = create_verification_token(uuid4(), "verify@example.com", uuid4())
+    assert isinstance(token, str)
+    assert len(token.split(".")) == 3
+    payload = verify_verification_token(token)
+    assert payload["type"] == "verification"
+    assert payload["email"] == "verify@example.com"
+
+
+def test_verify_verification_token_invalid():
+    """Invalid token string raises ValueError"""
+    with pytest.raises(ValueError):
+        verify_verification_token("not.a.valid.token")
+
+
+def test_verify_verification_token_expired():
+    """Expired verification token raises ValueError"""
+    from jose import jwt
+    from src.config import settings
+
+    payload = {
+        "sub": str(uuid4()),
+        "email": "expired@example.com",
+        "exp": 1,  # epoch 1 → always expired
+        "iat": 1,
+        "type": "verification",
+    }
+    token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    with pytest.raises(ValueError):
+        verify_verification_token(token)
+
+
+def test_verify_verification_token_wrong_type():
+    """Access token is rejected as a verification token"""
+    token = create_jwt_token(uuid4(), uuid4(), "access@example.com")
+    with pytest.raises(ValueError, match="Invalid token type"):
+        verify_verification_token(token)
+
+
+# =============================================================================
+# Email Verification Endpoint Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_verify_email_success(client: AsyncClient, test_db: AsyncSession):
+    """Valid verification token marks user as verified"""
+    # Register a user
+    reg = await client.post(
+        "/auth/register",
+        json={"email": "verifyok@example.com", "password": "Verify123!", "full_name": "Verify OK"},
+    )
+    user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
+
+    # Build a valid verification token
+    token = create_verification_token(UUID(user_id), "verifyok@example.com", UUID(tenant_id))
+
+    response = await client.get(f"/auth/verify-email?token={token}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["verified"] is True
+    assert "verified" in data["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_verify_email_invalid_token(client: AsyncClient):
+    """Invalid token returns 400"""
+    response = await client.get("/auth/verify-email?token=garbage.token.here")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_verify_email_wrong_type_token(client: AsyncClient):
+    """Access token used as verification token returns 400"""
+    access_token = create_jwt_token(uuid4(), uuid4(), "wrongtype@example.com")
+    response = await client.get(f"/auth/verify-email?token={access_token}")
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_verify_email_already_verified_is_idempotent(client: AsyncClient, test_db: AsyncSession):
+    """Verifying an already-verified user succeeds (idempotent)"""
+    from sqlalchemy import update, text
+
+    reg = await client.post(
+        "/auth/register",
+        json={"email": "idempotent@example.com", "password": "Idemp123!", "full_name": "Idempotent"},
+    )
+    user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
+
+    # Mark user as already verified in DB
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=True))
+    await test_db.commit()
+
+    token = create_verification_token(UUID(user_id), "idempotent@example.com", UUID(tenant_id))
+    response = await client.get(f"/auth/verify-email?token={token}")
+    assert response.status_code == 200
+
+
+# =============================================================================
+# Login Guard Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_login_blocked_for_unverified_user(client: AsyncClient, test_db: AsyncSession):
+    """Unverified users cannot log in (403)"""
+    from sqlalchemy import update, text
+
+    reg = await client.post(
+        "/auth/register",
+        json={"email": "unverified@example.com", "password": "Unverif1!", "full_name": "Unverified"},
+    )
+    user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
+
+    # Force is_verified=False regardless of EMAIL_ENABLED setting
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=False))
+    await test_db.commit()
+
+    response = await client.post(
+        "/auth/login",
+        json={"email": "unverified@example.com", "password": "Unverif1!"},
+    )
+    assert response.status_code == 403
+    assert "verified" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_login_success_for_verified_user(client: AsyncClient, test_db: AsyncSession):
+    """Verified users can log in normally"""
+    from sqlalchemy import update, text
+
+    reg = await client.post(
+        "/auth/register",
+        json={"email": "verified@example.com", "password": "Verif123!", "full_name": "Verified"},
+    )
+    user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
+
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=True))
+    await test_db.commit()
+
+    response = await client.post(
+        "/auth/login",
+        json={"email": "verified@example.com", "password": "Verif123!"},
+    )
+    assert response.status_code == 200
+    assert "access_token" in response.json()
+
+
+# =============================================================================
+# Resend Verification Email Endpoint Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_email_success(client: AsyncClient, test_db: AsyncSession):
+    """Resend endpoint returns 200 for an unverified user"""
+    from sqlalchemy import update, text
+
+    reg = await client.post(
+        "/auth/register",
+        json={"email": "resend@example.com", "password": "Resend123!", "full_name": "Resend"},
+    )
+    user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
+
+    # Force is_verified=False regardless of EMAIL_ENABLED setting
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=False))
+    await test_db.commit()
+
+    response = await client.post(
+        "/auth/resend-verification-email",
+        json={"email": "resend@example.com"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["email"] == "resend@example.com"
+    assert "if an unverified account exists" in data["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_email_not_found(client: AsyncClient):
+    """Resend endpoint returns 200 with a generic message for unknown email (no user enumeration)"""
+    response = await client.post(
+        "/auth/resend-verification-email",
+        json={"email": "nobody@example.com"},
+    )
+    assert response.status_code == 200
+    assert "if an unverified account exists" in response.json()["message"].lower()
+
+
+@pytest.mark.asyncio
+async def test_resend_verification_email_already_verified(client: AsyncClient, test_db: AsyncSession):
+    """Resend endpoint returns 200 with a generic message if user is already verified (no enumeration)"""
+    from sqlalchemy import update, text
+
+    reg = await client.post(
+        "/auth/register",
+        json={"email": "alreadyv@example.com", "password": "AlreadyV1!", "full_name": "Already Verified"},
+    )
+    user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
+
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=True))
+    await test_db.commit()
+
+    response = await client.post(
+        "/auth/resend-verification-email",
+        json={"email": "alreadyv@example.com"},
+    )
+    assert response.status_code == 200
+    assert "if an unverified account exists" in response.json()["message"].lower()
+
+
+# =============================================================================
+# Full Registration → Verification → Login Flow
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_full_registration_verification_login_flow(client: AsyncClient, test_db: AsyncSession):
+    """Register → verify email via token → login succeeds"""
+    from sqlalchemy import update, text
+
+    # 1. Register
+    reg = await client.post(
+        "/auth/register",
+        json={"email": "flow@example.com", "password": "Flow1234!", "full_name": "Flow User"},
+    )
+    assert reg.status_code == 201
+    user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
+
+    # 2. Force is_verified=False then verify login is blocked
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=False))
+    await test_db.commit()
+
+    pre_login = await client.post(
+        "/auth/login",
+        json={"email": "flow@example.com", "password": "Flow1234!"},
+    )
+    assert pre_login.status_code == 403
+
+    # 3. Verify via token
+    token = create_verification_token(UUID(user_id), "flow@example.com", UUID(tenant_id))
+    verify_resp = await client.get(f"/auth/verify-email?token={token}")
+    assert verify_resp.status_code == 200
+
+    # 4. Login succeeds after verification
+    post_login = await client.post(
+        "/auth/login",
+        json={"email": "flow@example.com", "password": "Flow1234!"},
+    )
+    assert post_login.status_code == 200
+    assert "access_token" in post_login.json()

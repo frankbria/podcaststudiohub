@@ -162,11 +162,13 @@ async def test_register_success(client: AsyncClient):
     assert data["expires_in"] == 86400
 
     # Verify user data
+    from src.config import settings as _settings
     user = data["user"]
     assert user["email"] == "newuser@example.com"
     assert user["full_name"] == "New User"
     assert user["is_active"] is True
-    assert user["is_verified"] is False
+    # When EMAIL_ENABLED=False, users are auto-verified at registration
+    assert user["is_verified"] is (not _settings.EMAIL_ENABLED)
     assert "id" in user
     assert "tenant_id" in user
     assert "password_hash" not in user  # Should never be exposed
@@ -612,12 +614,14 @@ async def test_create_user_service(test_db: AsyncSession):
     )
 
     # Verify user was created
+    from src.config import settings as _settings
     assert user.id is not None
     assert user.email == "serviceuser@example.com"
     assert user.full_name == "Service User"
     assert user.tenant_id is not None
     assert user.is_active is True
-    assert user.is_verified is False
+    # When EMAIL_ENABLED=False, users are auto-verified at registration
+    assert user.is_verified is (not _settings.EMAIL_ENABLED)
 
     # Verify password was hashed
     assert user.password_hash.startswith("$2b$")
@@ -866,12 +870,21 @@ async def test_verify_email_already_verified_is_idempotent(client: AsyncClient, 
 
 
 @pytest.mark.asyncio
-async def test_login_blocked_for_unverified_user(client: AsyncClient):
+async def test_login_blocked_for_unverified_user(client: AsyncClient, test_db: AsyncSession):
     """Unverified users cannot log in (403)"""
-    await client.post(
+    from sqlalchemy import update, text
+
+    reg = await client.post(
         "/auth/register",
         json={"email": "unverified@example.com", "password": "Unverif1!", "full_name": "Unverified"},
     )
+    user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
+
+    # Force is_verified=False regardless of EMAIL_ENABLED setting
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=False))
+    await test_db.commit()
 
     response = await client.post(
         "/auth/login",
@@ -911,12 +924,21 @@ async def test_login_success_for_verified_user(client: AsyncClient, test_db: Asy
 
 
 @pytest.mark.asyncio
-async def test_resend_verification_email_success(client: AsyncClient):
+async def test_resend_verification_email_success(client: AsyncClient, test_db: AsyncSession):
     """Resend endpoint returns 200 for an unverified user"""
-    await client.post(
+    from sqlalchemy import update, text
+
+    reg = await client.post(
         "/auth/register",
         json={"email": "resend@example.com", "password": "Resend123!", "full_name": "Resend"},
     )
+    user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
+
+    # Force is_verified=False regardless of EMAIL_ENABLED setting
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=False))
+    await test_db.commit()
 
     response = await client.post(
         "/auth/resend-verification-email",
@@ -969,8 +991,10 @@ async def test_resend_verification_email_already_verified(client: AsyncClient, t
 
 
 @pytest.mark.asyncio
-async def test_full_registration_verification_login_flow(client: AsyncClient):
+async def test_full_registration_verification_login_flow(client: AsyncClient, test_db: AsyncSession):
     """Register → verify email via token → login succeeds"""
+    from sqlalchemy import update, text
+
     # 1. Register
     reg = await client.post(
         "/auth/register",
@@ -980,7 +1004,11 @@ async def test_full_registration_verification_login_flow(client: AsyncClient):
     user_id = reg.json()["user"]["id"]
     tenant_id = reg.json()["user"]["tenant_id"]
 
-    # 2. Login blocked before verification
+    # 2. Force is_verified=False then verify login is blocked
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=False))
+    await test_db.commit()
+
     pre_login = await client.post(
         "/auth/login",
         json={"email": "flow@example.com", "password": "Flow1234!"},

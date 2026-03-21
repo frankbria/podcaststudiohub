@@ -252,7 +252,7 @@ async def create_user(
             full_name=full_name,
             tenant_id=tenant_id,
             is_active=True,
-            is_verified=False,  # Email verification pending
+            is_verified=not settings.EMAIL_ENABLED,  # Auto-verify when email is disabled
             encrypted_api_keys={},
             created_at=datetime.now(timezone.utc).replace(tzinfo=None),
             updated_at=datetime.now(timezone.utc).replace(tzinfo=None)

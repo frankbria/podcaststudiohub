@@ -35,8 +35,13 @@ class Settings(BaseSettings):
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:8000"]
     CORS_ALLOW_CREDENTIALS: bool = True
-    CORS_ALLOW_METHODS: list[str] = ["*"]
-    CORS_ALLOW_HEADERS: list[str] = ["*"]
+    CORS_ALLOW_METHODS: list[str] = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+    CORS_ALLOW_HEADERS: list[str] = [
+        "Accept",
+        "Accept-Language",
+        "Content-Type",
+        "Authorization",
+    ]
 
     # API Keys - LLM Providers
     OPENAI_API_KEY: Optional[str] = None

@@ -1,5 +1,6 @@
 """Email service for sending transactional emails via SMTP"""
 
+import asyncio
 import html
 import logging
 import smtplib
@@ -26,15 +27,17 @@ def _render_verification_email(verification_url: str, user_name: str) -> tuple[s
     Returns:
         Tuple of (html_content, text_content)
     """
+    # Escape user-controlled values before HTML interpolation
+    safe_name = html.escape(user_name)
+    safe_url = html.escape(verification_url)
+
     template_path = _TEMPLATES_DIR / "verification_email.html"
     if template_path.exists():
         html_content = template_path.read_text(encoding="utf-8")
-        html_content = html_content.replace("{{ verification_url }}", verification_url)
-        html_content = html_content.replace("{{ user_name }}", user_name)
+        html_content = html_content.replace("{{ verification_url }}", safe_url)
+        html_content = html_content.replace("{{ user_name }}", safe_name)
     else:
-        # Fallback inline template — escape user-controlled values before HTML interpolation
-        safe_name = html.escape(user_name)
-        safe_url = html.escape(verification_url)
+        # Fallback inline template
         html_content = f"""
 <html>
 <body>
@@ -58,14 +61,47 @@ def _render_verification_email(verification_url: str, user_name: str) -> tuple[s
     return html_content, text_content
 
 
-def send_email(
+def _do_smtp_send(
+    to_email: str,
+    from_addr: str,
+    from_name: str,
+    subject: str,
+    html_content: str,
+    text_content: str,
+    smtp_host: str,
+    smtp_port: int,
+    smtp_use_tls: bool,
+    smtp_username: str,
+    smtp_password: str,
+) -> None:
+    """Synchronous SMTP send — runs in a thread pool via run_in_executor."""
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = f"{from_name} <{from_addr}>"
+    msg["To"] = to_email
+    msg.attach(MIMEText(text_content, "plain", "utf-8"))
+    msg.attach(MIMEText(html_content, "html", "utf-8"))
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=10) as smtp:
+        if smtp_use_tls:
+            smtp.starttls(context=context)
+        if smtp_username and smtp_password:
+            smtp.login(smtp_username, smtp_password)
+        smtp.sendmail(from_addr, [to_email], msg.as_string())
+
+
+async def send_email(
     to_email: str,
     subject: str,
     html_content: str,
     text_content: str,
 ) -> bool:
     """
-    Send an email via SMTP (synchronous).
+    Send an email via SMTP without blocking the event loop.
+
+    The synchronous SMTP call is offloaded to a thread pool executor so that
+    the async event loop remains unblocked during the SMTP handshake.
 
     Args:
         to_email: Recipient email address
@@ -81,23 +117,22 @@ def send_email(
         return False
 
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = f"{settings.EMAIL_FROM_NAME} <{settings.EMAIL_FROM}>"
-        msg["To"] = to_email
-
-        msg.attach(MIMEText(text_content, "plain", "utf-8"))
-        msg.attach(MIMEText(html_content, "html", "utf-8"))
-
-        context = ssl.create_default_context()
-
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
-            if settings.SMTP_USE_TLS:
-                smtp.starttls(context=context)
-            if settings.SMTP_USERNAME and settings.SMTP_PASSWORD:
-                smtp.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
-            smtp.sendmail(settings.EMAIL_FROM, [to_email], msg.as_string())
-
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            _do_smtp_send,
+            to_email,
+            settings.EMAIL_FROM,
+            settings.EMAIL_FROM_NAME,
+            subject,
+            html_content,
+            text_content,
+            settings.SMTP_HOST,
+            settings.SMTP_PORT,
+            settings.SMTP_USE_TLS,
+            settings.SMTP_USERNAME,
+            settings.SMTP_PASSWORD,
+        )
         logger.info("Email sent successfully to %s", to_email)
         return True
 
@@ -106,7 +141,7 @@ def send_email(
         return False
 
 
-def send_verification_email(
+async def send_verification_email(
     user_email: str,
     user_name: str,
     verification_token: str,
@@ -125,7 +160,7 @@ def send_verification_email(
     verification_url = f"{settings.FRONTEND_URL}/verify-email?token={verification_token}"
     html_content, text_content = _render_verification_email(verification_url, user_name)
 
-    return send_email(
+    return await send_email(
         to_email=user_email,
         subject="Verify your Podcastfy account",
         html_content=html_content,

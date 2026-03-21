@@ -80,7 +80,7 @@ async def register(
 
         # Send verification email (failure is non-fatal)
         verification_token = create_verification_token(user.id, user.email, user.tenant_id)
-        sent = send_verification_email(user.email, user.full_name or user.email, verification_token)
+        sent = await send_verification_email(user.email, user.full_name or user.email, verification_token)
         if not sent:
             logger.warning("Failed to send verification email to %s", user.email)
 
@@ -242,7 +242,7 @@ async def resend_verification_email(
         )
 
     verification_token = create_verification_token(user.id, user.email, user.tenant_id)
-    sent = send_verification_email(user.email, user.full_name or user.email, verification_token)
+    sent = await send_verification_email(user.email, user.full_name or user.email, verification_token)
     if not sent:
         logger.warning("Failed to resend verification email to %s", user.email)
 

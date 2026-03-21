@@ -1,5 +1,6 @@
 """Email service for sending transactional emails via SMTP"""
 
+import html
 import logging
 import smtplib
 import ssl
@@ -31,13 +32,15 @@ def _render_verification_email(verification_url: str, user_name: str) -> tuple[s
         html_content = html_content.replace("{{ verification_url }}", verification_url)
         html_content = html_content.replace("{{ user_name }}", user_name)
     else:
-        # Fallback inline template
+        # Fallback inline template — escape user-controlled values before HTML interpolation
+        safe_name = html.escape(user_name)
+        safe_url = html.escape(verification_url)
         html_content = f"""
 <html>
 <body>
-<p>Hi {user_name},</p>
+<p>Hi {safe_name},</p>
 <p>Please verify your email address by clicking the link below:</p>
-<p><a href="{verification_url}">{verification_url}</a></p>
+<p><a href="{safe_url}">{safe_url}</a></p>
 <p>This link expires in {settings.EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS} hours.</p>
 <p>If you did not create an account, you can safely ignore this email.</p>
 </body>

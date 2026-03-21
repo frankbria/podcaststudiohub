@@ -1,6 +1,7 @@
 """Authentication router for user registration and login"""
 
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -196,8 +197,6 @@ async def verify_email(
             detail="Invalid or expired verification token.",
         )
 
-    from uuid import UUID
-
     try:
         user_id = UUID(payload["sub"])
         tenant_id = payload["tenant_id"]
@@ -227,21 +226,19 @@ async def resend_verification_email(
 
     - **email**: Email address of the unverified account
 
-    Rate limited to prevent abuse. Returns 200 even when the email service
-    is disabled or fails, to avoid leaking whether an address is registered.
+    Always returns 200 with a generic message to prevent user enumeration —
+    callers cannot tell whether an account exists or is already verified.
+    Rate limited to prevent abuse.
     """
+    _GENERIC_MESSAGE = "If an unverified account exists for that address, a verification email has been sent."
+
     user = await get_user_by_email(db, body.email)
 
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account found with that email address.",
-        )
-
-    if user.is_verified:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email address is already verified.",
+    if user is None or user.is_verified:
+        # Return generic 200 — do not reveal whether the address is registered
+        return ResendVerificationResponse(
+            message=_GENERIC_MESSAGE,
+            email=body.email,
         )
 
     verification_token = create_verification_token(user.id, user.email, user.tenant_id)
@@ -250,6 +247,6 @@ async def resend_verification_email(
         logger.warning("Failed to resend verification email to %s", user.email)
 
     return ResendVerificationResponse(
-        message="Verification email sent.",
+        message=_GENERIC_MESSAGE,
         email=user.email,
     )

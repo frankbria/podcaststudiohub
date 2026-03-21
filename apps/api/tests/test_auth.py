@@ -925,22 +925,23 @@ async def test_resend_verification_email_success(client: AsyncClient):
     assert response.status_code == 200
     data = response.json()
     assert data["email"] == "resend@example.com"
-    assert "sent" in data["message"].lower()
+    assert "if an unverified account exists" in data["message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_resend_verification_email_not_found(client: AsyncClient):
-    """Resend endpoint returns 404 for unknown email"""
+    """Resend endpoint returns 200 with a generic message for unknown email (no user enumeration)"""
     response = await client.post(
         "/auth/resend-verification-email",
         json={"email": "nobody@example.com"},
     )
-    assert response.status_code == 404
+    assert response.status_code == 200
+    assert "if an unverified account exists" in response.json()["message"].lower()
 
 
 @pytest.mark.asyncio
 async def test_resend_verification_email_already_verified(client: AsyncClient, test_db: AsyncSession):
-    """Resend endpoint returns 400 if user is already verified"""
+    """Resend endpoint returns 200 with a generic message if user is already verified (no enumeration)"""
     from sqlalchemy import update, text
 
     reg = await client.post(
@@ -958,8 +959,8 @@ async def test_resend_verification_email_already_verified(client: AsyncClient, t
         "/auth/resend-verification-email",
         json={"email": "alreadyv@example.com"},
     )
-    assert response.status_code == 400
-    assert "already verified" in response.json()["detail"].lower()
+    assert response.status_code == 200
+    assert "if an unverified account exists" in response.json()["message"].lower()
 
 
 # =============================================================================

@@ -1,6 +1,6 @@
 """Authentication service for password hashing, JWT tokens, and user management"""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 import bcrypt
@@ -78,14 +78,14 @@ def create_jwt_token(
     if expires_delta is None:
         expires_delta = timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
 
-    expire = datetime.utcnow() + expires_delta
+    expire = datetime.now(timezone.utc) + expires_delta
 
     payload = {
         "sub": str(user_id),  # Subject (user ID)
         "tenant_id": str(tenant_id),  # For RLS enforcement in Task 2.4
         "email": email,
         "exp": expire,  # Expiration time
-        "iat": datetime.utcnow(),  # Issued at
+        "iat": datetime.now(timezone.utc),  # Issued at
         "type": "access"  # Token type
     }
 
@@ -138,14 +138,14 @@ def create_verification_token(user_id: UUID, email: str, tenant_id: UUID) -> str
     Returns:
         Encoded JWT token string (expires in EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS)
     """
-    expire = datetime.utcnow() + timedelta(hours=settings.EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS)
+    expire = datetime.now(timezone.utc) + timedelta(hours=settings.EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS)
 
     payload = {
         "sub": str(user_id),
         "email": email,
         "tenant_id": str(tenant_id),
         "exp": expire,
-        "iat": datetime.utcnow(),
+        "iat": datetime.now(timezone.utc),
         "type": "verification",
     }
 
@@ -194,7 +194,7 @@ async def mark_user_verified(session: AsyncSession, user_id: UUID) -> "User":
         raise HTTPException(status_code=404, detail="User not found")
 
     user.is_verified = True
-    user.updated_at = datetime.utcnow()
+    user.updated_at = datetime.now(timezone.utc)
     await session.commit()
 
     return user
@@ -254,8 +254,8 @@ async def create_user(
             is_active=True,
             is_verified=False,  # Email verification pending
             encrypted_api_keys={},
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow()
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc)
         )
 
         session.add(user)
@@ -312,7 +312,7 @@ async def authenticate_user(
 
     # Set tenant context so the UPDATE is allowed by RLS, then update last_login
     await session.execute(text(f"SET LOCAL app.tenant_id = '{user.tenant_id}'"))
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc)
     await session.commit()
 
     return user

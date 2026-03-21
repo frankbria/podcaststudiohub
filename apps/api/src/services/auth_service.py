@@ -194,7 +194,7 @@ async def mark_user_verified(session: AsyncSession, user_id: UUID) -> "User":
         raise HTTPException(status_code=404, detail="User not found")
 
     user.is_verified = True
-    user.updated_at = datetime.now(timezone.utc)
+    user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await session.commit()
 
     return user
@@ -254,8 +254,8 @@ async def create_user(
             is_active=True,
             is_verified=False,  # Email verification pending
             encrypted_api_keys={},
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc)
+            created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+            updated_at=datetime.now(timezone.utc).replace(tzinfo=None)
         )
 
         session.add(user)
@@ -312,7 +312,7 @@ async def authenticate_user(
 
     # Set tenant context so the UPDATE is allowed by RLS, then update last_login
     await session.execute(text(f"SET LOCAL app.tenant_id = '{user.tenant_id}'"))
-    user.last_login = datetime.now(timezone.utc)
+    user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
     await session.commit()
 
     return user

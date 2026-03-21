@@ -759,7 +759,7 @@ async def test_different_users_get_different_tenant_ids(client: AsyncClient):
 
 def test_create_verification_token():
     """Verification token has correct type claim and three JWT parts"""
-    token = create_verification_token(uuid4(), "verify@example.com")
+    token = create_verification_token(uuid4(), "verify@example.com", uuid4())
     assert isinstance(token, str)
     assert len(token.split(".")) == 3
     payload = verify_verification_token(token)
@@ -811,9 +811,10 @@ async def test_verify_email_success(client: AsyncClient, test_db: AsyncSession):
         json={"email": "verifyok@example.com", "password": "Verify123!", "full_name": "Verify OK"},
     )
     user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
 
     # Build a valid verification token
-    token = create_verification_token(UUID(user_id), "verifyok@example.com")
+    token = create_verification_token(UUID(user_id), "verifyok@example.com", UUID(tenant_id))
 
     response = await client.get(f"/auth/verify-email?token={token}")
     assert response.status_code == 200
@@ -854,7 +855,7 @@ async def test_verify_email_already_verified_is_idempotent(client: AsyncClient, 
     await test_db.execute(update(User).where(User.id == UUID(user_id)).values(is_verified=True))
     await test_db.commit()
 
-    token = create_verification_token(UUID(user_id), "idempotent@example.com")
+    token = create_verification_token(UUID(user_id), "idempotent@example.com", UUID(tenant_id))
     response = await client.get(f"/auth/verify-email?token={token}")
     assert response.status_code == 200
 
@@ -976,6 +977,7 @@ async def test_full_registration_verification_login_flow(client: AsyncClient):
     )
     assert reg.status_code == 201
     user_id = reg.json()["user"]["id"]
+    tenant_id = reg.json()["user"]["tenant_id"]
 
     # 2. Login blocked before verification
     pre_login = await client.post(
@@ -985,7 +987,7 @@ async def test_full_registration_verification_login_flow(client: AsyncClient):
     assert pre_login.status_code == 403
 
     # 3. Verify via token
-    token = create_verification_token(UUID(user_id), "flow@example.com")
+    token = create_verification_token(UUID(user_id), "flow@example.com", UUID(tenant_id))
     verify_resp = await client.get(f"/auth/verify-email?token={token}")
     assert verify_resp.status_code == 200
 

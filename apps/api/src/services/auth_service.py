@@ -126,13 +126,14 @@ def verify_jwt_token(token: str) -> dict:
 # Email Verification Token Functions
 # ============================================================================
 
-def create_verification_token(user_id: UUID, email: str) -> str:
+def create_verification_token(user_id: UUID, email: str, tenant_id: UUID) -> str:
     """
     Create a short-lived JWT token for email verification.
 
     Args:
         user_id: User's UUID
         email: User's email address
+        tenant_id: User's tenant UUID (required to set RLS context during verification)
 
     Returns:
         Encoded JWT token string (expires in EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS)
@@ -142,6 +143,7 @@ def create_verification_token(user_id: UUID, email: str) -> str:
     payload = {
         "sub": str(user_id),
         "email": email,
+        "tenant_id": str(tenant_id),
         "exp": expire,
         "iat": datetime.utcnow(),
         "type": "verification",

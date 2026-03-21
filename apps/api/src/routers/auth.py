@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import get_db
+from ..database import get_db, set_tenant_context
 from ..schemas.auth import (
     ResendVerificationRequest,
     ResendVerificationResponse,
@@ -78,7 +78,7 @@ async def register(
         )
 
         # Send verification email (failure is non-fatal)
-        verification_token = create_verification_token(user.id, user.email)
+        verification_token = create_verification_token(user.id, user.email, user.tenant_id)
         sent = send_verification_email(user.email, user.full_name or user.email, verification_token)
         if not sent:
             logger.warning("Failed to send verification email to %s", user.email)
@@ -200,11 +200,15 @@ async def verify_email(
 
     try:
         user_id = UUID(payload["sub"])
+        tenant_id = payload["tenant_id"]
     except (KeyError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired verification token.",
         )
+
+    # Set RLS context so the UPDATE is visible to PostgreSQL row-level security
+    await set_tenant_context(db, tenant_id)
 
     # mark_user_verified raises 404 if user not found
     await mark_user_verified(db, user_id)
@@ -240,7 +244,7 @@ async def resend_verification_email(
             detail="Email address is already verified.",
         )
 
-    verification_token = create_verification_token(user.id, user.email)
+    verification_token = create_verification_token(user.id, user.email, user.tenant_id)
     sent = send_verification_email(user.email, user.full_name or user.email, verification_token)
     if not sent:
         logger.warning("Failed to resend verification email to %s", user.email)

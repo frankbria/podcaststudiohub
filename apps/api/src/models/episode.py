@@ -67,11 +67,11 @@ class Episode(Base):
     # Indexed for fast lookups when checking task status or cancelling tasks
     task_id = Column(Text, nullable=True, index=True)
 
-    # When the Celery task was submitted to the broker queue
-    task_started_at = Column(DateTime, nullable=True)
+    # When the Celery task began executing
+    task_started_at = Column(DateTime(timezone=True), nullable=True)
 
     # When the Celery task finished (success or failure)
-    task_completed_at = Column(DateTime, nullable=True)
+    task_completed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Platform distribution tracking - maps platform name → platform episode ID
     # Example: {"spotify": "abc123", "apple_podcasts": "xyz789", "webhook": null}

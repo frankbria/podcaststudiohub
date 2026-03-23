@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     RATE_LIMIT_TRUST_PROXY: bool = True
     RATE_LIMIT_PROXY_COUNT: int = 1
 
+    # Gemini API reliability settings
+    GEMINI_API_TIMEOUT: int = 120  # Timeout in seconds for Gemini API calls
+    GEMINI_API_MAX_RETRIES: int = 3  # Maximum retry attempts for failed calls
+
     # Workflow feature flags
     ENABLE_AUDIO_COMPOSITION: bool = False
     ENABLE_PLATFORM_DISTRIBUTION: bool = False

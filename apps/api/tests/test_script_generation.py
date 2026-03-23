@@ -15,8 +15,9 @@ Tests cover:
 Podcastfy ContentGenerator and all services are mocked to avoid external dependencies.
 """
 
+import asyncio
 import pytest
-from unittest.mock import patch, AsyncMock, mock_open
+from unittest.mock import patch, AsyncMock, mock_open, call
 from uuid import uuid4
 
 from src.services.script_generation_service import (
@@ -807,3 +808,161 @@ def test_validate_transcript_missing_person2(generation_service):
 def test_validate_transcript_empty(generation_service):
 	"""Test transcript validation fails with empty string."""
 	assert generation_service._validate_transcript("") is False
+
+
+# ============================================================================
+# TIMEOUT AND RETRY TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_call_gemini_api_timeout_raises_timeout_error(generation_service):
+	"""Test _call_gemini_api raises TimeoutError after all retries timeout."""
+	with patch('asyncio.wait_for', side_effect=asyncio.TimeoutError), \
+		 patch('asyncio.sleep', new_callable=AsyncMock):
+
+		with pytest.raises(TimeoutError) as exc_info:
+			await generation_service._call_gemini_api(
+				"content", None, False,
+				max_retries=3,
+				timeout_seconds=120
+			)
+
+		assert "120 second timeout" in str(exc_info.value)
+		assert "3 attempts" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_api_retries_on_timeout(generation_service, valid_transcript):
+	"""Test _call_gemini_api retries on timeout and succeeds on final attempt."""
+	call_count = 0
+
+	async def mock_wait_for(coro, timeout):
+		nonlocal call_count
+		call_count += 1
+		if call_count < 3:
+			# Cancel the coroutine to avoid ResourceWarning
+			coro.close()
+			raise asyncio.TimeoutError
+		# On 3rd attempt, consume the coroutine
+		return await coro
+
+	with patch('src.services.script_generation_service.asyncio.wait_for', side_effect=mock_wait_for), \
+		 patch('src.services.script_generation_service.asyncio.sleep', new_callable=AsyncMock) as mock_sleep, \
+		 patch.object(generation_service, '_call_gemini_sync', return_value=valid_transcript):
+
+		result = await generation_service._call_gemini_api(
+			"content", None, False,
+			max_retries=3,
+			timeout_seconds=120
+		)
+
+		assert result == valid_transcript
+		# Should have slept twice (after attempt 1 and 2)
+		assert mock_sleep.call_count == 2
+		# Verify exponential backoff: 5s, 10s
+		assert mock_sleep.call_args_list[0] == call(5)
+		assert mock_sleep.call_args_list[1] == call(10)
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_api_retries_on_exception(generation_service, valid_transcript):
+	"""Test _call_gemini_api retries on generic exceptions with exponential backoff."""
+	call_count = 0
+
+	async def mock_wait_for(coro, timeout):
+		nonlocal call_count
+		call_count += 1
+		if call_count < 3:
+			coro.close()
+			raise Exception("Transient API error")
+		return await coro
+
+	with patch('src.services.script_generation_service.asyncio.wait_for', side_effect=mock_wait_for), \
+		 patch('src.services.script_generation_service.asyncio.sleep', new_callable=AsyncMock) as mock_sleep, \
+		 patch.object(generation_service, '_call_gemini_sync', return_value=valid_transcript):
+
+		result = await generation_service._call_gemini_api(
+			"content", None, False,
+			max_retries=3,
+			timeout_seconds=120
+		)
+
+		assert result == valid_transcript
+		assert mock_sleep.call_count == 2
+		assert mock_sleep.call_args_list[0] == call(5)
+		assert mock_sleep.call_args_list[1] == call(10)
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_api_exhausted_retries_raises(generation_service):
+	"""Test _call_gemini_api raises after exhausting all retries on exception."""
+	async def mock_wait_for(coro, timeout):
+		coro.close()
+		raise Exception("Persistent API error")
+
+	with patch('src.services.script_generation_service.asyncio.wait_for', side_effect=mock_wait_for), \
+		 patch('src.services.script_generation_service.asyncio.sleep', new_callable=AsyncMock):
+
+		with pytest.raises(Exception, match="Persistent API error"):
+			await generation_service._call_gemini_api(
+				"content", None, False,
+				max_retries=3,
+				timeout_seconds=120
+			)
+
+
+@pytest.mark.asyncio
+async def test_generate_script_timeout_updates_episode_status(
+	generation_service,
+	mock_db,
+	draft_episode,
+	url_content_source
+):
+	"""Test that TimeoutError from _call_gemini_api sets episode status to failed."""
+	timeout_error_msg = "Gemini API request exceeded 120 second timeout after 3 attempts"
+
+	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
+		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
+		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status, \
+		 patch.object(generation_service, '_call_gemini_api', side_effect=TimeoutError(timeout_error_msg)):
+
+		mock_get_episode.return_value = draft_episode
+		mock_get_sources.return_value = ([url_content_source], 1)
+
+		result = await generation_service.generate_script(mock_db, draft_episode.id)
+
+		assert result.success is False
+		assert "timeout" in result.error_message.lower()
+
+		# Verify last status is 'failed' with error_message
+		final_call = mock_update_status.call_args_list[-1]
+		assert final_call[0][2] == 'failed'
+		assert 'error_message' in final_call[0][3]
+		assert "timeout" in final_call[0][3]['error_message'].lower()
+
+
+@pytest.mark.asyncio
+async def test_call_gemini_api_uses_settings_defaults(generation_service, valid_transcript):
+	"""Test _call_gemini_api uses settings for default timeout and max_retries."""
+	with patch('src.services.script_generation_service.asyncio.wait_for') as mock_wait_for, \
+		 patch.object(generation_service, '_call_gemini_sync', return_value=valid_transcript), \
+		 patch('src.services.script_generation_service.settings') as mock_settings:
+
+		mock_settings.GEMINI_API_TIMEOUT = 60
+		mock_settings.GEMINI_API_MAX_RETRIES = 2
+		mock_wait_for.return_value = valid_transcript
+
+		await generation_service._call_gemini_api("content", None, False)
+
+		# Verify wait_for was called with the timeout from settings
+		mock_wait_for.assert_called_once()
+		assert mock_wait_for.call_args[1]['timeout'] == 60
+
+
+def test_gemini_settings_defaults():
+	"""Test that GEMINI_API_TIMEOUT and GEMINI_API_MAX_RETRIES have correct defaults."""
+	from src.config import Settings
+	# Use model_fields to check defaults without instantiating (avoids requiring env vars)
+	fields = Settings.model_fields
+	assert fields['GEMINI_API_TIMEOUT'].default == 120
+	assert fields['GEMINI_API_MAX_RETRIES'].default == 3

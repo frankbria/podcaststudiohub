@@ -13,6 +13,7 @@ on:
       - 'apps/web/public/**'
       - 'apps/web/package.json'
       - 'apps/web/package-lock.json'
+      - 'package-lock.json'
       - 'apps/web/next.config.mjs'
       - 'apps/web/tailwind.config.ts'
       - 'deployment/**'

@@ -184,6 +184,7 @@ jobs:
 
             echo "Starting API service on port ${API_PORT:-8000}..."
             EMAIL_ENABLED=false \
+            REQUIRE_EMAIL_VERIFICATION=false \
             pm2 start uv \
               --name podcaststudiohub-api \
               --cwd $SERVER_PATH/api \

@@ -143,7 +143,7 @@ async def login(
             detail="Account is inactive. Contact administrator."
         )
 
-    if not user.is_verified:
+    if not user.is_verified and settings.REQUIRE_EMAIL_VERIFICATION:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Email not verified. Please check your email for the verification link.",

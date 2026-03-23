@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_TRUST_PROXY: bool = True
     RATE_LIMIT_PROXY_COUNT: int = 1
 
+    # Email verification enforcement — set False in dev/test to allow login without verifying
+    REQUIRE_EMAIL_VERIFICATION: bool = True
+
     # Gemini API reliability settings
     GEMINI_API_TIMEOUT: int = 120  # Timeout in seconds for Gemini API calls
     GEMINI_API_MAX_RETRIES: int = 3  # Maximum retry attempts for failed calls

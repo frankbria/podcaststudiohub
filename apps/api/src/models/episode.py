@@ -62,6 +62,17 @@ class Episode(Base):
     # }
     generation_progress = Column(JSONB, nullable=False, default=dict)
 
+    # Celery task tracking fields
+    # task_id: Celery task UUID (e.g. "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+    # Indexed for fast lookups when checking task status or cancelling tasks
+    task_id = Column(Text, nullable=True, index=True)
+
+    # When the Celery task began executing
+    task_started_at = Column(DateTime(timezone=True), nullable=True)
+
+    # When the Celery task finished (success or failure)
+    task_completed_at = Column(DateTime(timezone=True), nullable=True)
+
     # Platform distribution tracking - maps platform name → platform episode ID
     # Example: {"spotify": "abc123", "apple_podcasts": "xyz789", "webhook": null}
     platform_ids = Column(JSONB, nullable=False, default=dict)

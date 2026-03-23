@@ -107,6 +107,18 @@ class EpisodeUpdate(BaseModel):
 		None,
 		description="Transcript file path"
 	)
+	task_id: Optional[str] = Field(
+		None,
+		description="Celery task UUID for tracking background generation job"
+	)
+	task_started_at: Optional[datetime] = Field(
+		None,
+		description="When the Celery task was submitted to the broker"
+	)
+	task_completed_at: Optional[datetime] = Field(
+		None,
+		description="When the Celery task finished (success or failure)"
+	)
 
 	@field_validator('episode_metadata')
 	@classmethod
@@ -154,6 +166,10 @@ class EpisodeResponse(BaseModel):
 	# Workflow tracking fields
 	platform_ids: Optional[dict] = None
 	error_message: Optional[str] = None
+	# Celery task tracking fields
+	task_id: Optional[str] = None
+	task_started_at: Optional[datetime] = None
+	task_completed_at: Optional[datetime] = None
 	created_at: datetime
 	updated_at: datetime
 

@@ -4,6 +4,11 @@ import { generateTestUser, signUp, login, logout } from '../utils/auth-helpers';
 // Auth tests must start unauthenticated — override the shared storageState
 test.use({ storageState: { cookies: [], origins: [] } });
 
+// Pre-seeded E2E credentials — avoids creating new users in login/session tests,
+// which keeps registration API calls within the rate limit (3/hour per IP in dev).
+const E2E_EMAIL = process.env.E2E_TEST_EMAIL ?? 'e2e-test@example.com';
+const E2E_PASSWORD = process.env.E2E_TEST_PASSWORD ?? 'E2eTestPassword123!';
+
 test.describe('Authentication', () => {
   test.describe('Sign Up', () => {
     test('should display signup form', async ({ page }) => {
@@ -35,15 +40,10 @@ test.describe('Authentication', () => {
     });
 
     test('should show error for existing email', async ({ page }) => {
-      const user = generateTestUser();
-
-      // Create user first time
-      await signUp(page, user);
-
-      // Try to create same user again
+      // Use the pre-seeded E2E user — avoids a second registration API call
       await page.goto('/signup');
-      await page.fill('input[type="email"]', user.email);
-      await page.fill('input[type="password"]', user.password);
+      await page.fill('input[type="email"]', E2E_EMAIL);
+      await page.fill('input[type="password"]', E2E_PASSWORD);
       await page.click('button[type="submit"]');
 
       // Should show error
@@ -64,13 +64,8 @@ test.describe('Authentication', () => {
   });
 
   test.describe('Login', () => {
-    let testUser: ReturnType<typeof generateTestUser>;
-
-    test.beforeEach(async ({ page }) => {
-      // Create a user for login tests
-      testUser = generateTestUser();
-      await signUp(page, testUser);
-    });
+    // Uses pre-seeded E2E credentials — no registration calls needed here.
+    // Creating a fresh user per test would exhaust the registration rate limit (3/hour per IP).
 
     test('should display login form', async ({ page }) => {
       await page.goto('/login');
@@ -81,7 +76,7 @@ test.describe('Authentication', () => {
     });
 
     test('should login with valid credentials', async ({ page }) => {
-      await login(page, testUser.email, testUser.password);
+      await login(page, E2E_EMAIL, E2E_PASSWORD);
 
       // Should redirect to dashboard
       await expect(page).toHaveURL(/\/dashboard/);
@@ -90,7 +85,7 @@ test.describe('Authentication', () => {
     test('should show error for invalid credentials', async ({ page }) => {
       await page.goto('/login');
 
-      await page.fill('input[type="email"]', testUser.email);
+      await page.fill('input[type="email"]', E2E_EMAIL);
       await page.fill('input[type="password"]', 'WrongPassword123');
       await page.click('button[type="submit"]');
 
@@ -111,12 +106,9 @@ test.describe('Authentication', () => {
   });
 
   test.describe('Session Management', () => {
-    let testUser: ReturnType<typeof generateTestUser>;
-
+    // Uses pre-seeded E2E credentials — no registration needed.
     test.beforeEach(async ({ page }) => {
-      testUser = generateTestUser();
-      await signUp(page, testUser);
-      await login(page, testUser.email, testUser.password);
+      await login(page, E2E_EMAIL, E2E_PASSWORD);
     });
 
     test('should persist session on page reload', async ({ page }) => {

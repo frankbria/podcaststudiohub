@@ -34,7 +34,7 @@
     "concurrently": "^8.2.2"
   },
   "overrides": {
-    "flatted": "^3.4.1"
+    "flatted": "^3.4.2"
   },
   "engines": {
     "node": ">=20.0.0",

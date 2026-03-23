@@ -208,10 +208,10 @@ def test_engagement_score_excellent(service):
 
 
 def test_engagement_score_good_banter(service):
-    """Good banter but <=50 turns => good."""
+    """Good banter but <=50 turns => score 0.8, which is 'excellent' per threshold."""
     score, rating = service._calculate_engagement_score(True, 30, 150)
     assert score == 0.8
-    assert rating == "good"
+    assert rating == "excellent"
 
 
 def test_engagement_score_many_turns_no_banter(service):

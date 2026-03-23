@@ -754,7 +754,7 @@ async def test_create_episode_requires_auth(client):
 		"episode_metadata": {"title": "Test", "description": "Desc"}
 	})
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -762,7 +762,7 @@ async def test_list_episodes_requires_auth(client):
 	"""Test that listing episodes requires authentication."""
 	response = await client.get("/episodes")
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -771,7 +771,7 @@ async def test_get_episode_requires_auth(client):
 	fake_id = str(uuid4())
 	response = await client.get(f"/episodes/{fake_id}")
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -782,7 +782,7 @@ async def test_update_episode_requires_auth(client):
 		"episode_metadata": {"title": "New", "description": "New"}
 	})
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -791,7 +791,7 @@ async def test_delete_episode_requires_auth(client):
 	fake_id = str(uuid4())
 	response = await client.delete(f"/episodes/{fake_id}")
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 # ============================================================================

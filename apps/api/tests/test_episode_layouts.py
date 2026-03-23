@@ -608,14 +608,14 @@ async def test_pagination_custom_page_size(client, auth_and_project):
 async def test_create_layout_requires_auth(client):
 	"""Test that creating layout requires authentication."""
 	response = await client.post("/episode-layouts", json=simple_layout_data())
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_list_layouts_requires_auth(client):
 	"""Test that listing layouts requires authentication."""
 	response = await client.get("/episode-layouts")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -623,7 +623,7 @@ async def test_get_layout_requires_auth(client):
 	"""Test that getting layout requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.get(f"/episode-layouts/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -631,7 +631,7 @@ async def test_update_layout_requires_auth(client):
 	"""Test that updating layout requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.put(f"/episode-layouts/{fake_id}", json={"name": "New Name"})
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -639,7 +639,7 @@ async def test_delete_layout_requires_auth(client):
 	"""Test that deleting layout requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.delete(f"/episode-layouts/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -647,7 +647,7 @@ async def test_set_default_requires_auth(client):
 	"""Test that set-default requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.post(f"/episode-layouts/{fake_id}/set-default")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 # ============================================================================

@@ -266,7 +266,7 @@ async def test_spotify_authorize_returns_url_and_state(client, auth_headers):
 async def test_spotify_authorize_requires_auth(client):
 	"""Test that Spotify authorize requires authentication."""
 	response = await client.post("/distribution-targets/spotify/authorize")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -729,14 +729,14 @@ async def test_create_webhook_requires_auth(client):
 		"url": "https://hooks.example.com/test",
 		"method": "POST"
 	})
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_list_targets_requires_auth(client):
 	"""Test that listing targets requires authentication."""
 	response = await client.get("/distribution-targets")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -744,7 +744,7 @@ async def test_get_target_requires_auth(client):
 	"""Test that getting target requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.get(f"/distribution-targets/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -752,7 +752,7 @@ async def test_update_target_requires_auth(client):
 	"""Test that updating target requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.put(f"/distribution-targets/{fake_id}", json={"is_active": False})
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -760,7 +760,7 @@ async def test_delete_target_requires_auth(client):
 	"""Test that deleting target requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.delete(f"/distribution-targets/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -768,7 +768,7 @@ async def test_test_connection_requires_auth(client):
 	"""Test that test connection requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.post(f"/distribution-targets/{fake_id}/test")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 # ============================================================================

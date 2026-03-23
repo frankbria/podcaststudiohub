@@ -379,14 +379,14 @@ async def test_create_template_requires_auth(client):
 		"name": "Test",
 		"config": VALID_CONFIG,
 	})
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_list_templates_requires_auth(client):
 	"""Test that listing templates requires authentication."""
 	response = await client.get("/conversation-templates")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -394,7 +394,7 @@ async def test_get_template_requires_auth(client):
 	"""Test that getting template requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.get(f"/conversation-templates/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -402,7 +402,7 @@ async def test_update_template_requires_auth(client):
 	"""Test that updating template requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.put(f"/conversation-templates/{fake_id}", json={"name": "New"})
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -410,7 +410,7 @@ async def test_delete_template_requires_auth(client):
 	"""Test that deleting template requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.delete(f"/conversation-templates/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -418,7 +418,7 @@ async def test_set_default_requires_auth(client):
 	"""Test that set-default requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.post(f"/conversation-templates/{fake_id}/set-default")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 # ============================================================================

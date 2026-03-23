@@ -125,7 +125,7 @@ async def test_generate_rss_feed_requires_auth(client, project_with_metadata):
 
 	response = await client.post(f"/projects/{project_id}/rss-feed/generate")
 
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -232,7 +232,7 @@ async def test_get_rss_feed_requires_auth(client, project_with_metadata):
 
 	response = await client.get(f"/projects/{project_id}/rss-feed")
 
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 # ============================================================================
@@ -292,7 +292,7 @@ async def test_update_rss_feed_requires_auth(client, project_with_metadata):
 		json={"podcast_metadata": {"show_title": "New Title"}},
 	)
 
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 # ============================================================================

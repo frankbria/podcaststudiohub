@@ -11,6 +11,7 @@ from typing import Optional, Any, Dict, List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,7 +25,7 @@ from ..schemas.quality_metrics import (
 	QualityMetricsListResponse,
 	QualityScore,
 )
-from ..services.quality_score_service import QualityScoreService
+from ..services.quality_score_service import QualityScoreService, _rating_from_score
 
 router = APIRouter(prefix="/quality-metrics", tags=["quality-metrics"])
 
@@ -34,7 +35,13 @@ _score_service = QualityScoreService()
 def _build_episode_response(episode: Episode) -> EpisodeQualityMetricsResponse:
 	"""Build EpisodeQualityMetricsResponse from an Episode ORM object."""
 	raw = episode.generation_progress.get("quality_metrics", {})
-	metrics = QualityMetricsData(**raw)
+	try:
+		metrics = QualityMetricsData(**raw)
+	except (ValidationError, KeyError, TypeError) as exc:
+		raise HTTPException(
+			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			detail=f"Malformed quality_metrics data for episode {episode.id}: {exc}",
+		) from exc
 
 	quality_scores = _score_service.calculate_quality_scores(metrics)
 	interpretation = _score_service.generate_interpretation(metrics, quality_scores)
@@ -86,11 +93,12 @@ async def get_episode_quality_metrics(
 		db: Database session
 
 	Returns:
-		EpisodeQualityMetricsResponse with full metrics and interpretation
+		EpisodeQualityMetricsResponse with full metrics and interpretation,
+		or 204 No Content Response if metrics have not yet been calculated.
 
 	Raises:
 		HTTPException: 404 if episode not found or different tenant
-		HTTPException: 204 if metrics not yet calculated
+		HTTPException: 422 if stored quality_metrics data is malformed
 	"""
 	result = await db.execute(select(Episode).where(Episode.id == episode_id))
 	episode = result.scalar_one_or_none()
@@ -100,7 +108,6 @@ async def get_episode_quality_metrics(
 
 	quality_metrics = (episode.generation_progress or {}).get("quality_metrics")
 	if not quality_metrics:
-		response.status_code = status.HTTP_204_NO_CONTENT
 		return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 	return _build_episode_response(episode)
@@ -207,7 +214,6 @@ async def get_project_quality_metrics(
 		]
 		if dim_scores:
 			avg_score = sum(dim_scores) / len(dim_scores)
-			from ..services.quality_score_service import _rating_from_score
 			avg_quality_scores.append(
 				QualityScore(dimension=dim, score=round(avg_score, 4), rating=_rating_from_score(avg_score))
 			)
@@ -231,6 +237,7 @@ async def get_project_quality_metrics(
 		}
 
 	top_episodes = [_ep_summary(er) for er in scored_episodes[:3]]
+	# scored_episodes is descending; take last 3 then reverse → worst-first order
 	worst_episodes = [_ep_summary(er) for er in reversed(scored_episodes[-3:])]
 
 	# Trend analysis (requires at least 2 episodes)

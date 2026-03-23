@@ -779,7 +779,7 @@ async def test_create_content_source_requires_auth(client, episode_and_auth):
         # No headers - unauthenticated
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -789,7 +789,7 @@ async def test_list_content_sources_requires_auth(client, episode_and_auth):
 
     response = await client.get(f"/episodes/{episode_id}/content")
 
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -799,7 +799,7 @@ async def test_get_content_source_requires_auth(client, url_content_source):
 
     response = await client.get(f"/content/{content['id']}")
 
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -812,7 +812,7 @@ async def test_update_content_source_requires_auth(client, url_content_source):
         json={"extraction_status": "complete"}
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -822,7 +822,7 @@ async def test_delete_content_source_requires_auth(client, url_content_source):
 
     response = await client.delete(f"/content/{content['id']}")
 
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 # ============================================================================

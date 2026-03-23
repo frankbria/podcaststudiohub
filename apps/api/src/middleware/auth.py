@@ -11,8 +11,8 @@ from ..database import get_db
 from ..services.auth_service import verify_jwt_token
 from ..models.user import User
 
-# HTTPBearer security scheme for extracting Authorization header
-security = HTTPBearer()
+# HTTPBearer with auto_error=False so missing credentials raise 401 (not 403)
+security = HTTPBearer(auto_error=False)
 
 
 # =============================================================================
@@ -59,7 +59,7 @@ def get_tenant_id_from_token(token: str) -> Optional[str]:
 
 
 async def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     """
@@ -79,9 +79,15 @@ async def get_current_user(
         Authenticated User model instance
 
     Raises:
-        HTTPException 401: If token is invalid or user not found
+        HTTPException 401: If no credentials, token invalid, or user not found
         HTTPException 403: If user account is inactive
     """
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     token = credentials.credentials
 
     try:

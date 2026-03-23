@@ -574,7 +574,7 @@ async def test_get_current_user_no_token(client: AsyncClient):
     """Test GET /auth/me without authentication token"""
     response = await client.get("/auth/me")
 
-    assert response.status_code == 403  # HTTPBearer returns 403 for missing token
+    assert response.status_code == 401  # HTTPBearer with auto_error=False returns 401 for missing token
 
 
 @pytest.mark.asyncio
@@ -596,7 +596,7 @@ async def test_get_current_user_malformed_header(client: AsyncClient):
         headers={"Authorization": "NotBearer some-token"}
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 # =============================================================================

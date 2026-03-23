@@ -207,7 +207,7 @@ async def test_upload_requires_auth(client):
 		files={"file": ("test.mp3", io.BytesIO(audio_bytes), "audio/mpeg")},
 		data={"name": "Test Intro", "snippet_type": "intro"},
 	)
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -401,7 +401,7 @@ async def test_upload_invalid_snippet_type(client, auth_headers):
 async def test_list_requires_auth(client):
 	"""Test that list endpoint requires authentication."""
 	response = await client.get("/audio-snippets")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -569,7 +569,7 @@ async def test_get_by_id_requires_auth(client):
 	"""Test that get by ID requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.get(f"/audio-snippets/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -615,7 +615,7 @@ async def test_update_requires_auth(client):
 	"""Test that update requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.put(f"/audio-snippets/{fake_id}", json={"name": "New Name"})
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -721,7 +721,7 @@ async def test_delete_requires_auth(client):
 	"""Test that delete requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.delete(f"/audio-snippets/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -770,7 +770,7 @@ async def test_download_url_requires_auth(client):
 	"""Test that download URL endpoint requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.get(f"/audio-snippets/{fake_id}/download")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio

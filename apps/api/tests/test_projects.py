@@ -671,7 +671,7 @@ async def test_create_project_requires_auth(client):
 		}
 	})
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -679,7 +679,7 @@ async def test_list_projects_requires_auth(client):
 	"""Test that listing projects requires authentication."""
 	response = await client.get("/projects")
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -688,7 +688,7 @@ async def test_get_project_requires_auth(client):
 	fake_id = str(uuid4())
 	response = await client.get(f"/projects/{fake_id}")
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -697,7 +697,7 @@ async def test_update_project_requires_auth(client):
 	fake_id = str(uuid4())
 	response = await client.put(f"/projects/{fake_id}", json={"name": "New Name"})
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -706,4 +706,4 @@ async def test_delete_project_requires_auth(client):
 	fake_id = str(uuid4())
 	response = await client.delete(f"/projects/{fake_id}")
 	# Auth middleware returns 403 Forbidden when no valid token provided
-	assert response.status_code == 403
+	assert response.status_code == 401

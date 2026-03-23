@@ -89,7 +89,7 @@ async def test_download_requires_auth(client):
 	"""Download endpoint requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.get(f"/episodes/{fake_id}/download")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 # ============================================================================

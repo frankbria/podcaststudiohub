@@ -37,7 +37,6 @@ from ..models import Episode
 from ..schemas.episode import EpisodeUpdate
 from .episode_service import get_episode_by_id, update_episode, update_generation_status
 from .content_service import get_content_sources
-from ..config import settings
 
 
 logger = logging.getLogger(__name__)

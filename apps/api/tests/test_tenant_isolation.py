@@ -312,8 +312,8 @@ async def test_tenant_isolation_without_authentication(client: AsyncClient):
     """
     # Try to access projects without token
     response = await client.get("/projects")
-    # FastAPI HTTPBearer returns 403 when no Authorization header
-    assert response.status_code == 403
+    # HTTPBearer with auto_error=False returns 401 when no Authorization header
+    assert response.status_code == 401
 
     # Try with invalid token
     response = await client.get(

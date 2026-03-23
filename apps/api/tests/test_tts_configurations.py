@@ -409,14 +409,14 @@ async def test_create_with_is_default_true_clears_others(client, auth_headers):
 async def test_create_tts_config_requires_auth(client):
 	"""Test that creating configuration requires authentication."""
 	response = await client.post("/tts-configs", json=OPENAI_CONFIG)
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_list_tts_configs_requires_auth(client):
 	"""Test that listing configurations requires authentication."""
 	response = await client.get("/tts-configs")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -424,7 +424,7 @@ async def test_get_tts_config_requires_auth(client):
 	"""Test that getting configuration requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.get(f"/tts-configs/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -432,7 +432,7 @@ async def test_update_tts_config_requires_auth(client):
 	"""Test that updating configuration requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.put(f"/tts-configs/{fake_id}", json={"name": "New"})
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -440,7 +440,7 @@ async def test_delete_tts_config_requires_auth(client):
 	"""Test that deleting configuration requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.delete(f"/tts-configs/{fake_id}")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -448,7 +448,7 @@ async def test_set_default_tts_config_requires_auth(client):
 	"""Test that set-default requires authentication."""
 	fake_id = str(uuid4())
 	response = await client.post(f"/tts-configs/{fake_id}/set-default")
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 # ============================================================================

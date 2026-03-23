@@ -104,6 +104,13 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # Transcript Validation Settings
+    MIN_TRANSCRIPT_WORDS: int = 100
+    MAX_SPEAKER_IMBALANCE_PERCENT: float = 80.0
+    TRANSCRIPT_VALIDATION_MAX_RETRIES: int = 3
+    MIN_CONVERSATION_TURNS: int = 3
+    AI_ARTIFACT_PATTERNS: str = "i apologize,as an ai,should clarify,according to my,based on the"
+
     @field_validator("ENCRYPTION_KEY")
     @classmethod
     def validate_encryption_key_length(cls, v: str) -> str:

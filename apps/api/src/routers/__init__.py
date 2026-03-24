@@ -1,6 +1,6 @@
 """API routers for Podcastfy"""
 
-from . import auth, projects, episodes, content, generation, rss_feed, distribution_targets, episode_layouts, audio_snippets, conversation_templates, quality_metrics
+from . import auth, projects, episodes, content, generation, rss_feed, distribution_targets, episode_layouts, audio_snippets, conversation_templates, quality_metrics, teams
 
 __all__ = [
     "auth",
@@ -14,4 +14,5 @@ __all__ = [
     "audio_snippets",
     "conversation_templates",
     "quality_metrics",
+    "teams",
 ]

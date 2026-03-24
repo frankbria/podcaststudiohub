@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { signIn } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 export default function LoginPage() {
@@ -39,7 +40,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center bg-background">
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>Podcastfy Studio</CardTitle>
@@ -48,9 +49,9 @@ export default function LoginPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+              <Label htmlFor="email" className="mb-1">
                 Email
-              </label>
+              </Label>
               <Input
                 id="email"
                 type="email"
@@ -61,9 +62,9 @@ export default function LoginPage() {
               />
             </div>
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+              <Label htmlFor="password" className="mb-1">
                 Password
-              </label>
+              </Label>
               <Input
                 id="password"
                 type="password"
@@ -74,14 +75,14 @@ export default function LoginPage() {
               />
             </div>
             {error && (
-              <div className="text-red-600 text-sm">{error}</div>
+              <div className="text-destructive text-sm">{error}</div>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Signing in..." : "Sign In"}
             </Button>
-            <div className="text-center text-sm text-gray-600">
+            <div className="text-center text-sm text-muted-foreground">
               Don't have an account?{" "}
-              <a href="/signup" className="text-blue-600 hover:underline">
+              <a href="/signup" className="text-primary hover:underline">
                 Sign up
               </a>
             </div>

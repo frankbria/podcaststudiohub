@@ -6,6 +6,8 @@ import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 interface Episode {
@@ -167,13 +169,13 @@ export default function EpisodePage() {
 
   const getStatusColor = (status: string) => {
     const colors = {
-      draft: "text-gray-600",
-      queued: "text-blue-600",
-      extracting: "text-yellow-600",
-      generating: "text-yellow-600",
-      synthesizing: "text-yellow-600",
-      complete: "text-green-600",
-      failed: "text-red-600",
+      draft: "text-muted-foreground",
+      queued: "text-primary",
+      extracting: "text-accent-foreground",
+      generating: "text-accent-foreground",
+      synthesizing: "text-accent-foreground",
+      complete: "text-foreground",
+      failed: "text-destructive",
     }
     return colors[status as keyof typeof colors] || colors.draft
   }
@@ -181,7 +183,7 @@ export default function EpisodePage() {
   const canGenerate = contentSources.length > 0 && episode?.generation_status === "draft"
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-screen bg-background p-8">
       <div className="max-w-4xl mx-auto">
         <Button
           variant="outline"
@@ -203,13 +205,13 @@ export default function EpisodePage() {
           <CardContent>
             {episode?.generation_status && ["queued", "extracting", "generating", "synthesizing"].includes(episode.generation_status) && (
               <div className="mb-4">
-                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                <div className="w-full bg-muted rounded-full h-2.5">
                   <div
-                    className="bg-blue-600 h-2.5 rounded-full transition-all"
+                    className="bg-primary h-2.5 rounded-full transition-all"
                     style={{ width: `${progress}%` }}
                   ></div>
                 </div>
-                <p className="text-sm text-gray-600 mt-1">{progress}% complete</p>
+                <p className="text-sm text-muted-foreground mt-1">{progress}% complete</p>
               </div>
             )}
 
@@ -234,18 +236,18 @@ export default function EpisodePage() {
           </CardHeader>
           <CardContent>
             {contentSources.length === 0 ? (
-              <p className="text-gray-600">No content sources added yet</p>
+              <p className="text-muted-foreground">No content sources added yet</p>
             ) : (
               <ul className="space-y-2">
                 {contentSources.map((source) => (
-                  <li key={source.id} className="flex items-center justify-between p-3 bg-gray-100 rounded">
+                  <li key={source.id} className="flex items-center justify-between p-3 bg-muted rounded">
                     <div>
                       <span className="font-medium">{source.source_type}</span>
                       {source.source_type === "url" && (
-                        <p className="text-sm text-gray-600">{source.source_data.url}</p>
+                        <p className="text-sm text-muted-foreground">{source.source_data.url}</p>
                       )}
                       {source.source_type === "text" && (
-                        <p className="text-sm text-gray-600">{source.source_data.content?.substring(0, 100)}...</p>
+                        <p className="text-sm text-muted-foreground">{source.source_data.content?.substring(0, 100)}...</p>
                       )}
                     </div>
                   </li>
@@ -288,9 +290,7 @@ export default function EpisodePage() {
 
               {sourceType === "url" ? (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    URL
-                  </label>
+                  <Label className="mb-1">URL</Label>
                   <Input
                     value={contentUrl}
                     onChange={(e) => setContentUrl(e.target.value)}
@@ -299,11 +299,9 @@ export default function EpisodePage() {
                 </div>
               ) : (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Text Content
-                  </label>
-                  <textarea
-                    className="w-full h-32 p-2 border rounded"
+                  <Label className="mb-1">Text Content</Label>
+                  <Textarea
+                    className="h-32"
                     value={textContent}
                     onChange={(e) => setTextContent(e.target.value)}
                     placeholder="Enter your content here..."

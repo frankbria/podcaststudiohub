@@ -4,6 +4,7 @@ import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 export default function SignupPage() {
@@ -43,7 +44,7 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center bg-background">
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>Create Account</CardTitle>
@@ -52,9 +53,9 @@ export default function SignupPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label htmlFor="fullName" className="block text-sm font-medium text-gray-700 mb-1">
+              <Label htmlFor="fullName" className="mb-1">
                 Full Name
-              </label>
+              </Label>
               <Input
                 id="fullName"
                 type="text"
@@ -64,9 +65,9 @@ export default function SignupPage() {
               />
             </div>
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+              <Label htmlFor="email" className="mb-1">
                 Email
-              </label>
+              </Label>
               <Input
                 id="email"
                 type="email"
@@ -77,9 +78,9 @@ export default function SignupPage() {
               />
             </div>
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
+              <Label htmlFor="password" className="mb-1">
                 Password (min 8 characters)
-              </label>
+              </Label>
               <Input
                 id="password"
                 type="password"
@@ -91,14 +92,14 @@ export default function SignupPage() {
               />
             </div>
             {error && (
-              <div className="text-red-600 text-sm">{error}</div>
+              <div className="text-destructive text-sm">{error}</div>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Creating account..." : "Sign Up"}
             </Button>
-            <div className="text-center text-sm text-gray-600">
+            <div className="text-center text-sm text-muted-foreground">
               Already have an account?{" "}
-              <a href="/login" className="text-blue-600 hover:underline">
+              <a href="/login" className="text-primary hover:underline">
                 Sign in
               </a>
             </div>

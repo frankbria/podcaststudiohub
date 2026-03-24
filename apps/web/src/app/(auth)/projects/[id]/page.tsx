@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 
 interface Episode {
   id: string
@@ -103,13 +104,13 @@ export default function ProjectPage() {
 
   const getStatusBadge = (status: string) => {
     const colors = {
-      draft: "bg-gray-200 text-gray-800",
-      queued: "bg-blue-200 text-blue-800",
-      extracting: "bg-yellow-200 text-yellow-800",
-      generating: "bg-yellow-200 text-yellow-800",
-      synthesizing: "bg-yellow-200 text-yellow-800",
-      complete: "bg-green-200 text-green-800",
-      failed: "bg-red-200 text-red-800",
+      draft: "bg-muted text-muted-foreground",
+      queued: "bg-primary/20 text-primary",
+      extracting: "bg-accent text-accent-foreground",
+      generating: "bg-accent text-accent-foreground",
+      synthesizing: "bg-accent text-accent-foreground",
+      complete: "bg-muted text-foreground",
+      failed: "bg-destructive/20 text-destructive",
     }
 
     return (
@@ -124,7 +125,7 @@ export default function ProjectPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 p-8">
+    <div className="min-h-screen bg-background p-8">
       <div className="max-w-6xl mx-auto">
         <Button variant="outline" onClick={() => router.push("/dashboard")} className="mb-4">
           ← Back to Dashboard
@@ -133,7 +134,7 @@ export default function ProjectPage() {
         <div className="flex justify-between items-center mb-8">
           <div>
             <h1 className="text-3xl font-bold">{project?.title}</h1>
-            <p className="text-gray-600 mt-1">{project?.description}</p>
+            <p className="text-muted-foreground mt-1">{project?.description}</p>
           </div>
           <Button onClick={() => setShowCreateDialog(true)}>
             Create Episode
@@ -162,7 +163,7 @@ export default function ProjectPage() {
           {episodes.length === 0 && (
             <Card>
               <CardContent className="py-12 text-center">
-                <p className="text-gray-600 mb-4">No episodes yet</p>
+                <p className="text-muted-foreground mb-4">No episodes yet</p>
                 <Button onClick={() => setShowCreateDialog(true)}>
                   Create Your First Episode
                 </Button>
@@ -181,9 +182,7 @@ export default function ProjectPage() {
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Episode Title
-                </label>
+                <Label className="mb-1">Episode Title</Label>
                 <Input
                   value={newEpisodeTitle}
                   onChange={(e) => setNewEpisodeTitle(e.target.value)}

@@ -487,6 +487,7 @@ jobs:
         run: |
           HAS_BACKEND="${{ steps.changes.outputs.has_backend }}"
           HAS_FRONTEND="${{ steps.changes.outputs.has_frontend }}"
+          TIER="${{ needs.select-pr.outputs.tier }}"
           BACKEND="${{ steps.backend-tests.outcome }}"
           FRONTEND="${{ steps.frontend-tests.outcome }}"
           HEALTH="${{ steps.health.outcome }}"
@@ -494,6 +495,7 @@ jobs:
 
           echo "Backend: $BACKEND, Frontend: $FRONTEND, Health: $HEALTH, E2E: $E2E"
           echo "Changed areas — backend: $HAS_BACKEND, frontend: $HAS_FRONTEND"
+          echo "Tier: $TIER"
 
           PASSED=true
 
@@ -513,11 +515,20 @@ jobs:
               echo "::error::Health checks failed"
               PASSED=false
             fi
-            # E2E is advisory — a flaky E2E run does not close the PR.
-            # Unit tests + build + health checks are the hard gates.
-            # E2E failure is surfaced in the report so a human can review.
+            # E2E gate is tier-dependent:
+            # T0 (auto-merge) — E2E is a hard gate. No human reviews T0 before
+            #   merge, so a failing E2E must block it.
+            # T1+ (notify-human) — E2E is advisory. A human sees the warning in
+            #   the verification report and decides whether to merge. This prevents
+            #   infrastructure flakiness (rate limits, timing) from consuming retry
+            #   rounds and closing PRs whose code is actually correct.
             if [[ "$E2E" != "success" ]]; then
-              echo "::warning::E2E tests did not pass — surfaced for human review but not blocking"
+              if [[ "$TIER" == "T0" ]]; then
+                echo "::error::E2E tests failed — blocking T0 auto-merge"
+                PASSED=false
+              else
+                echo "::warning::E2E tests did not pass — surfaced for human review (tier $TIER, not blocking)"
+              fi
             fi
           fi
 

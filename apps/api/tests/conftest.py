@@ -9,6 +9,10 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
+# Disable rate limiting for all tests — the limiter uses Redis and would
+# throttle the many registration/login calls made across the test suite.
+os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
+
 from src.main import app
 from src.database import get_db
 

@@ -8,7 +8,7 @@ Covers filename sanitization, range header parsing, and episode filename generat
 import pytest
 from unittest.mock import MagicMock
 
-from src.utils.download_utils import sanitize_filename, parse_range_header, get_episode_filename
+from src.utils.download_utils import sanitize_filename, parse_range_header, get_episode_filename, iter_s3_body
 
 
 # ============================================================================
@@ -218,3 +218,62 @@ class TestGetEpisodeFilename:
 		episode = self._make_episode(title="", episode_number=None)
 		result = get_episode_filename(episode)
 		assert result == "episode.mp3"
+
+
+# ============================================================================
+# parse_range_header edge cases (lines 64, 69)
+# ============================================================================
+
+class TestParseRangeHeaderEdgeCases:
+	"""Cover lines 64 and 69 — invalid format paths not hit by existing tests."""
+
+	def test_too_many_parts_raises_value_error(self):
+		"""'bytes=1-2-3' has 3 parts and must raise ValueError (line 64)."""
+		with pytest.raises(ValueError, match="Invalid range format"):
+			parse_range_header("bytes=1-2-3", 5000)
+
+	def test_both_start_and_end_empty_raises_value_error(self):
+		"""'bytes=-' has empty start and end — must raise ValueError (line 69)."""
+		with pytest.raises(ValueError, match="both start and end are missing"):
+			parse_range_header("bytes=-", 5000)
+
+
+# ============================================================================
+# iter_s3_body (lines 135-139)
+# ============================================================================
+
+class TestIterS3Body:
+	"""Cover the iter_s3_body async generator."""
+
+	@pytest.mark.asyncio
+	async def test_yields_chunks_until_empty(self):
+		"""iter_s3_body should yield chunks and stop when body returns b''."""
+		chunks = [b"hello", b" world", b""]
+		call_count = 0
+
+		def fake_read(size):
+			nonlocal call_count
+			result = chunks[call_count]
+			call_count += 1
+			return result
+
+		body = MagicMock()
+		body.read.side_effect = fake_read
+
+		result = b""
+		async for chunk in iter_s3_body(body, chunk_size=1024):
+			result += chunk
+
+		assert result == b"hello world"
+
+	@pytest.mark.asyncio
+	async def test_empty_body_yields_nothing(self):
+		"""iter_s3_body with immediately-empty body yields nothing."""
+		body = MagicMock()
+		body.read.return_value = b""
+
+		chunks = []
+		async for chunk in iter_s3_body(body, chunk_size=1024):
+			chunks.append(chunk)
+
+		assert chunks == []

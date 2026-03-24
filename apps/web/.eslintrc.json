@@ -1,3 +1,17 @@
 {
-  "extends": ["next/core-web-vitals", "next/typescript"]
+  "extends": ["next/core-web-vitals", "next/typescript"],
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "lucide-react",
+            "message": "This project uses Hugeicons. Import from '@hugeicons/react' and '@hugeicons/core-free-icons' instead. See apps/web/CLAUDE.md for icon mappings."
+          }
+        ]
+      }
+    ]
+  }
 }
+

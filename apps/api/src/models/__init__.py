@@ -16,6 +16,7 @@ from .team_member import TeamMember
 from .team_invitation import TeamInvitation
 from .billing_subscription import BillingSubscription, SubscriptionTier, SubscriptionStatus
 from .billing_usage import BillingUsage
+from .analytics_event import AnalyticsEvent
 
 __all__ = [
     "User",
@@ -36,4 +37,5 @@ __all__ = [
     "SubscriptionTier",
     "SubscriptionStatus",
     "BillingUsage",
+    "AnalyticsEvent",
 ]

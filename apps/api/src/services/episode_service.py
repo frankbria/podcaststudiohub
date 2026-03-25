@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import JSONB
 from uuid import UUID
 from typing import Optional, List
-from datetime import datetime, timezone
+from datetime import datetime
 from fastapi import HTTPException, status
 
 from ..models import Episode, Project
@@ -145,19 +145,20 @@ async def get_episodes(
 		)
 
 	if date_from:
-		if date_from.tzinfo is None:
-			date_from = date_from.replace(tzinfo=timezone.utc)
+		# created_at is DateTime (no timezone); strip tzinfo to match column type
+		date_from = date_from.replace(tzinfo=None)
 		query = query.where(Episode.created_at >= date_from)
 
 	if date_to:
-		if date_to.tzinfo is None:
-			date_to = date_to.replace(tzinfo=timezone.utc)
+		# created_at is DateTime (no timezone); strip tzinfo to match column type
+		date_to = date_to.replace(tzinfo=None)
 		query = query.where(Episode.created_at <= date_to)
 
 	if tags:
 		for tag in tags:
+			# Use @> operator explicitly to avoid JSON .contains() generating LIKE
 			query = query.where(
-				Episode.episode_metadata["tags"].contains(cast(f'["{tag}"]', JSONB))
+				Episode.episode_metadata["tags"].op("@>")(cast(f'["{tag}"]', JSONB))
 			)
 
 	if tts_config_id:

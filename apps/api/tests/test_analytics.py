@@ -42,7 +42,8 @@ async def create_project(client, headers):
 
 async def create_episode(client, headers, project_id):
 	"""Create an episode and return its ID."""
-	response = await client.post(f"/projects/{project_id}/episodes", json={
+	response = await client.post("/episodes", json={
+		"project_id": project_id,
 		"episode_metadata": {
 			"title": f"Test Episode {uuid4()}",
 			"description": "Test",

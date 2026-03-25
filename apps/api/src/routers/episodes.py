@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
-from typing import Optional
+from typing import Optional, List
+from datetime import datetime
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
@@ -70,21 +71,39 @@ async def create_episode_endpoint(
 async def list_episodes(
 	project_id: Optional[UUID] = Query(None, description="Filter by project ID"),
 	status: Optional[str] = Query(None, description="Filter by generation status"),
+	q: Optional[str] = Query(None, description="Full-text search on title and description"),
+	date_from: Optional[datetime] = Query(None, description="Filter episodes created on or after this date (ISO 8601)"),
+	date_to: Optional[datetime] = Query(None, description="Filter episodes created on or before this date (ISO 8601)"),
+	tags: Optional[str] = Query(None, description="Comma-separated list of tags to filter by"),
+	tts_config_id: Optional[UUID] = Query(None, description="Filter by TTS configuration ID"),
+	min_duration: Optional[float] = Query(None, ge=0, description="Minimum duration in seconds"),
+	max_duration: Optional[float] = Query(None, ge=0, description="Maximum duration in seconds"),
+	sort_by: str = Query("episode_number", description="Sort field: episode_number, created_at, duration_seconds"),
+	sort_order: str = Query("asc", description="Sort direction: asc or desc"),
 	page: int = Query(1, ge=1, description="Page number (1-indexed)"),
 	page_size: int = Query(20, ge=1, le=100, description="Items per page"),
 	current_user: User = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db)
 ):
 	"""
-	List episodes with optional filtering and pagination.
+	List episodes with optional filtering, search, and pagination.
 
-	Filter by project_id and/or generation_status.
+	Filter by project_id, generation_status, text search (title/description),
+	date range, tags, TTS config, and duration range.
 	Automatically filtered by user's tenant via RLS.
-	Results ordered by episode_number ascending.
 
 	Args:
 		project_id: Optional project ID to filter by
 		status: Optional generation status to filter by
+		q: Optional full-text search query (case-insensitive, searches title and description)
+		date_from: Optional lower bound on created_at
+		date_to: Optional upper bound on created_at
+		tags: Optional comma-separated tags to filter by (AND logic)
+		tts_config_id: Optional TTS configuration UUID to filter by
+		min_duration: Optional minimum duration in seconds
+		max_duration: Optional maximum duration in seconds
+		sort_by: Field to sort by (episode_number, created_at, duration_seconds)
+		sort_order: Sort direction (asc or desc)
 		page: Page number (1-indexed)
 		page_size: Items per page (1-100)
 		current_user: Authenticated user (from JWT token)
@@ -93,13 +112,36 @@ async def list_episodes(
 	Returns:
 		Paginated list of episodes with metadata
 	"""
+	# Parse comma-separated tags
+	tag_list: Optional[List[str]] = None
+	if tags:
+		tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+
+	# Validate sort_by parameter
+	valid_sort_fields = {"episode_number", "created_at", "duration_seconds"}
+	if sort_by not in valid_sort_fields:
+		sort_by = "episode_number"
+
+	# Validate sort_order parameter
+	if sort_order not in {"asc", "desc"}:
+		sort_order = "asc"
+
 	skip = (page - 1) * page_size
 	episodes, total = await get_episodes(
 		db=db,
 		project_id=project_id,
 		skip=skip,
 		limit=page_size,
-		status_filter=status
+		status_filter=status,
+		search=q,
+		date_from=date_from,
+		date_to=date_to,
+		tags=tag_list,
+		tts_config_id=tts_config_id,
+		min_duration=min_duration,
+		max_duration=max_duration,
+		sort_by=sort_by,
+		sort_order=sort_order
 	)
 
 	total_pages = (total + page_size - 1) // page_size  # Ceiling division

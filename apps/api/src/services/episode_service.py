@@ -6,11 +6,12 @@ status filtering, and generation status management. RLS ensures tenant isolation
 """
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, cast
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import JSONB
 from uuid import UUID
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import HTTPException, status
 
 from ..models import Episode, Project
@@ -144,15 +145,19 @@ async def get_episodes(
 		)
 
 	if date_from:
+		if date_from.tzinfo is None:
+			date_from = date_from.replace(tzinfo=timezone.utc)
 		query = query.where(Episode.created_at >= date_from)
 
 	if date_to:
+		if date_to.tzinfo is None:
+			date_to = date_to.replace(tzinfo=timezone.utc)
 		query = query.where(Episode.created_at <= date_to)
 
 	if tags:
 		for tag in tags:
 			query = query.where(
-				Episode.episode_metadata["tags"].contains(f'["{tag}"]')
+				Episode.episode_metadata["tags"].contains(cast(f'["{tag}"]', JSONB))
 			)
 
 	if tts_config_id:

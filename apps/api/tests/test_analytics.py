@@ -30,6 +30,11 @@ async def create_project(client, headers):
 	response = await client.post("/projects", json={
 		"name": f"Test Project {uuid4()}",
 		"description": "Analytics test project",
+		"podcast_metadata": {
+			"show_title": "Analytics Test Show",
+			"author": "Test Author",
+			"description": "Analytics test project",
+		},
 	}, headers=headers)
 	assert response.status_code == 201, response.text
 	return response.json()["id"]

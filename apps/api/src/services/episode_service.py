@@ -162,7 +162,7 @@ async def get_episodes(
 		# episode_metadata.tags is a JSON array e.g. ["tech", "ai"]
 		# Cast the right-hand side to JSONB so PostgreSQL uses jsonb @> jsonb
 		tag_conditions = [
-			Episode.episode_metadata["tags"].contains(cast(f'"{tag}"', JSONB))
+			Episode.episode_metadata["tags"].contains(cast(f'["{tag}"]', JSONB))
 			for tag in tags
 		]
 		query = query.where(or_(*tag_conditions))

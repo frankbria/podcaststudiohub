@@ -1339,7 +1339,7 @@ async def test_combined_search_and_status_filter(client, project_and_auth):
 
 	# Search for AI + filter by complete status — only one should match
 	response = await client.get(
-		f"/episodes?project_id={project_id}&search=AI&status=complete",
+		f"/episodes?project_id={project_id}&search=AI&generation_status=complete",
 		headers=headers
 	)
 	assert response.status_code == 200

@@ -72,7 +72,7 @@ async def create_episode_endpoint(
 @router.get("", response_model=EpisodeListResponse)
 async def list_episodes(
 	project_id: Optional[UUID] = Query(None, description="Filter by project ID"),
-	status: Optional[str] = Query(None, description="Filter by generation status"),
+	generation_status: Optional[str] = Query(None, description="Filter by generation status"),
 	page: int = Query(1, ge=1, description="Page number (1-indexed)"),
 	page_size: int = Query(20, ge=1, le=100, description="Items per page"),
 	search: Optional[str] = Query(None, description="Full-text search on title and description"),
@@ -95,7 +95,7 @@ async def list_episodes(
 
 	Args:
 		project_id: Optional project ID to filter by
-		status: Optional generation status to filter by
+		generation_status: Optional generation status to filter by
 		page: Page number (1-indexed)
 		page_size: Items per page (1-100)
 		search: Optional full-text search on title and description
@@ -134,7 +134,7 @@ async def list_episodes(
 		project_id=project_id,
 		skip=skip,
 		limit=page_size,
-		status_filter=status,
+		status_filter=generation_status,
 		search=search,
 		date_from=date_from,
 		date_to=date_to,

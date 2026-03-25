@@ -8,9 +8,10 @@ status filtering, and generation status management. RLS ensures tenant isolation
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, cast, Text, or_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import JSONB
 from uuid import UUID
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import HTTPException, status
 
 from ..models import Episode, Project
@@ -149,16 +150,19 @@ async def get_episodes(
 		)
 
 	if date_from:
-		query = query.where(Episode.created_at >= date_from)
+		dt_from = date_from.replace(tzinfo=None) if date_from.tzinfo else date_from
+		query = query.where(Episode.created_at >= dt_from)
 
 	if date_to:
-		query = query.where(Episode.created_at <= date_to)
+		dt_to = date_to.replace(tzinfo=None) if date_to.tzinfo else date_to
+		query = query.where(Episode.created_at <= dt_to)
 
 	if tags:
 		# Filter episodes that have at least one matching tag (OR logic)
 		# episode_metadata.tags is a JSON array e.g. ["tech", "ai"]
+		# Cast the right-hand side to JSONB so PostgreSQL uses jsonb @> jsonb
 		tag_conditions = [
-			Episode.episode_metadata["tags"].contains(f'"{tag}"')
+			Episode.episode_metadata["tags"].contains(cast(f'"{tag}"', JSONB))
 			for tag in tags
 		]
 		query = query.where(or_(*tag_conditions))

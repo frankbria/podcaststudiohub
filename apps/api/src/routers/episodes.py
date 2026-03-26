@@ -20,7 +20,9 @@ from ..schemas.episode import (
 	EpisodeCreate,
 	EpisodeUpdate,
 	EpisodeResponse,
-	EpisodeListResponse
+	EpisodeListResponse,
+	BatchEpisodeCreate,
+	BatchEpisodeResponse,
 )
 from ..services.episode_service import (
 	create_episode,
@@ -28,6 +30,7 @@ from ..services.episode_service import (
 	get_episode_by_id,
 	update_episode,
 	delete_episode,
+	batch_create_episodes,
 	VALID_SORT_FIELDS,
 	VALID_SORT_ORDERS,
 )
@@ -160,6 +163,36 @@ async def list_episodes(
 		page_size=page_size,
 		total_pages=total_pages
 	)
+
+
+@router.post("/batch", response_model=BatchEpisodeResponse, status_code=status.HTTP_202_ACCEPTED)
+async def batch_create_episodes_endpoint(
+	batch_data: BatchEpisodeCreate,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db)
+):
+	"""
+	Create multiple episodes in a single batch request (max 50).
+
+	Processes each episode individually and supports partial success:
+	valid episodes are created even when some fail. Returns 202 Accepted
+	with per-episode results and overall counts.
+
+	Args:
+		batch_data: List of episode creation payloads (1-50 items)
+		current_user: Authenticated user (from JWT token)
+		db: Database session
+
+	Returns:
+		Batch result with batch_id, status, counts, and per-episode results
+	"""
+	result = await batch_create_episodes(
+		db=db,
+		user_id=current_user.id,
+		tenant_id=current_user.tenant_id,
+		batch_data=batch_data
+	)
+	return result
 
 
 @router.get("/{episode_id}", response_model=EpisodeResponse)

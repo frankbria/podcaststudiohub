@@ -5,15 +5,22 @@ Provides CRUD operations for episodes with project validation, pagination,
 status filtering, and generation status management. RLS ensures tenant isolation.
 """
 
+import json
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, cast, or_
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from uuid import UUID
-from typing import Optional
+from typing import Optional, List
 from fastapi import HTTPException, status
 
 from ..models import Episode, Project
 from ..schemas.episode import EpisodeCreate, EpisodeUpdate
+
+# Valid sort fields and orders for episode listing
+VALID_SORT_FIELDS = {"episode_number", "created_at", "duration_seconds"}
+VALID_SORT_ORDERS = {"asc", "desc"}
 
 
 async def create_episode(
@@ -88,12 +95,22 @@ async def get_episodes(
 	project_id: Optional[UUID] = None,
 	skip: int = 0,
 	limit: int = 20,
-	status_filter: Optional[str] = None
+	status_filter: Optional[str] = None,
+	search: Optional[str] = None,
+	date_from: Optional[datetime] = None,
+	date_to: Optional[datetime] = None,
+	tags: Optional[List[str]] = None,
+	tts_config_id: Optional[UUID] = None,
+	min_duration: Optional[float] = None,
+	max_duration: Optional[float] = None,
+	sort_by: str = "episode_number",
+	sort_order: str = "asc"
 ) -> tuple[list[Episode], int]:
 	"""
-	Get paginated list of episodes.
+	Get paginated list of episodes with optional search and filtering.
 
-	Optionally filter by project_id and generation_status.
+	Optionally filter by project_id, generation_status, text search,
+	date range, tags, TTS config, and duration range.
 	RLS automatically filters by tenant.
 
 	Args:
@@ -102,6 +119,15 @@ async def get_episodes(
 		skip: Number of records to skip (for pagination)
 		limit: Maximum number of records to return
 		status_filter: Optional generation status to filter by
+		search: Optional text to search in title and description (case-insensitive)
+		date_from: Optional start of date range filter on created_at
+		date_to: Optional end of date range filter on created_at
+		tags: Optional list of tags (all must match, AND logic)
+		tts_config_id: Optional TTS configuration UUID to filter by
+		min_duration: Optional minimum duration in seconds
+		max_duration: Optional maximum duration in seconds
+		sort_by: Field to sort by (episode_number, created_at, duration_seconds)
+		sort_order: Sort direction (asc, desc)
 
 	Returns:
 		Tuple of (episodes list, total count)
@@ -115,15 +141,63 @@ async def get_episodes(
 	if status_filter:
 		query = query.where(Episode.generation_status == status_filter)
 
+	# Full-text search on title and description (case-insensitive)
+	if search and search.strip():
+		search_term = f"%{search.strip()}%"
+		query = query.where(
+			or_(
+				Episode.episode_metadata['title'].astext.ilike(search_term),
+				Episode.episode_metadata['description'].astext.ilike(search_term)
+			)
+		)
+
+	# Date range filter — created_at is offset-naive, so strip tzinfo from inputs
+	if date_from is not None:
+		date_from_naive = date_from.replace(tzinfo=None) if date_from.tzinfo else date_from
+		query = query.where(Episode.created_at >= date_from_naive)
+
+	if date_to is not None:
+		date_to_naive = date_to.replace(tzinfo=None) if date_to.tzinfo else date_to
+		query = query.where(Episode.created_at <= date_to_naive)
+
+	# Tag filter — each tag must be present in episode_metadata.tags array (AND logic)
+	# Uses PostgreSQL JSONB @> operator: episode_metadata->'tags' @> '["tag"]'::jsonb
+	if tags:
+		for tag in tags:
+			query = query.where(
+				Episode.episode_metadata['tags'].op('@>')(cast(json.dumps([tag]), JSONB))
+			)
+
+	# TTS config filter
+	if tts_config_id is not None:
+		query = query.where(Episode.tts_config_id == tts_config_id)
+
+	# Duration range filter
+	if min_duration is not None:
+		query = query.where(Episode.duration_seconds >= min_duration)
+
+	if max_duration is not None:
+		query = query.where(Episode.duration_seconds <= max_duration)
+
 	# Get total count (before pagination)
 	count_query = select(func.count()).select_from(query.subquery())
 	total_result = await db.execute(count_query)
 	total = total_result.scalar()
 
-	# Get paginated results, ordered by episode number
-	query = query.offset(skip).limit(limit).order_by(
-		Episode.episode_number.asc()
-	)
+	# Apply sort order
+	sort_column = {
+		"episode_number": Episode.episode_number,
+		"created_at": Episode.created_at,
+		"duration_seconds": Episode.duration_seconds,
+	}.get(sort_by, Episode.episode_number)
+
+	if sort_order == "desc":
+		query = query.order_by(sort_column.desc())
+	else:
+		query = query.order_by(sort_column.asc())
+
+	# Apply pagination
+	query = query.offset(skip).limit(limit)
 	result = await db.execute(query)
 	episodes = result.scalars().all()
 

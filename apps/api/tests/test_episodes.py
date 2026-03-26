@@ -1333,7 +1333,7 @@ async def test_batch_create_empty_list(client, project_and_auth):
 
 @pytest.mark.asyncio
 async def test_batch_create_requires_auth(client, project_and_auth):
-	"""Test that batch creation without auth returns 403."""
+	"""Test that batch creation without auth returns 401."""
 	project_id, _ = project_and_auth
 
 	response = await client.post("/episodes/batch", json={
@@ -1344,7 +1344,7 @@ async def test_batch_create_requires_auth(client, project_and_auth):
 			}
 		]
 	})
-	assert response.status_code == 403
+	assert response.status_code == 401
 
 
 @pytest.mark.asyncio

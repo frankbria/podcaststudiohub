@@ -3,11 +3,13 @@ Celery tasks for podcast platform distribution
 """
 import copy
 from celery import Task
+from datetime import datetime, timezone
 from typing import Dict, Any
 import logging
 
 from src.worker import celery_app
 from src.database import SyncSessionLocal
+from src.config import settings
 from src.utils.encryption import decrypt_credential_sync, is_sensitive_header
 from src.tasks.retry_utils import calculate_backoff, should_retry_exception
 
@@ -159,47 +161,150 @@ def distribute_to_platform_task(
 
 
 def _distribute_to_spotify(episode_id: str, config: Dict, metadata: Dict, task: Task) -> Dict:
-    """Distribute to Spotify for Podcasters (placeholder)"""
-    # Implementation would use Spotify's API
-    # For now, return placeholder
+    """Distribute to Spotify for Podcasters using the Spotify Web API."""
+    from src.services.spotify_service import SpotifyService
+
+    task.update_state(
+        state='PROGRESS',
+        meta={
+            'episode_id': episode_id,
+            'platform': 'spotify',
+            'progress': 25,
+            'status': 'Authenticating with Spotify...'
+        }
+    )
+
+    show_id = config.get("show_id")
+    if not show_id:
+        raise ValueError("Spotify show_id not configured for this distribution target")
+
+    oauth_tokens = config.get("oauth_tokens", {})
+    access_token = oauth_tokens.get("access_token")
+    if not access_token:
+        raise ValueError("No Spotify access token found. Please re-authorize the distribution target.")
+
+    service = SpotifyService()
+
+    # Refresh the access token if it is expired
+    refresh_token = oauth_tokens.get("refresh_token")
+    expires_at_str = oauth_tokens.get("expires_at")
+    if expires_at_str and refresh_token:
+        try:
+            expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) >= expires_at:
+                logger.info(
+                    "Spotify access token expired for episode %s, refreshing...",
+                    episode_id,
+                )
+                if not settings.SPOTIFY_CLIENT_ID or not settings.SPOTIFY_CLIENT_SECRET:  # type: ignore[truthy-bool]
+                    raise ValueError(
+                        "SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set "
+                        "to refresh Spotify OAuth tokens automatically."
+                    )
+                token_data = service.refresh_access_token(
+                    refresh_token=refresh_token,
+                    client_id=settings.SPOTIFY_CLIENT_ID,
+                    client_secret=settings.SPOTIFY_CLIENT_SECRET,
+                )
+                access_token = token_data["access_token"]
+                logger.info(
+                    "Spotify access token refreshed for episode %s", episode_id
+                )
+        except (ValueError, KeyError, TypeError):
+            # Re-raise permanent errors so the task does not retry
+            raise
+        except Exception as exc:
+            # Log and continue with the existing token; let the API call
+            # surface the actual auth error if the token is truly invalid.
+            logger.warning(
+                "Could not refresh Spotify token for episode %s: %s",
+                episode_id,
+                exc,
+            )
+
     task.update_state(
         state='PROGRESS',
         meta={
             'episode_id': episode_id,
             'platform': 'spotify',
             'progress': 50,
-            'status': 'Authenticating with Spotify...'
+            'status': 'Publishing episode to Spotify...'
         }
     )
-    # Spotify API integration would go here
+
+    result = service.publish_episode(
+        show_id=show_id,
+        access_token=access_token,
+        metadata=metadata,
+    )
+
+    logger.info(
+        "Spotify distribution complete for episode %s: platform_id=%s",
+        episode_id,
+        result["episode_id"],
+    )
     return {
         "status": "success",
         "platform": "spotify",
-        "platform_episode_id": "spotify_placeholder_id",
-        "platform_url": None,
-        "error": None
+        "platform_episode_id": result["episode_id"],
+        "platform_url": result["platform_url"],
+        "error": None,
     }
 
 
 def _distribute_to_apple(episode_id: str, config: Dict, metadata: Dict, task: Task) -> Dict:
-    """Distribute to Apple Podcasts Connect (placeholder)"""
-    # Implementation would use Apple's Podcasts Connect API
+    """Distribute to Apple Podcasts Connect using the Apple Podcasts Connect API."""
+    from src.services.apple_podcasts_service import ApplePodcastsService
+
+    task.update_state(
+        state='PROGRESS',
+        meta={
+            'episode_id': episode_id,
+            'platform': 'apple_podcasts',
+            'progress': 25,
+            'status': 'Authenticating with Apple Podcasts...'
+        }
+    )
+
+    show_id = config.get("show_id")
+    if not show_id:
+        raise ValueError("Apple Podcasts show_id not configured for this distribution target")
+
+    credentials = config.get("credentials", {})
+    api_key = credentials.get("api_key")
+    if not api_key:
+        raise ValueError(
+            "No Apple Podcasts API key found. Please re-add your credentials."
+        )
+
     task.update_state(
         state='PROGRESS',
         meta={
             'episode_id': episode_id,
             'platform': 'apple_podcasts',
             'progress': 50,
-            'status': 'Authenticating with Apple Podcasts...'
+            'status': 'Publishing episode to Apple Podcasts...'
         }
     )
-    # Apple API integration would go here
+
+    service = ApplePodcastsService()
+    result = service.publish_episode(
+        show_id=show_id,
+        api_key=api_key,
+        metadata=metadata,
+    )
+
+    logger.info(
+        "Apple Podcasts distribution complete for episode %s: platform_id=%s",
+        episode_id,
+        result["episode_id"],
+    )
     return {
         "status": "success",
         "platform": "apple_podcasts",
-        "platform_episode_id": "apple_placeholder_id",
-        "platform_url": None,
-        "error": None
+        "platform_episode_id": result["episode_id"],
+        "platform_url": result["platform_url"],
+        "error": None,
     }
 
 

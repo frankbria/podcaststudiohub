@@ -16,7 +16,7 @@ from typing import Optional, List
 from fastapi import HTTPException, status
 
 from ..models import Episode, Project
-from ..schemas.episode import EpisodeCreate, EpisodeUpdate
+from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
 
 # Valid sort fields and orders for episode listing
 VALID_SORT_FIELDS = {"episode_number", "created_at", "duration_seconds"}
@@ -270,6 +270,70 @@ async def delete_episode(
 	"""
 	await db.delete(episode)
 	await db.commit()
+
+
+async def batch_create_episodes(
+	db: AsyncSession,
+	user_id: UUID,
+	tenant_id: UUID,
+	batch_data: BatchEpisodeCreate
+) -> dict:
+	"""
+	Create multiple episodes in a single batch operation.
+
+	Processes each episode individually, collecting successes and failures.
+	Partial success is supported: valid episodes are created even when some fail.
+
+	Args:
+		db: Database session
+		user_id: ID of user creating the episodes
+		tenant_id: Tenant ID for isolation
+		batch_data: Batch creation data with list of episode configs
+
+	Returns:
+		Dict with batch_id, status, counts, and per-episode results
+	"""
+	import uuid as _uuid
+
+	batch_id = str(_uuid.uuid4())
+	results = []
+	created_count = 0
+	failed_count = 0
+
+	for index, episode_data in enumerate(batch_data.episodes):
+		try:
+			episode = await create_episode(
+				db=db,
+				user_id=user_id,
+				tenant_id=tenant_id,
+				episode_data=episode_data
+			)
+			results.append({
+				"index": index,
+				"status": "created",
+				"episode": episode,
+				"error": None,
+			})
+			created_count += 1
+		except HTTPException as exc:
+			results.append({
+				"index": index,
+				"status": "failed",
+				"episode": None,
+				"error": exc.detail,
+			})
+			failed_count += 1
+
+	overall_status = "complete" if failed_count == 0 else "partial"
+
+	return {
+		"batch_id": batch_id,
+		"status": overall_status,
+		"total_episodes": len(batch_data.episodes),
+		"created_count": created_count,
+		"failed_count": failed_count,
+		"results": results,
+	}
 
 
 async def update_generation_status(

@@ -83,7 +83,7 @@ export default function DashboardPage() {
   }
 
   if (loading) {
-    return <div className="p-8">Loading...</div>
+    return <div className="p-8" role="status" aria-live="polite">Loading...</div>
   }
 
   return (
@@ -96,59 +96,77 @@ export default function DashboardPage() {
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projects.map((project) => (
-            <Card
-              key={project.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
-              onClick={() => router.push(`/projects/${project.id}`)}
-            >
-              <CardHeader>
-                <CardTitle>{project.title}</CardTitle>
-                <CardDescription>
-                  {project.description || "No description"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground">
-                  {project.episode_count} episode{project.episode_count !== 1 ? "s" : ""}
-                </p>
-              </CardContent>
-            </Card>
-          ))}
+        <section aria-label="Projects">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {projects.map((project) => (
+              <Card
+                key={project.id}
+                className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                role="button"
+                tabIndex={0}
+                aria-label={`Open project: ${project.title}`}
+                onClick={() => router.push(`/projects/${project.id}`)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    router.push(`/projects/${project.id}`)
+                  }
+                }}
+              >
+                <CardHeader>
+                  <CardTitle>{project.title}</CardTitle>
+                  <CardDescription>
+                    {project.description || "No description"}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground">
+                    {project.episode_count} episode{project.episode_count !== 1 ? "s" : ""}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
 
-          {projects.length === 0 && (
-            <Card className="col-span-full">
-              <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground mb-4">No projects yet</p>
-                <Button onClick={() => setShowCreateDialog(true)}>
-                  Create Your First Project
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-        </div>
+            {projects.length === 0 && (
+              <Card className="col-span-full">
+                <CardContent className="py-12 text-center">
+                  <p className="text-muted-foreground mb-4">No projects yet</p>
+                  <Button onClick={() => setShowCreateDialog(true)}>
+                    Create Your First Project
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </section>
 
         <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-          <DialogContent>
+          <DialogContent aria-describedby="create-project-description">
             <DialogHeader>
               <DialogTitle>Create New Project</DialogTitle>
-              <DialogDescription>
+              <DialogDescription id="create-project-description">
                 Create a new podcast project to organize your episodes
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div>
-                <Label className="mb-1">Project Title</Label>
+                <Label htmlFor="project-title" className="mb-1">
+                  Project Title
+                </Label>
                 <Input
+                  id="project-title"
                   value={newProjectTitle}
                   onChange={(e) => setNewProjectTitle(e.target.value)}
                   placeholder="My Podcast"
+                  aria-required="true"
                 />
               </div>
               <div>
-                <Label className="mb-1">Description</Label>
+                <Label htmlFor="project-description" className="mb-1">
+                  Description
+                </Label>
                 <Input
+                  id="project-description"
                   value={newProjectDescription}
                   onChange={(e) => setNewProjectDescription(e.target.value)}
                   placeholder="A brief description of your podcast"

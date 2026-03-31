@@ -114,14 +114,17 @@ export default function ProjectPage() {
     }
 
     return (
-      <span className={`px-2 py-1 rounded text-xs ${colors[status as keyof typeof colors] || colors.draft}`}>
+      <span
+        className={`px-2 py-1 rounded text-xs ${colors[status as keyof typeof colors] || colors.draft}`}
+        aria-label={`Status: ${status}`}
+      >
         {status}
       </span>
     )
   }
 
   if (loading) {
-    return <div className="p-8">Loading...</div>
+    return <div className="p-8" role="status" aria-live="polite">Loading...</div>
   }
 
   return (
@@ -141,52 +144,67 @@ export default function ProjectPage() {
           </Button>
         </div>
 
-        <div className="space-y-4">
-          {episodes.map((episode) => (
-            <Card
-              key={episode.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
-              onClick={() => router.push(`/episodes/${episode.id}`)}
-            >
-              <CardHeader>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <CardTitle>{episode.title}</CardTitle>
-                    <CardDescription>{episode.description || "No description"}</CardDescription>
+        <section aria-label="Episodes">
+          <div className="space-y-4">
+            {episodes.map((episode) => (
+              <Card
+                key={episode.id}
+                className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                role="button"
+                tabIndex={0}
+                aria-label={`Open episode: ${episode.title}`}
+                onClick={() => router.push(`/episodes/${episode.id}`)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    router.push(`/episodes/${episode.id}`)
+                  }
+                }}
+              >
+                <CardHeader>
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <CardTitle>{episode.title}</CardTitle>
+                      <CardDescription>{episode.description || "No description"}</CardDescription>
+                    </div>
+                    {getStatusBadge(episode.generation_status)}
                   </div>
-                  {getStatusBadge(episode.generation_status)}
-                </div>
-              </CardHeader>
-            </Card>
-          ))}
+                </CardHeader>
+              </Card>
+            ))}
 
-          {episodes.length === 0 && (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground mb-4">No episodes yet</p>
-                <Button onClick={() => setShowCreateDialog(true)}>
-                  Create Your First Episode
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-        </div>
+            {episodes.length === 0 && (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <p className="text-muted-foreground mb-4">No episodes yet</p>
+                  <Button onClick={() => setShowCreateDialog(true)}>
+                    Create Your First Episode
+                  </Button>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </section>
 
         <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-          <DialogContent>
+          <DialogContent aria-describedby="create-episode-description">
             <DialogHeader>
               <DialogTitle>Create New Episode</DialogTitle>
-              <DialogDescription>
+              <DialogDescription id="create-episode-description">
                 Create a new podcast episode
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div>
-                <Label className="mb-1">Episode Title</Label>
+                <Label htmlFor="episode-title" className="mb-1">
+                  Episode Title
+                </Label>
                 <Input
+                  id="episode-title"
                   value={newEpisodeTitle}
                   onChange={(e) => setNewEpisodeTitle(e.target.value)}
                   placeholder="Episode 1: Introduction"
+                  aria-required="true"
                 />
               </div>
               <Button onClick={createEpisode} className="w-full">

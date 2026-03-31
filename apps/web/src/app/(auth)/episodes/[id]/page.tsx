@@ -197,15 +197,20 @@ export default function EpisodePage() {
           <CardHeader>
             <CardTitle>{episode?.title}</CardTitle>
             <CardDescription>
-              Status: <span className={getStatusColor(episode?.generation_status || "draft")}>
+              Status:{" "}
+              <span
+                className={getStatusColor(episode?.generation_status || "draft")}
+                aria-live="polite"
+                aria-atomic="true"
+              >
                 {episode?.generation_status || "draft"}
               </span>
             </CardDescription>
           </CardHeader>
           <CardContent>
             {episode?.generation_status && ["queued", "extracting", "generating", "synthesizing"].includes(episode.generation_status) && (
-              <div className="mb-4">
-                <div className="w-full bg-muted rounded-full h-2.5">
+              <div className="mb-4" role="status" aria-live="polite" aria-label={`Generation progress: ${progress}%`}>
+                <div className="w-full bg-muted rounded-full h-2.5" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
                   <div
                     className="bg-primary h-2.5 rounded-full transition-all"
                     style={{ width: `${progress}%` }}
@@ -217,7 +222,7 @@ export default function EpisodePage() {
 
             {episode?.audio_url && (
               <div className="mt-4">
-                <audio controls className="w-full">
+                <audio controls className="w-full" aria-label={`Audio for episode: ${episode.title}`}>
                   <source src={episode.audio_url} type="audio/mpeg" />
                 </audio>
               </div>
@@ -238,7 +243,7 @@ export default function EpisodePage() {
             {contentSources.length === 0 ? (
               <p className="text-muted-foreground">No content sources added yet</p>
             ) : (
-              <ul className="space-y-2">
+              <ul className="space-y-2" aria-label="Content sources">
                 {contentSources.map((source) => (
                   <li key={source.id} className="flex items-center justify-between p-3 bg-muted rounded">
                     <div>
@@ -262,49 +267,65 @@ export default function EpisodePage() {
           disabled={!canGenerate || generating}
           className="w-full"
           size="lg"
+          aria-disabled={!canGenerate || generating}
         >
           {generating ? "Starting Generation..." : "Generate Podcast"}
         </Button>
 
         <Dialog open={showAddContentDialog} onOpenChange={setShowAddContentDialog}>
-          <DialogContent>
+          <DialogContent aria-describedby="add-content-description">
             <DialogHeader>
               <DialogTitle>Add Content Source</DialogTitle>
-              <DialogDescription>Add content to generate your podcast from</DialogDescription>
+              <DialogDescription id="add-content-description">
+                Add content to generate your podcast from
+              </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
-              <div className="flex gap-2">
-                <Button
-                  variant={sourceType === "url" ? "default" : "outline"}
-                  onClick={() => setSourceType("url")}
-                >
-                  URL
-                </Button>
-                <Button
-                  variant={sourceType === "text" ? "default" : "outline"}
-                  onClick={() => setSourceType("text")}
-                >
-                  Text
-                </Button>
+              <div role="group" aria-label="Content source type">
+                <div className="flex gap-2">
+                  <Button
+                    variant={sourceType === "url" ? "default" : "outline"}
+                    onClick={() => setSourceType("url")}
+                    aria-pressed={sourceType === "url"}
+                  >
+                    URL
+                  </Button>
+                  <Button
+                    variant={sourceType === "text" ? "default" : "outline"}
+                    onClick={() => setSourceType("text")}
+                    aria-pressed={sourceType === "text"}
+                  >
+                    Text
+                  </Button>
+                </div>
               </div>
 
               {sourceType === "url" ? (
                 <div>
-                  <Label className="mb-1">URL</Label>
+                  <Label htmlFor="content-url" className="mb-1">
+                    URL
+                  </Label>
                   <Input
+                    id="content-url"
                     value={contentUrl}
                     onChange={(e) => setContentUrl(e.target.value)}
                     placeholder="https://example.com/article"
+                    type="url"
+                    aria-required="true"
                   />
                 </div>
               ) : (
                 <div>
-                  <Label className="mb-1">Text Content</Label>
+                  <Label htmlFor="text-content" className="mb-1">
+                    Text Content
+                  </Label>
                   <Textarea
+                    id="text-content"
                     className="h-32"
                     value={textContent}
                     onChange={(e) => setTextContent(e.target.value)}
                     placeholder="Enter your content here..."
+                    aria-required="true"
                   />
                 </div>
               )}

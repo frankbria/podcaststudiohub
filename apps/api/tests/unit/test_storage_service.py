@@ -15,7 +15,7 @@ Tests cover:
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 from botocore.exceptions import ClientError
 
 from src.services.storage_service import StorageService

@@ -99,7 +99,7 @@ class ApiClient {
   /**
    * POST request
    */
-  async post<T>(endpoint: string, data?: any): Promise<T> {
+  async post<T>(endpoint: string, data?: unknown): Promise<T> {
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
       method: 'POST',
       headers: this.getHeaders(),
@@ -112,7 +112,7 @@ class ApiClient {
   /**
    * PUT request
    */
-  async put<T>(endpoint: string, data?: any): Promise<T> {
+  async put<T>(endpoint: string, data?: unknown): Promise<T> {
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
       method: 'PUT',
       headers: this.getHeaders(),
@@ -125,7 +125,7 @@ class ApiClient {
   /**
    * PATCH request
    */
-  async patch<T>(endpoint: string, data?: any): Promise<T> {
+  async patch<T>(endpoint: string, data?: unknown): Promise<T> {
     const response = await fetch(`${this.baseUrl}${endpoint}`, {
       method: 'PATCH',
       headers: this.getHeaders(),

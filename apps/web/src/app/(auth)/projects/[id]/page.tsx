@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
-import { useSession } from "next-auth/react"
+import { useSession, type Session } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -33,23 +33,19 @@ export default function ProjectPage() {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [newEpisodeTitle, setNewEpisodeTitle] = useState("")
 
-  useEffect(() => {
-    if (session) {
-      loadProject()
-      loadEpisodes()
-    }
-  }, [session, params.id])
+  const getToken = useCallback(
+    () => (session as Session & { accessToken?: string })?.accessToken ?? "",
+    [session]
+  )
 
-  const loadProject = async () => {
+  const loadProject = useCallback(async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects/${params.id}`, {
-        headers: {
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
-      })
-
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/projects/${params.id}`,
+        { headers: { Authorization: `Bearer ${getToken()}` } }
+      )
       if (response.ok) {
-        const data = await response.json()
+        const data = await response.json() as Project
         setProject(data)
       }
     } catch (error) {
@@ -57,41 +53,49 @@ export default function ProjectPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [params.id, getToken])
 
-  const loadEpisodes = async () => {
+  const loadEpisodes = useCallback(async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`, {
-        headers: {
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
-      })
-
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`,
+        { headers: { Authorization: `Bearer ${getToken()}` } }
+      )
       if (response.ok) {
-        const data = await response.json()
-        setEpisodes(data.items || [])
+        const data = await response.json() as { items?: Episode[] }
+        setEpisodes(data.items ?? [])
       }
     } catch (error) {
       console.error("Failed to load episodes:", error)
     }
-  }
+  }, [params.id, getToken])
+
+  useEffect(() => {
+    if (session) {
+      loadProject()
+      loadEpisodes()
+    }
+  }, [session, loadProject, loadEpisodes])
 
   const createEpisode = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
-        body: JSON.stringify({
-          project_id: params.id,
-          title: newEpisodeTitle,
-        }),
-      })
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${getToken()}`,
+          },
+          body: JSON.stringify({
+            project_id: params.id,
+            title: newEpisodeTitle,
+          }),
+        }
+      )
 
       if (response.ok) {
-        const episode = await response.json()
+        const episode = await response.json() as Episode
         setShowCreateDialog(false)
         setNewEpisodeTitle("")
         // Navigate to episode page to add content and generate

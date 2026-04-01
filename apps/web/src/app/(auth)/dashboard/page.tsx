@@ -8,6 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { DashboardSkeleton } from "@/components/skeletons/DashboardSkeleton"
+import { EmptyState } from "@/components/empty-state/EmptyState"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { FolderOpenIcon } from "@hugeicons/core-free-icons"
 
 interface Project {
   id: string
@@ -83,7 +87,7 @@ export default function DashboardPage() {
   }
 
   if (loading) {
-    return <div className="p-8">Loading...</div>
+    return <DashboardSkeleton />
   }
 
   return (
@@ -96,38 +100,39 @@ export default function DashboardPage() {
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {projects.map((project) => (
-            <Card
-              key={project.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
-              onClick={() => router.push(`/projects/${project.id}`)}
-            >
-              <CardHeader>
-                <CardTitle>{project.title}</CardTitle>
-                <CardDescription>
-                  {project.description || "No description"}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground">
-                  {project.episode_count} episode{project.episode_count !== 1 ? "s" : ""}
-                </p>
-              </CardContent>
-            </Card>
-          ))}
-
-          {projects.length === 0 && (
-            <Card className="col-span-full">
-              <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground mb-4">No projects yet</p>
-                <Button onClick={() => setShowCreateDialog(true)}>
-                  Create Your First Project
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-        </div>
+        {projects.length === 0 ? (
+          <EmptyState
+            icon={<HugeiconsIcon icon={FolderOpenIcon} size={64} />}
+            title="No projects yet"
+            description="Create your first podcast project to get started"
+            action={{
+              label: "Create Project",
+              onClick: () => setShowCreateDialog(true),
+            }}
+          />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {projects.map((project) => (
+              <Card
+                key={project.id}
+                className="cursor-pointer hover:shadow-lg transition-shadow"
+                onClick={() => router.push(`/projects/${project.id}`)}
+              >
+                <CardHeader>
+                  <CardTitle>{project.title}</CardTitle>
+                  <CardDescription>
+                    {project.description || "No description"}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-sm text-muted-foreground">
+                    {project.episode_count} episode{project.episode_count !== 1 ? "s" : ""}
+                  </p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
 
         <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
           <DialogContent>

@@ -8,6 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { EpisodeListSkeleton } from "@/components/skeletons/EpisodeListSkeleton"
+import { EmptyState } from "@/components/empty-state/EmptyState"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { Inbox01Icon } from "@hugeicons/core-free-icons"
 
 interface Episode {
   id: string
@@ -121,7 +125,13 @@ export default function ProjectPage() {
   }
 
   if (loading) {
-    return <div className="p-8">Loading...</div>
+    return (
+      <div className="min-h-screen bg-background p-8">
+        <div className="max-w-6xl mx-auto">
+          <EpisodeListSkeleton />
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -141,36 +151,37 @@ export default function ProjectPage() {
           </Button>
         </div>
 
-        <div className="space-y-4">
-          {episodes.map((episode) => (
-            <Card
-              key={episode.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
-              onClick={() => router.push(`/episodes/${episode.id}`)}
-            >
-              <CardHeader>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <CardTitle>{episode.title}</CardTitle>
-                    <CardDescription>{episode.description || "No description"}</CardDescription>
+        {episodes.length === 0 ? (
+          <EmptyState
+            icon={<HugeiconsIcon icon={Inbox01Icon} size={64} />}
+            title="No episodes in this project"
+            description="Create an episode to start generating podcasts"
+            action={{
+              label: "Create Episode",
+              onClick: () => setShowCreateDialog(true),
+            }}
+          />
+        ) : (
+          <div className="space-y-4">
+            {episodes.map((episode) => (
+              <Card
+                key={episode.id}
+                className="cursor-pointer hover:shadow-lg transition-shadow"
+                onClick={() => router.push(`/episodes/${episode.id}`)}
+              >
+                <CardHeader>
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <CardTitle>{episode.title}</CardTitle>
+                      <CardDescription>{episode.description || "No description"}</CardDescription>
+                    </div>
+                    {getStatusBadge(episode.generation_status)}
                   </div>
-                  {getStatusBadge(episode.generation_status)}
-                </div>
-              </CardHeader>
-            </Card>
-          ))}
-
-          {episodes.length === 0 && (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground mb-4">No episodes yet</p>
-                <Button onClick={() => setShowCreateDialog(true)}>
-                  Create Your First Episode
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-        </div>
+                </CardHeader>
+              </Card>
+            ))}
+          </div>
+        )}
 
         <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
           <DialogContent>

@@ -9,6 +9,10 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { AudioPlayerSkeleton } from "@/components/skeletons/AudioPlayerSkeleton"
+import { EmptyState } from "@/components/empty-state/EmptyState"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { FileEditIcon, Alert02Icon } from "@hugeicons/core-free-icons"
 
 interface Episode {
   id: string
@@ -31,6 +35,7 @@ export default function EpisodePage() {
   const params = useParams()
   const { data: session } = useSession()
   const [episode, setEpisode] = useState<Episode | null>(null)
+  const [loading, setLoading] = useState(true)
   const [contentSources, setContentSources] = useState<ContentSource[]>([])
   const [showAddContentDialog, setShowAddContentDialog] = useState(false)
   const [contentUrl, setContentUrl] = useState("")
@@ -80,6 +85,7 @@ export default function EpisodePage() {
   }, [episode?.generation_status, session])
 
   const loadEpisode = async () => {
+    setLoading(true)
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}`, {
         headers: {
@@ -93,6 +99,8 @@ export default function EpisodePage() {
       }
     } catch (error) {
       console.error("Failed to load episode:", error)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -182,6 +190,34 @@ export default function EpisodePage() {
 
   const canGenerate = contentSources.length > 0 && episode?.generation_status === "draft"
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background p-8">
+        <div className="max-w-4xl mx-auto">
+          <AudioPlayerSkeleton />
+        </div>
+      </div>
+    )
+  }
+
+  if (!episode) {
+    return (
+      <div className="min-h-screen bg-background p-8">
+        <div className="max-w-4xl mx-auto">
+          <EmptyState
+            icon={<HugeiconsIcon icon={Alert02Icon} size={64} />}
+            title="Episode not found"
+            description="This episode could not be loaded. Please try again."
+            action={{
+              label: "Back",
+              onClick: () => router.back(),
+            }}
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-background p-8">
       <div className="max-w-4xl mx-auto">
@@ -236,7 +272,15 @@ export default function EpisodePage() {
           </CardHeader>
           <CardContent>
             {contentSources.length === 0 ? (
-              <p className="text-muted-foreground">No content sources added yet</p>
+              <EmptyState
+                icon={<HugeiconsIcon icon={FileEditIcon} size={48} />}
+                title="No content added yet"
+                description="Add a URL or text content to generate your podcast"
+                action={{
+                  label: "Add Content",
+                  onClick: () => setShowAddContentDialog(true),
+                }}
+              />
             ) : (
               <ul className="space-y-2">
                 {contentSources.map((source) => (

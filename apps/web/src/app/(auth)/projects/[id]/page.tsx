@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { showSuccessToast, showErrorToast } from "@/lib/toast"
 
 interface Episode {
   id: string
@@ -51,9 +52,12 @@ export default function ProjectPage() {
       if (response.ok) {
         const data = await response.json()
         setProject(data)
+      } else {
+        showErrorToast("Failed to load project")
       }
     } catch (error) {
       console.error("Failed to load project:", error)
+      showErrorToast("Failed to load project: Network error")
     } finally {
       setLoading(false)
     }
@@ -70,9 +74,12 @@ export default function ProjectPage() {
       if (response.ok) {
         const data = await response.json()
         setEpisodes(data.items || [])
+      } else {
+        showErrorToast("Failed to load episodes")
       }
     } catch (error) {
       console.error("Failed to load episodes:", error)
+      showErrorToast("Failed to load episodes: Network error")
     }
   }
 
@@ -92,13 +99,17 @@ export default function ProjectPage() {
 
       if (response.ok) {
         const episode = await response.json()
+        showSuccessToast("Episode created successfully")
         setShowCreateDialog(false)
         setNewEpisodeTitle("")
         // Navigate to episode page to add content and generate
         router.push(`/episodes/${episode.id}`)
+      } else {
+        showErrorToast("Failed to create episode: " + response.statusText)
       }
     } catch (error) {
       console.error("Failed to create episode:", error)
+      showErrorToast("Failed to create episode: Network error")
     }
   }
 

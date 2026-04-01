@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { showSuccessToast, showErrorToast } from "@/lib/toast"
 
 interface Episode {
   id: string
@@ -64,9 +65,14 @@ export default function EpisodePage() {
           setProgress(data.progress.progress)
         }
 
-        if (data.status === "complete" || data.status === "failed") {
+        if (data.status === "complete") {
           eventSource.close()
+          showSuccessToast("Podcast generated successfully")
           loadEpisode() // Reload to get audio URL
+        } else if (data.status === "failed") {
+          eventSource.close()
+          showErrorToast("Podcast generation failed")
+          loadEpisode()
         }
       }
 
@@ -90,9 +96,12 @@ export default function EpisodePage() {
       if (response.ok) {
         const data = await response.json()
         setEpisode(data)
+      } else {
+        showErrorToast("Failed to load episode")
       }
     } catch (error) {
       console.error("Failed to load episode:", error)
+      showErrorToast("Failed to load episode: Network error")
     }
   }
 
@@ -107,9 +116,12 @@ export default function EpisodePage() {
       if (response.ok) {
         const data = await response.json()
         setContentSources(data)
+      } else {
+        showErrorToast("Failed to load content sources")
       }
     } catch (error) {
       console.error("Failed to load content sources:", error)
+      showErrorToast("Failed to load content sources: Network error")
     }
   }
 
@@ -137,13 +149,17 @@ export default function EpisodePage() {
       })
 
       if (response.ok) {
+        showSuccessToast("Content source added")
         setShowAddContentDialog(false)
         setContentUrl("")
         setTextContent("")
         loadContentSources()
+      } else {
+        showErrorToast("Failed to add content source: " + response.statusText)
       }
     } catch (error) {
       console.error("Failed to add content source:", error)
+      showErrorToast("Failed to add content source: Network error")
     }
   }
 
@@ -158,10 +174,14 @@ export default function EpisodePage() {
       })
 
       if (response.ok) {
+        showSuccessToast("Podcast generation started")
         loadEpisode()
+      } else {
+        showErrorToast("Failed to generate podcast: " + response.statusText)
       }
     } catch (error) {
       console.error("Failed to generate podcast:", error)
+      showErrorToast("Failed to generate podcast: Network error")
     } finally {
       setGenerating(false)
     }

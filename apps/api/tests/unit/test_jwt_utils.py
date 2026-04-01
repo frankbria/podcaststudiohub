@@ -11,7 +11,6 @@ Tests cover:
 
 from datetime import timedelta
 
-import pytest
 from jose import jwt
 
 from src.utils.jwt import (

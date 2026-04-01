@@ -116,7 +116,7 @@ export interface ContentSource {
   id: string;
   episode_id: string;
   source_type: 'url' | 'pdf' | 'youtube' | 'text' | 'image' | 'topic';
-  source_data: Record<string, any>;
+  source_data: Record<string, string>;
   extraction_status: 'pending' | 'extracting' | 'complete' | 'failed';
   error_message: string | null;
   created_at: string;
@@ -125,7 +125,7 @@ export interface ContentSource {
 export interface ContentSourceCreate {
   episode_id: string;
   source_type: string;
-  source_data: Record<string, any>;
+  source_data: Record<string, string>;
 }
 
 // Audio snippet types

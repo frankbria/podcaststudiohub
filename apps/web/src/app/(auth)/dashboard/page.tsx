@@ -1,8 +1,8 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
-import { useSession } from "next-auth/react"
+import { useSession, type Session } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -26,32 +26,35 @@ export default function DashboardPage() {
   const [newProjectTitle, setNewProjectTitle] = useState("")
   const [newProjectDescription, setNewProjectDescription] = useState("")
 
-  useEffect(() => {
-    if (status === "unauthenticated") {
-      router.push("/login")
-    } else if (status === "authenticated") {
-      loadProjects()
-    }
-  }, [status])
+  const getToken = useCallback(
+    () => (session as Session & { accessToken?: string })?.accessToken ?? "",
+    [session]
+  )
 
-  const loadProjects = async () => {
+  const loadProjects = useCallback(async () => {
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects`, {
-        headers: {
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
+        headers: { Authorization: `Bearer ${getToken()}` },
       })
 
       if (response.ok) {
-        const data = await response.json()
-        setProjects(data.items || [])
+        const data = await response.json() as { items?: Project[] }
+        setProjects(data.items ?? [])
       }
     } catch (error) {
       console.error("Failed to load projects:", error)
     } finally {
       setLoading(false)
     }
-  }
+  }, [getToken])
+
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.push("/login")
+    } else if (status === "authenticated") {
+      loadProjects()
+    }
+  }, [status, router, loadProjects])
 
   const createProject = async () => {
     try {
@@ -59,7 +62,7 @@ export default function DashboardPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
+          Authorization: `Bearer ${getToken()}`,
         },
         body: JSON.stringify({
           title: newProjectTitle,

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession, type Session } from "next-auth/react"
 import { useForm } from "react-hook-form"
@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { contentSourceSchema, type ContentSourceFormData } from "@/lib/validation"
+import { RobustEventSource, startPolling, ConnectionStatus } from "@/lib/event-source-manager"
 
 interface GenerationProgress {
   progress?: number
@@ -82,12 +83,14 @@ export default function EpisodePage() {
   const [generating, setGenerating] = useState(false)
   const [progress, setProgress] = useState(0)
   const [progressMessage, setProgressMessage] = useState("")
-  const [sseError, setSseError] = useState<string | null>(null)
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting")
   const [ttsConfigs, setTtsConfigs] = useState<TTSConfig[]>([])
   const [selectedTtsConfigId, setSelectedTtsConfigId] = useState<string>("")
   const [newTtsProvider, setNewTtsProvider] = useState<string>("openai")
   const [newTtsName, setNewTtsName] = useState<string>("")
   const [savingTts, setSavingTts] = useState(false)
+  const robustESRef = useRef<RobustEventSource | null>(null)
+  const stopPollingRef = useRef<(() => void) | null>(null)
 
   const getAuthHeaders = useCallback((): Record<string, string> => {
     const token = (session as AuthSession)?.accessToken
@@ -178,20 +181,16 @@ export default function EpisodePage() {
       return
     }
 
-    setSseError(null)
+    setProgressMessage(STATUS_MESSAGES[episode.generation_status] ?? "")
+
     // EventSource doesn't support custom headers (W3C spec limitation).
     // Pass JWT token as a query parameter so the backend can authenticate the SSE connection.
     const token = (session as AuthSession)?.accessToken
     const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ""
-    const eventSource = new EventSource(
-      `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress${tokenParam}`
-    )
+    const sseUrl = `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress${tokenParam}`
 
-    eventSource.onmessage = (event) => {
-      const data = JSON.parse(event.data) as {
-        status: string
-        progress: GenerationProgress
-      }
+    const handleMessage = (raw: unknown) => {
+      const data = raw as { status: string; progress?: GenerationProgress }
       const newStatus = data.status
       const newProgress = data.progress
 
@@ -210,38 +209,55 @@ export default function EpisodePage() {
       }
 
       if (newStatus === "complete" || newStatus === "failed") {
-        eventSource.close()
-        loadEpisode() // Reload to get s3_url and updated fields
+        setConnectionStatus("complete")
+        robustESRef.current?.close()
+        stopPollingRef.current?.()
+        loadEpisode()
       }
     }
 
-    eventSource.onerror = () => {
-      eventSource.close()
-      // Fall back to polling when SSE fails
-      const pollInterval = setInterval(() => {
-        fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}`,
-          { headers: getAuthHeaders() }
-        )
-          .then((r) => (r.ok ? r.json() : null))
-          .then((data: Episode | null) => {
-            if (!data) return
-            setEpisode(data)
-            if (data.generation_progress?.progress !== undefined) {
-              setProgress(data.generation_progress.progress)
-            }
-            if (data.generation_status === "complete" || data.generation_status === "failed") {
-              clearInterval(pollInterval)
-            }
-          })
-          .catch(() => {
-            // ignore transient poll errors
-          })
-      }, 3000)
+    const handleFallbackToPolling = () => {
+      console.warn("SSE max retries exceeded — falling back to polling")
+      setConnectionStatus("polling")
+
+      const pollUrl = `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress`
+      const fetchInit: RequestInit = token
+        ? { headers: { Authorization: `Bearer ${token}` } }
+        : {}
+
+      stopPollingRef.current = startPolling({
+        url: pollUrl,
+        fetchInit,
+        interval: 5000,
+        onMessage: handleMessage,
+        onError: (err) => console.error("Polling error:", err),
+        shouldStop: (data: unknown) => {
+          const d = data as { status?: string }
+          return d.status === "complete" || d.status === "failed"
+        },
+      })
     }
 
-    return () => eventSource.close()
-  }, [episode?.generation_status, params.id, session, loadEpisode, getAuthHeaders])
+    robustESRef.current = new RobustEventSource(sseUrl, {
+      onMessage: handleMessage,
+      onError: ({ message, attempt, maxRetries }) => {
+        console.warn(`SSE error: ${message} (attempt ${attempt}/${maxRetries})`)
+      },
+      onFallbackToPolling: handleFallbackToPolling,
+      onStatusChange: setConnectionStatus,
+      maxRetries: 5,
+      retryDelay: 1000,
+    })
+
+    robustESRef.current.connect()
+
+    return () => {
+      robustESRef.current?.close()
+      robustESRef.current = null
+      stopPollingRef.current?.()
+      stopPollingRef.current = null
+    }
+  }, [episode?.generation_status, params.id, session, loadEpisode])
 
   const onSubmitContent = async (data: ContentSourceFormData) => {
     try {
@@ -285,7 +301,6 @@ export default function EpisodePage() {
 
   const generatePodcast = async () => {
     setGenerating(true)
-    setSseError(null)
     setProgress(0)
     setProgressMessage(STATUS_MESSAGES.queued)
     try {
@@ -407,11 +422,8 @@ export default function EpisodePage() {
                 <p className="text-sm text-muted-foreground mt-1">
                   {progressMessage || `${progress}% complete`}
                 </p>
+                <ProgressConnectionStatus status={connectionStatus} />
               </div>
-            )}
-
-            {sseError && (
-              <p className="text-sm text-destructive mb-4">{sseError}</p>
             )}
 
             {episode?.generation_status === "failed" &&
@@ -669,5 +681,30 @@ export default function EpisodePage() {
         </Dialog>
       </div>
     </div>
+  )
+}
+
+interface ProgressConnectionStatusProps {
+  status: ConnectionStatus
+}
+
+function ProgressConnectionStatus({ status }: ProgressConnectionStatusProps) {
+  const statusConfig: Record<ConnectionStatus, { indicator: string; text: string; className: string }> = {
+    connecting: { indicator: "●", text: "Connecting...", className: "text-primary" },
+    connected: { indicator: "●", text: "Connected", className: "text-foreground" },
+    reconnecting: { indicator: "●", text: "Reconnecting...", className: "text-accent-foreground" },
+    error: { indicator: "●", text: "Connection lost, retrying...", className: "text-destructive" },
+    polling: { indicator: "●", text: "Using polling mode", className: "text-accent-foreground" },
+    complete: { indicator: "●", text: "Generation complete", className: "text-foreground" },
+  }
+
+  const config = statusConfig[status]
+  if (!config) return null
+
+  return (
+    <p className={`text-xs mt-1 flex items-center gap-1 ${config.className}`}>
+      <span aria-hidden="true">{config.indicator}</span>
+      {config.text}
+    </p>
   )
 }

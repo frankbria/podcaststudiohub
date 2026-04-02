@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Nunito_Sans } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/components/providers/auth-provider";
+import { ToastProvider } from "@/components/providers/toast-provider";
 import { SkipLink } from "@/components/SkipLink";
 
 const nunitoSans = Nunito_Sans({
@@ -24,6 +25,7 @@ export default function RootLayout({
       <body className={nunitoSans.variable}>
         <SkipLink />
         <AuthProvider>
+          <ToastProvider />
           <main id="main-content">{children}</main>
         </AuthProvider>
       </body>

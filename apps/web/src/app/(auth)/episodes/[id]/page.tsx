@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react"
 import { useRouter, useParams } from "next/navigation"
-import { useSession } from "next-auth/react"
+import { useSession, type Session } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -11,12 +11,23 @@ import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { RobustEventSource, startPolling, ConnectionStatus } from "@/lib/event-source-manager"
 
+interface AuthSession extends Session {
+  accessToken?: string
+}
+
+interface GenerationProgress {
+  progress?: number
+  status?: string
+  stage?: string
+  error_message?: string
+}
+
 interface Episode {
   id: string
   title: string
   description: string | null
   generation_status: string
-  generation_progress: any
+  generation_progress: GenerationProgress
   audio_url: string | null
   project_id: string
 }
@@ -24,7 +35,7 @@ interface Episode {
 interface ContentSource {
   id: string
   source_type: string
-  source_data: any
+  source_data: Record<string, string>
 }
 
 export default function EpisodePage() {
@@ -57,7 +68,7 @@ export default function EpisodePage() {
     ) {
       // EventSource doesn't support custom headers (W3C spec limitation).
       // Pass JWT token as a query parameter so the backend can authenticate the SSE connection.
-      const token = (session as any)?.accessToken
+      const token = (session as AuthSession)?.accessToken
       const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ""
       const sseUrl = `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress${tokenParam}`
 
@@ -125,7 +136,7 @@ export default function EpisodePage() {
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}`, {
         headers: {
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
+          Authorization: `Bearer ${(session as AuthSession)?.accessToken}`,
         },
       })
 
@@ -142,7 +153,7 @@ export default function EpisodePage() {
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/content/episodes/${params.id}/content`, {
         headers: {
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
+          Authorization: `Bearer ${(session as AuthSession)?.accessToken}`,
         },
       })
 
@@ -173,7 +184,7 @@ export default function EpisodePage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
+          Authorization: `Bearer ${(session as AuthSession)?.accessToken}`,
         },
         body: JSON.stringify(body),
       })
@@ -195,7 +206,7 @@ export default function EpisodePage() {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/generate`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
+          Authorization: `Bearer ${(session as AuthSession)?.accessToken}`,
         },
       })
 

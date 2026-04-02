@@ -617,8 +617,35 @@ jobs:
             exit 1
           }
 
-      - name: Squash merge
+      - name: Convert draft to ready
         if: steps.blockers.outputs.blocked == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          IS_DRAFT=$(gh pr view "$PR" --json isDraft --jq '.isDraft')
+          if [[ "$IS_DRAFT" == "true" ]]; then
+            echo "PR #$PR is a draft — converting to ready for review"
+            gh pr ready "$PR"
+          fi
+
+      - name: Check mergeability
+        id: mergecheck
+        if: steps.blockers.outputs.blocked == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR="${{ needs.select-pr.outputs.pr_number }}"
+          MERGEABLE=$(gh pr view "$PR" --json mergeable --jq '.mergeable')
+          echo "mergeable=$MERGEABLE" >> $GITHUB_OUTPUT
+          echo "PR #$PR mergeability: $MERGEABLE"
+          if [[ "$MERGEABLE" == "CONFLICTING" ]]; then
+            echo "::error::PR #$PR has merge conflicts — cannot auto-merge"
+            exit 1
+          fi
+
+      - name: Squash merge
+        if: steps.blockers.outputs.blocked == 'false' && steps.mergecheck.outputs.mergeable != 'CONFLICTING'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -645,13 +672,14 @@ jobs:
 
   # -- Job 6: Handle Failure (retry or refile) --
   refile:
-    needs: [select-pr, fix-reviews, verify]
+    needs: [select-pr, fix-reviews, verify, auto-merge]
     if: >-
       always() &&
       needs.select-pr.outputs.pr_number != '' &&
       (needs.fix-reviews.result == 'failure' ||
        needs.verify.result == 'failure' ||
-       needs.verify.outputs.verification_passed == 'false')
+       needs.verify.outputs.verification_passed == 'false' ||
+       needs.auto-merge.result == 'failure')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -668,10 +696,14 @@ jobs:
           VERIFY_PASSED="${{ needs.verify.outputs.verification_passed }}"
           ROUND="${{ needs.select-pr.outputs.round }}"
 
+          MERGE_RESULT="${{ needs.auto-merge.result }}"
+
           if [[ "$FIX_RESULT" == "failure" ]]; then
             echo "reason=Failed to address review feedback" >> $GITHUB_OUTPUT
           elif [[ "$VERIFY_RESULT" == "failure" || "$VERIFY_PASSED" == "false" ]]; then
             echo "reason=CI verification failed (tests, health checks, or E2E)" >> $GITHUB_OUTPUT
+          elif [[ "$MERGE_RESULT" == "failure" ]]; then
+            echo "reason=Merge failed (likely merge conflicts with main)" >> $GITHUB_OUTPUT
           else
             echo "reason=Unknown failure" >> $GITHUB_OUTPUT
           fi

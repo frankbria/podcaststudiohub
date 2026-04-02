@@ -10,3 +10,6 @@ export const Inbox01Icon = mockIcon
 export const FileEditIcon = mockIcon
 export const MusicNote01Icon = mockIcon
 export const Alert02Icon = mockIcon
+export const AlertCircleIcon = mockIcon
+export const CheckmarkCircle01Icon = mockIcon
+export const LinkIcon = mockIcon

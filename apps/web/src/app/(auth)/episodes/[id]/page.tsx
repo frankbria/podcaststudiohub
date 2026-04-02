@@ -19,6 +19,7 @@ import { AudioPlayerSkeleton } from "@/components/skeletons/AudioPlayerSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { FileEditIcon, Alert02Icon } from "@hugeicons/core-free-icons"
+import { DownloadButton } from "@/components/DownloadButton"
 
 interface GenerationProgress {
   progress?: number
@@ -500,28 +501,12 @@ export default function EpisodePage() {
                 <audio controls className="w-full">
                   <source src={audioUrl} type="audio/mpeg" />
                 </audio>
-                <a
-                  href={`${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}/download`}
-                  download
-                  className="inline-block"
-                >
-                  <Button variant="outline" size="sm">
-                    Download MP3
-                  </Button>
-                </a>
+                <DownloadButton
+                  audioUrl={audioUrl}
+                  episodeTitle={episodeTitle}
+                  isLoading={generating}
+                />
               </div>
-            )}
-
-            {episode?.generation_status === "complete" && !audioUrl && (
-              <a
-                href={`${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}/download`}
-                download
-                className="inline-block mt-4"
-              >
-                <Button variant="outline" size="sm">
-                  Download MP3
-                </Button>
-              </a>
             )}
           </CardContent>
         </Card>

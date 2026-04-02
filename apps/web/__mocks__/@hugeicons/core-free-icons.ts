@@ -19,3 +19,6 @@ export const UserCircle02Icon = mockIcon
 export const Logout01Icon = mockIcon
 export const PencilEdit01Icon = mockIcon
 export const Delete02Icon = mockIcon
+export const Sun01Icon = mockIcon
+export const Moon01Icon = mockIcon
+export const Computer01Icon = mockIcon

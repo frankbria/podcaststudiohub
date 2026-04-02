@@ -1,8 +1,8 @@
 {
   "version": 1,
   "loop": {
-    "last_run_at": "2026-04-02T12:34:05Z",
-    "last_run_result": "success",
+    "last_run_at": "2026-04-02T16:28:38Z",
+    "last_run_result": "failure",
     "last_implemented_issue": 60,
     "active_pr": 203,
     "paused": false,
@@ -11,15 +11,15 @@
   "counters": {
     "prs_today": 3,
     "issues_created_today": 0,
-    "estimated_cost_today_usd": 4,
+    "estimated_cost_today_usd": 5,
     "day_reset_date": "2026-04-02",
     "prs_this_month": 7,
-    "estimated_cost_this_month_usd": 8,
+    "estimated_cost_this_month_usd": 9,
     "month_reset_date": "2026-04"
   },
   "proving": {
     "graduated": false,
-    "consecutive_successes": 1
+    "consecutive_successes": 0
   },
   "phases": {
     "current_phase": "phase-3",
@@ -30,7 +30,7 @@
   },
   "feedback": {
     "consecutive_rejected_prs": 0,
-    "consecutive_ci_failures": 0
+    "consecutive_ci_failures": 1
   },
   "history": [
     {
@@ -718,6 +718,13 @@
       "result": "success",
       "cost_usd": 1.00,
       "at": "2026-04-02T12:34:05Z"
+    },
+    {
+      "issue": 60,
+      "pr": null,
+      "result": "failure",
+      "cost_usd": 1.00,
+      "at": "2026-04-02T16:28:38Z"
     }
   ]
 }

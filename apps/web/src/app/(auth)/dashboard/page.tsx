@@ -143,8 +143,17 @@ export default function DashboardPage() {
             {projects.map((project) => (
               <Card
                 key={project.id}
-                className="cursor-pointer hover:shadow-lg transition-shadow"
+                className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                role="button"
+                tabIndex={0}
+                aria-label={`Open project: ${project.title}`}
                 onClick={() => router.push(`/projects/${project.id}`)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    router.push(`/projects/${project.id}`)
+                  }
+                }}
               >
                 <CardHeader>
                   <CardTitle>{project.title}</CardTitle>

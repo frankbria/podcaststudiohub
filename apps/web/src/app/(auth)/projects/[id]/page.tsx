@@ -6,7 +6,7 @@ import { useSession, type Session } from "next-auth/react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -152,7 +152,10 @@ export default function ProjectPage() {
     }
 
     return (
-      <span className={`px-2 py-1 rounded text-xs ${colors[status as keyof typeof colors] || colors.draft}`}>
+      <span
+        className={`px-2 py-1 rounded text-xs ${colors[status as keyof typeof colors] || colors.draft}`}
+        aria-label={`Status: ${status}`}
+      >
         {status}
       </span>
     )
@@ -200,8 +203,17 @@ export default function ProjectPage() {
             {episodes.map((episode) => (
               <Card
                 key={episode.id}
-                className="cursor-pointer hover:shadow-lg transition-shadow"
+                className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                role="button"
+                tabIndex={0}
+                aria-label={`Open episode: ${episode.title}`}
                 onClick={() => router.push(`/episodes/${episode.id}`)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault()
+                    router.push(`/episodes/${episode.id}`)
+                  }
+                }}
               >
                 <CardHeader>
                   <div className="flex justify-between items-start">

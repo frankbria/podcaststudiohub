@@ -58,11 +58,9 @@ describe('EmptyState', () => {
 	})
 
 	it('does not render icon container when no icon is provided', () => {
-		const { container } = render(
+		render(
 			<EmptyState title="No projects" description="Nothing here" />
 		)
-		// No icon wrapper div should be present
-		const iconWrappers = container.querySelectorAll('.mb-4')
-		expect(iconWrappers.length).toBe(0)
+		expect(screen.queryByTestId('icon-container')).not.toBeInTheDocument()
 	})
 })

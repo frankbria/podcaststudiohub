@@ -1,13 +1,16 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
-import { useSession } from "next-auth/react"
+import { useSession, type Session } from "next-auth/react"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { projectSchema, type ProjectFormData } from "@/lib/validation"
 
 interface Project {
   id: string
@@ -23,8 +26,38 @@ export default function DashboardPage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [newProjectTitle, setNewProjectTitle] = useState("")
-  const [newProjectDescription, setNewProjectDescription] = useState("")
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting, isValid },
+    reset,
+  } = useForm<ProjectFormData>({
+    resolver: zodResolver(projectSchema),
+    mode: "onChange",
+  })
+
+  const getToken = useCallback(
+    () => (session as Session & { accessToken?: string })?.accessToken ?? "",
+    [session]
+  )
+
+  const loadProjects = useCallback(async () => {
+    try {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      })
+
+      if (response.ok) {
+        const data = await response.json() as { items?: Project[] }
+        setProjects(data.items ?? [])
+      }
+    } catch (error) {
+      console.error("Failed to load projects:", error)
+    } finally {
+      setLoading(false)
+    }
+  }, [getToken])
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -32,38 +65,19 @@ export default function DashboardPage() {
     } else if (status === "authenticated") {
       loadProjects()
     }
-  }, [status])
+  }, [status, router, loadProjects])
 
-  const loadProjects = async () => {
-    try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects`, {
-        headers: {
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
-      })
-
-      if (response.ok) {
-        const data = await response.json()
-        setProjects(data.items || [])
-      }
-    } catch (error) {
-      console.error("Failed to load projects:", error)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const createProject = async () => {
+  const onSubmit = async (data: ProjectFormData) => {
     try {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
+          Authorization: `Bearer ${getToken()}`,
         },
         body: JSON.stringify({
-          title: newProjectTitle,
-          description: newProjectDescription,
+          title: data.title.trim(),
+          description: data.description?.trim() || null,
           podcast_metadata: {
             language: "en",
             explicit: false,
@@ -73,12 +87,18 @@ export default function DashboardPage() {
 
       if (response.ok) {
         setShowCreateDialog(false)
-        setNewProjectTitle("")
-        setNewProjectDescription("")
+        reset()
         loadProjects()
       }
     } catch (error) {
       console.error("Failed to create project:", error)
+    }
+  }
+
+  const handleDialogOpenChange = (open: boolean) => {
+    setShowCreateDialog(open)
+    if (!open) {
+      reset()
     }
   }
 
@@ -129,7 +149,7 @@ export default function DashboardPage() {
           )}
         </div>
 
-        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <Dialog open={showCreateDialog} onOpenChange={handleDialogOpenChange}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create New Project</DialogTitle>
@@ -137,27 +157,50 @@ export default function DashboardPage() {
                 Create a new podcast project to organize your episodes
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 mt-4">
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 mt-4" noValidate>
               <div>
-                <Label className="mb-1">Project Title</Label>
+                <Label htmlFor="project-title" className="mb-1">
+                  Project Title <span className="text-destructive">*</span>
+                </Label>
                 <Input
-                  value={newProjectTitle}
-                  onChange={(e) => setNewProjectTitle(e.target.value)}
+                  id="project-title"
+                  type="text"
                   placeholder="My Podcast"
+                  aria-invalid={errors.title ? "true" : "false"}
+                  aria-describedby={errors.title ? "project-title-error" : undefined}
+                  {...register("title")}
+                  className={errors.title ? "border-destructive" : ""}
                 />
+                {errors.title && (
+                  <p id="project-title-error" className="text-destructive text-sm mt-1" role="alert">
+                    {errors.title.message}
+                  </p>
+                )}
               </div>
               <div>
-                <Label className="mb-1">Description</Label>
+                <Label htmlFor="project-description" className="mb-1">Description</Label>
                 <Input
-                  value={newProjectDescription}
-                  onChange={(e) => setNewProjectDescription(e.target.value)}
+                  id="project-description"
+                  type="text"
                   placeholder="A brief description of your podcast"
+                  aria-describedby={errors.description ? "project-description-error" : undefined}
+                  {...register("description")}
                 />
+                {errors.description && (
+                  <p id="project-description-error" className="text-destructive text-sm mt-1" role="alert">
+                    {errors.description.message}
+                  </p>
+                )}
+                <p className="text-muted-foreground text-xs mt-1">Max 1000 characters</p>
               </div>
-              <Button onClick={createProject} className="w-full">
-                Create Project
+              <Button
+                type="submit"
+                disabled={isSubmitting || !isValid}
+                className="w-full"
+              >
+                {isSubmitting ? "Creating..." : "Create Project"}
               </Button>
-            </div>
+            </form>
           </DialogContent>
         </Dialog>
       </div>

@@ -69,8 +69,8 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       // Initial sign in
       if (user) {
-        token.accessToken = (user as any).accessToken;
-        token.tenantId = (user as any).tenantId;
+        token.accessToken = (user as AuthUser).accessToken;
+        token.tenantId = (user as AuthUser).tenantId;
         token.userId = user.id;
       }
       return token;
@@ -78,8 +78,8 @@ export const authOptions: NextAuthOptions = {
     async session({ session, token }) {
       // Send properties to the client
       session.user.id = token.userId as string;
-      (session.user as any).tenantId = token.tenantId as string;
-      (session as any).accessToken = token.accessToken as string;
+      (session.user as typeof session.user & { tenantId: string }).tenantId = token.tenantId as string;
+      (session as typeof session & { accessToken: string }).accessToken = token.accessToken as string;
       return session;
     },
   },

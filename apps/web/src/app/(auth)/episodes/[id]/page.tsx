@@ -376,13 +376,20 @@ export default function EpisodePage() {
           <CardContent>
             {isActiveStatus && (
               <div className="mb-4">
-                <div className="w-full bg-muted rounded-full h-2.5">
+                <div
+                  role="progressbar"
+                  aria-valuenow={progress}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="Generation progress"
+                  className="w-full bg-muted rounded-full h-2.5"
+                >
                   <div
                     className="bg-primary h-2.5 rounded-full transition-all"
                     style={{ width: `${progress}%` }}
                   ></div>
                 </div>
-                <p className="text-sm text-muted-foreground mt-1">
+                <p className="text-sm text-muted-foreground mt-1" aria-live="polite">
                   {progressMessage || `${progress}% complete`}
                 </p>
               </div>
@@ -401,7 +408,7 @@ export default function EpisodePage() {
 
             {audioUrl && (
               <div className="mt-4 space-y-2">
-                <audio controls className="w-full">
+                <audio controls className="w-full" aria-label={`Podcast audio: ${episodeTitle}`}>
                   <source src={audioUrl} type="audio/mpeg" />
                 </audio>
                 <a
@@ -441,7 +448,7 @@ export default function EpisodePage() {
             {contentSources.length === 0 ? (
               <p className="text-muted-foreground">No content sources added yet</p>
             ) : (
-              <ul className="space-y-2">
+              <ul className="space-y-2" aria-label="Content sources">
                 {contentSources.map((source) => (
                   <li
                     key={source.id}
@@ -487,15 +494,17 @@ export default function EpisodePage() {
               <DialogDescription>Add content to generate your podcast from</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
-              <div className="flex gap-2">
+              <div className="flex gap-2" role="group" aria-label="Content source type">
                 <Button
                   variant={sourceType === "url" ? "default" : "outline"}
+                  aria-pressed={sourceType === "url"}
                   onClick={() => setSourceType("url")}
                 >
                   URL
                 </Button>
                 <Button
                   variant={sourceType === "text" ? "default" : "outline"}
+                  aria-pressed={sourceType === "text"}
                   onClick={() => setSourceType("text")}
                 >
                   Text
@@ -504,21 +513,25 @@ export default function EpisodePage() {
 
               {sourceType === "url" ? (
                 <div>
-                  <Label className="mb-1">URL</Label>
+                  <Label htmlFor="content-url" className="mb-1">URL</Label>
                   <Input
+                    id="content-url"
                     value={contentUrl}
                     onChange={(e) => setContentUrl(e.target.value)}
                     placeholder="https://example.com/article"
+                    aria-required="true"
                   />
                 </div>
               ) : (
                 <div>
-                  <Label className="mb-1">Text Content</Label>
+                  <Label htmlFor="content-text" className="mb-1">Text Content</Label>
                   <Textarea
+                    id="content-text"
                     className="h-32"
                     value={textContent}
                     onChange={(e) => setTextContent(e.target.value)}
                     placeholder="Enter your content here..."
+                    aria-required="true"
                   />
                 </div>
               )}
@@ -542,12 +555,12 @@ export default function EpisodePage() {
             <div className="space-y-4 mt-4">
               {ttsConfigs.length > 0 && (
                 <div>
-                  <Label className="mb-1">Saved Configurations</Label>
+                  <Label htmlFor="tts-config-select" className="mb-1">Saved Configurations</Label>
                   <Select
                     value={selectedTtsConfigId}
                     onValueChange={setSelectedTtsConfigId}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id="tts-config-select" aria-label="Select a saved TTS configuration">
                       <SelectValue placeholder="Select a configuration" />
                     </SelectTrigger>
                     <SelectContent>
@@ -566,17 +579,19 @@ export default function EpisodePage() {
               <div className="border rounded p-3 space-y-3">
                 <p className="text-sm font-medium">Create New Configuration</p>
                 <div>
-                  <Label className="mb-1">Name</Label>
+                  <Label htmlFor="new-tts-name" className="mb-1">Name</Label>
                   <Input
+                    id="new-tts-name"
                     value={newTtsName}
                     onChange={(e) => setNewTtsName(e.target.value)}
                     placeholder="My ElevenLabs Config"
+                    aria-required="true"
                   />
                 </div>
                 <div>
-                  <Label className="mb-1">Provider</Label>
+                  <Label htmlFor="new-tts-provider" className="mb-1">Provider</Label>
                   <Select value={newTtsProvider} onValueChange={setNewTtsProvider}>
-                    <SelectTrigger>
+                    <SelectTrigger id="new-tts-provider" aria-label="Select TTS provider">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

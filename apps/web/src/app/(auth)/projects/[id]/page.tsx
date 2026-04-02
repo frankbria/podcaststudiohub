@@ -118,7 +118,10 @@ export default function ProjectPage() {
     }
 
     return (
-      <span className={`px-2 py-1 rounded text-xs ${colors[status as keyof typeof colors] || colors.draft}`}>
+      <span
+        className={`px-2 py-1 rounded text-xs ${colors[status as keyof typeof colors] || colors.draft}`}
+        aria-label={`Status: ${status}`}
+      >
         {status}
       </span>
     )
@@ -149,8 +152,17 @@ export default function ProjectPage() {
           {episodes.map((episode) => (
             <Card
               key={episode.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
+              className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              role="button"
+              tabIndex={0}
+              aria-label={`Open episode: ${episode.title}`}
               onClick={() => router.push(`/episodes/${episode.id}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  router.push(`/episodes/${episode.id}`)
+                }
+              }}
             >
               <CardHeader>
                 <div className="flex justify-between items-start">
@@ -186,11 +198,13 @@ export default function ProjectPage() {
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div>
-                <Label className="mb-1">Episode Title</Label>
+                <Label htmlFor="new-episode-title" className="mb-1">Episode Title</Label>
                 <Input
+                  id="new-episode-title"
                   value={newEpisodeTitle}
                   onChange={(e) => setNewEpisodeTitle(e.target.value)}
                   placeholder="Episode 1: Introduction"
+                  aria-required="true"
                 />
               </div>
               <Button onClick={createEpisode} className="w-full">

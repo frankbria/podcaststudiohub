@@ -103,8 +103,17 @@ export default function DashboardPage() {
           {projects.map((project) => (
             <Card
               key={project.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
+              className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              role="button"
+              tabIndex={0}
+              aria-label={`Open project: ${project.title}`}
               onClick={() => router.push(`/projects/${project.id}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  router.push(`/projects/${project.id}`)
+                }
+              }}
             >
               <CardHeader>
                 <CardTitle>{project.title}</CardTitle>
@@ -142,16 +151,19 @@ export default function DashboardPage() {
             </DialogHeader>
             <div className="space-y-4 mt-4">
               <div>
-                <Label className="mb-1">Project Title</Label>
+                <Label htmlFor="new-project-title" className="mb-1">Project Title</Label>
                 <Input
+                  id="new-project-title"
                   value={newProjectTitle}
                   onChange={(e) => setNewProjectTitle(e.target.value)}
                   placeholder="My Podcast"
+                  aria-required="true"
                 />
               </div>
               <div>
-                <Label className="mb-1">Description</Label>
+                <Label htmlFor="new-project-description" className="mb-1">Description</Label>
                 <Input
+                  id="new-project-description"
                   value={newProjectDescription}
                   onChange={(e) => setNewProjectDescription(e.target.value)}
                   placeholder="A brief description of your podcast"

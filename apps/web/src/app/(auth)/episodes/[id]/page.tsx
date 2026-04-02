@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession, type Session } from "next-auth/react"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -10,6 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { contentSourceSchema, type ContentSourceFormData } from "@/lib/validation"
 
 interface GenerationProgress {
   progress?: number
@@ -76,9 +79,6 @@ export default function EpisodePage() {
   const [contentSources, setContentSources] = useState<ContentSource[]>([])
   const [showAddContentDialog, setShowAddContentDialog] = useState(false)
   const [showTTSDialog, setShowTTSDialog] = useState(false)
-  const [contentUrl, setContentUrl] = useState("")
-  const [textContent, setTextContent] = useState("")
-  const [sourceType, setSourceType] = useState<"url" | "text">("url")
   const [generating, setGenerating] = useState(false)
   const [progress, setProgress] = useState(0)
   const [progressMessage, setProgressMessage] = useState("")
@@ -147,6 +147,23 @@ export default function EpisodePage() {
       console.error("Failed to load TTS configs:", error)
     }
   }, [getAuthHeaders])
+
+  const {
+    register,
+    handleSubmit,
+    watch,
+    setValue,
+    formState: { errors, isSubmitting, isValid },
+    reset,
+  } = useForm<ContentSourceFormData>({
+    resolver: zodResolver(contentSourceSchema),
+    mode: "onChange",
+    defaultValues: {
+      sourceType: "url",
+    },
+  })
+
+  const sourceType = watch("sourceType")
 
   useEffect(() => {
     if (session) {
@@ -226,20 +243,19 @@ export default function EpisodePage() {
     return () => eventSource.close()
   }, [episode?.generation_status, params.id, session, loadEpisode, getAuthHeaders])
 
-  const addContentSource = async () => {
+  const onSubmitContent = async (data: ContentSourceFormData) => {
     try {
-      const body =
-        sourceType === "url"
-          ? {
-              episode_id: params.id,
-              source_type: "url",
-              source_data: { url: contentUrl, title: "Web Article" },
-            }
-          : {
-              episode_id: params.id,
-              source_type: "text",
-              source_data: { content: textContent, title: "Custom Text" },
-            }
+      const body = data.sourceType === "url"
+        ? {
+            episode_id: params.id,
+            source_type: "url",
+            source_data: { url: data.url, title: "Web Article" },
+          }
+        : {
+            episode_id: params.id,
+            source_type: "text",
+            source_data: { content: data.content, title: "Custom Text" },
+          }
 
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/content/episodes/${params.id}/content`,
@@ -252,12 +268,18 @@ export default function EpisodePage() {
 
       if (response.ok) {
         setShowAddContentDialog(false)
-        setContentUrl("")
-        setTextContent("")
+        reset()
         loadContentSources()
       }
     } catch (error) {
       console.error("Failed to add content source:", error)
+    }
+  }
+
+  const handleDialogOpenChange = (open: boolean) => {
+    setShowAddContentDialog(open)
+    if (!open) {
+      reset()
     }
   }
 
@@ -480,53 +502,94 @@ export default function EpisodePage() {
         </Button>
 
         {/* Add Content Dialog */}
-        <Dialog open={showAddContentDialog} onOpenChange={setShowAddContentDialog}>
+        <Dialog open={showAddContentDialog} onOpenChange={handleDialogOpenChange}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Add Content Source</DialogTitle>
               <DialogDescription>Add content to generate your podcast from</DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 mt-4">
-              <div className="flex gap-2">
-                <Button
-                  variant={sourceType === "url" ? "default" : "outline"}
-                  onClick={() => setSourceType("url")}
-                >
-                  URL
-                </Button>
-                <Button
-                  variant={sourceType === "text" ? "default" : "outline"}
-                  onClick={() => setSourceType("text")}
-                >
-                  Text
-                </Button>
+            <form onSubmit={handleSubmit(onSubmitContent)} className="space-y-4 mt-4" noValidate>
+              <div>
+                <Label className="mb-2">Content Type</Label>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant={sourceType === "url" ? "default" : "outline"}
+                    onClick={() => {
+                      setValue("sourceType", "url", { shouldValidate: true })
+                    }}
+                    className="flex-1"
+                  >
+                    URL
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={sourceType === "text" ? "default" : "outline"}
+                    onClick={() => {
+                      setValue("sourceType", "text", { shouldValidate: true })
+                    }}
+                    className="flex-1"
+                  >
+                    Text
+                  </Button>
+                </div>
               </div>
 
               {sourceType === "url" ? (
                 <div>
-                  <Label className="mb-1">URL</Label>
+                  <Label htmlFor="content-url" className="mb-1">
+                    URL <span className="text-destructive">*</span>
+                  </Label>
                   <Input
-                    value={contentUrl}
-                    onChange={(e) => setContentUrl(e.target.value)}
+                    id="content-url"
+                    type="url"
                     placeholder="https://example.com/article"
+                    aria-invalid={errors.url ? "true" : "false"}
+                    aria-describedby={errors.url ? "content-url-error" : undefined}
+                    {...register("url")}
+                    className={errors.url ? "border-destructive" : ""}
                   />
+                  {errors.url && (
+                    <p id="content-url-error" className="text-destructive text-sm mt-1" role="alert">
+                      {errors.url.message}
+                    </p>
+                  )}
+                  <p className="text-muted-foreground text-xs mt-1">
+                    Supports HTTP, HTTPS, and YouTube URLs
+                  </p>
                 </div>
               ) : (
                 <div>
-                  <Label className="mb-1">Text Content</Label>
+                  <Label htmlFor="content-text" className="mb-1">
+                    Text Content <span className="text-destructive">*</span>
+                  </Label>
                   <Textarea
-                    className="h-32"
-                    value={textContent}
-                    onChange={(e) => setTextContent(e.target.value)}
+                    id="content-text"
+                    className={`h-32 ${errors.content ? "border-destructive" : ""}`}
                     placeholder="Enter your content here..."
+                    aria-invalid={errors.content ? "true" : "false"}
+                    aria-describedby={errors.content ? "content-text-error" : undefined}
+                    {...register("content")}
                   />
+                  {errors.content && (
+                    <p id="content-text-error" className="text-destructive text-sm mt-1" role="alert">
+                      {errors.content.message}
+                    </p>
+                  )}
+                  <p className="text-muted-foreground text-xs mt-1">
+                    10 – 50,000 characters
+                  </p>
                 </div>
               )}
 
-              <Button onClick={addContentSource} className="w-full">
-                Add Content
+              <Button
+                type="submit"
+                disabled={isSubmitting || !isValid}
+                className="w-full"
+              >
+                {isSubmitting ? "Adding..." : "Add Content"}
               </Button>
-            </div>
+            </form>
           </DialogContent>
         </Dialog>
 

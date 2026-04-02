@@ -3,11 +3,14 @@
 import { useState, useEffect, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession, type Session } from "next-auth/react"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { episodeSchema, type EpisodeFormData } from "@/lib/validation"
 
 interface Episode {
   id: string
@@ -31,7 +34,16 @@ export default function ProjectPage() {
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [newEpisodeTitle, setNewEpisodeTitle] = useState("")
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting, isValid },
+    reset,
+  } = useForm<EpisodeFormData>({
+    resolver: zodResolver(episodeSchema),
+    mode: "onChange",
+  })
 
   const getToken = useCallback(
     () => (session as Session & { accessToken?: string })?.accessToken ?? "",
@@ -77,7 +89,7 @@ export default function ProjectPage() {
     }
   }, [session, loadProject, loadEpisodes])
 
-  const createEpisode = async () => {
+  const onSubmit = async (data: EpisodeFormData) => {
     try {
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`,
@@ -89,7 +101,7 @@ export default function ProjectPage() {
           },
           body: JSON.stringify({
             project_id: params.id,
-            title: newEpisodeTitle,
+            title: data.title.trim(),
           }),
         }
       )
@@ -97,12 +109,19 @@ export default function ProjectPage() {
       if (response.ok) {
         const episode = await response.json() as Episode
         setShowCreateDialog(false)
-        setNewEpisodeTitle("")
+        reset()
         // Navigate to episode page to add content and generate
         router.push(`/episodes/${episode.id}`)
       }
     } catch (error) {
       console.error("Failed to create episode:", error)
+    }
+  }
+
+  const handleDialogOpenChange = (open: boolean) => {
+    setShowCreateDialog(open)
+    if (!open) {
+      reset()
     }
   }
 
@@ -176,7 +195,7 @@ export default function ProjectPage() {
           )}
         </div>
 
-        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <Dialog open={showCreateDialog} onOpenChange={handleDialogOpenChange}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create New Episode</DialogTitle>
@@ -184,19 +203,34 @@ export default function ProjectPage() {
                 Create a new podcast episode
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 mt-4">
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 mt-4" noValidate>
               <div>
-                <Label className="mb-1">Episode Title</Label>
+                <Label htmlFor="episode-title" className="mb-1">
+                  Episode Title <span className="text-destructive">*</span>
+                </Label>
                 <Input
-                  value={newEpisodeTitle}
-                  onChange={(e) => setNewEpisodeTitle(e.target.value)}
+                  id="episode-title"
+                  type="text"
                   placeholder="Episode 1: Introduction"
+                  aria-invalid={errors.title ? "true" : "false"}
+                  aria-describedby={errors.title ? "episode-title-error" : undefined}
+                  {...register("title")}
+                  className={errors.title ? "border-destructive" : ""}
                 />
+                {errors.title && (
+                  <p id="episode-title-error" className="text-destructive text-sm mt-1" role="alert">
+                    {errors.title.message}
+                  </p>
+                )}
               </div>
-              <Button onClick={createEpisode} className="w-full">
-                Create Episode
+              <Button
+                type="submit"
+                disabled={isSubmitting || !isValid}
+                className="w-full"
+              >
+                {isSubmitting ? "Creating..." : "Create Episode"}
               </Button>
-            </div>
+            </form>
           </DialogContent>
         </Dialog>
       </div>

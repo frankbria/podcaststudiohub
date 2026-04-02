@@ -17,8 +17,9 @@ import { showSuccessToast, showErrorToast } from "@/lib/toast"
 import { RobustEventSource, startPolling, ConnectionStatus } from "@/lib/event-source-manager"
 import { AudioPlayerSkeleton } from "@/components/skeletons/AudioPlayerSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
+import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { FileEditIcon, Alert02Icon } from "@hugeicons/core-free-icons"
+import { FileEditIcon, Alert02Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 import { DownloadButton } from "@/components/DownloadButton"
 
 interface GenerationProgress {
@@ -87,6 +88,8 @@ export default function EpisodePage() {
   const [contentSources, setContentSources] = useState<ContentSource[]>([])
   const [showAddContentDialog, setShowAddContentDialog] = useState(false)
   const [showTTSDialog, setShowTTSDialog] = useState(false)
+  const [deleteContentSource, setDeleteContentSource] = useState<ContentSource | null>(null)
+  const [isDeletingContent, setIsDeletingContent] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [progress, setProgress] = useState(0)
   const [progressMessage, setProgressMessage] = useState("")
@@ -319,6 +322,33 @@ export default function EpisodePage() {
     setShowAddContentDialog(open)
     if (!open) {
       reset()
+    }
+  }
+
+  const handleConfirmDeleteContent = async () => {
+    if (!deleteContentSource) return
+    setIsDeletingContent(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/content/${deleteContentSource.id}`,
+        {
+          method: "DELETE",
+          headers: getAuthHeaders(),
+        }
+      )
+
+      if (response.ok) {
+        showSuccessToast("Content source deleted")
+        setDeleteContentSource(null)
+        setContentSources((prev) => prev.filter((s) => s.id !== deleteContentSource.id))
+      } else {
+        showErrorToast("Failed to delete content source: " + response.statusText)
+      }
+    } catch (error) {
+      console.error("Failed to delete content source:", error)
+      showErrorToast("Failed to delete content source: Network error")
+    } finally {
+      setIsDeletingContent(false)
     }
   }
 
@@ -559,6 +589,14 @@ export default function EpisodePage() {
                         </p>
                       )}
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Delete content source"
+                      onClick={() => setDeleteContentSource(source)}
+                    >
+                      <HugeiconsIcon icon={Delete02Icon} size={16} />
+                    </Button>
                   </li>
                 ))}
               </ul>
@@ -745,6 +783,22 @@ export default function EpisodePage() {
             </div>
           </DialogContent>
         </Dialog>
+
+        {deleteContentSource && (
+          <ConfirmDeleteDialog
+            open={!!deleteContentSource}
+            onOpenChange={(open) => { if (!open) setDeleteContentSource(null) }}
+            title="Delete Content Source?"
+            description="This will permanently remove this content source from the episode."
+            entityName={
+              deleteContentSource.source_type === "url"
+                ? (deleteContentSource.source_data.url ?? "content source")
+                : "text content"
+            }
+            isLoading={isDeletingContent}
+            onConfirm={handleConfirmDeleteContent}
+          />
+        )}
       </div>
     </div>
   )

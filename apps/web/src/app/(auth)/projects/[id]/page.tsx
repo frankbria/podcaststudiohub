@@ -14,8 +14,11 @@ import { episodeSchema, type EpisodeFormData } from "@/lib/validation"
 import { showSuccessToast, showErrorToast } from "@/lib/toast"
 import { EpisodeListSkeleton } from "@/components/skeletons/EpisodeListSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
+import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
+import { EditProjectDialog } from "@/components/dialogs/EditProjectDialog"
+import { EditEpisodeDialog } from "@/components/dialogs/EditEpisodeDialog"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Inbox01Icon } from "@hugeicons/core-free-icons"
+import { Inbox01Icon, PencilEdit01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 
 interface Episode {
   id: string
@@ -39,6 +42,10 @@ export default function ProjectPage() {
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [showEditProject, setShowEditProject] = useState(false)
+  const [editEpisode, setEditEpisode] = useState<Episode | null>(null)
+  const [deleteEpisode, setDeleteEpisode] = useState<Episode | null>(null)
+  const [isDeletingEpisode, setIsDeletingEpisode] = useState(false)
 
   const {
     register,
@@ -122,7 +129,6 @@ export default function ProjectPage() {
         const episode = await response.json() as Episode
         setShowCreateDialog(false)
         reset()
-        // Navigate to episode page to add content and generate
         router.push(`/episodes/${episode.id}`)
       } else {
         showErrorToast("Failed to create episode: " + response.statusText)
@@ -137,6 +143,92 @@ export default function ProjectPage() {
     setShowCreateDialog(open)
     if (!open) {
       reset()
+    }
+  }
+
+  const handleUpdateProject = async (updated: Project) => {
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/projects/${updated.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${getToken()}`,
+          },
+          body: JSON.stringify({
+            title: updated.title,
+            description: updated.description,
+          }),
+        }
+      )
+
+      if (response.ok) {
+        showSuccessToast("Project updated")
+        setShowEditProject(false)
+        setProject(updated)
+      } else {
+        showErrorToast("Failed to update project: " + response.statusText)
+      }
+    } catch (error) {
+      console.error("Failed to update project:", error)
+      showErrorToast("Failed to update project: Network error")
+    }
+  }
+
+  const handleUpdateEpisode = async (updated: Episode) => {
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/${updated.id}`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${getToken()}`,
+          },
+          body: JSON.stringify({ title: updated.title }),
+        }
+      )
+
+      if (response.ok) {
+        showSuccessToast("Episode updated")
+        setEditEpisode(null)
+        setEpisodes((prev) =>
+          prev.map((e) => (e.id === updated.id ? { ...e, title: updated.title } : e))
+        )
+      } else {
+        showErrorToast("Failed to update episode: " + response.statusText)
+      }
+    } catch (error) {
+      console.error("Failed to update episode:", error)
+      showErrorToast("Failed to update episode: Network error")
+    }
+  }
+
+  const handleConfirmDeleteEpisode = async () => {
+    if (!deleteEpisode) return
+    setIsDeletingEpisode(true)
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/${deleteEpisode.id}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${getToken()}` },
+        }
+      )
+
+      if (response.ok) {
+        showSuccessToast("Episode deleted successfully")
+        setDeleteEpisode(null)
+        setEpisodes((prev) => prev.filter((e) => e.id !== deleteEpisode.id))
+      } else {
+        showErrorToast("Failed to delete episode: " + response.statusText)
+      }
+    } catch (error) {
+      console.error("Failed to delete episode:", error)
+      showErrorToast("Failed to delete episode: Network error")
+    } finally {
+      setIsDeletingEpisode(false)
     }
   }
 
@@ -179,9 +271,21 @@ export default function ProjectPage() {
         </Button>
 
         <div className="flex justify-between items-center mb-8">
-          <div>
-            <h1 className="text-3xl font-bold">{project?.title}</h1>
-            <p className="text-muted-foreground mt-1">{project?.description}</p>
+          <div className="flex items-center gap-2">
+            <div>
+              <h1 className="text-3xl font-bold">{project?.title}</h1>
+              <p className="text-muted-foreground mt-1">{project?.description}</p>
+            </div>
+            {project && (
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Edit project"
+                onClick={() => setShowEditProject(true)}
+              >
+                <HugeiconsIcon icon={PencilEdit01Icon} size={16} />
+              </Button>
+            )}
           </div>
           <Button onClick={() => setShowCreateDialog(true)}>
             Create Episode
@@ -221,7 +325,25 @@ export default function ProjectPage() {
                       <CardTitle>{episode.title}</CardTitle>
                       <CardDescription>{episode.description || "No description"}</CardDescription>
                     </div>
-                    {getStatusBadge(episode.generation_status)}
+                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                      {getStatusBadge(episode.generation_status)}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Edit ${episode.title}`}
+                        onClick={() => setEditEpisode(episode)}
+                      >
+                        <HugeiconsIcon icon={PencilEdit01Icon} size={16} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Delete ${episode.title}`}
+                        onClick={() => setDeleteEpisode(episode)}
+                      >
+                        <HugeiconsIcon icon={Delete02Icon} size={16} />
+                      </Button>
+                    </div>
                   </div>
                 </CardHeader>
               </Card>
@@ -267,6 +389,36 @@ export default function ProjectPage() {
             </form>
           </DialogContent>
         </Dialog>
+
+        {project && (
+          <EditProjectDialog
+            open={showEditProject}
+            onOpenChange={(open) => setShowEditProject(open)}
+            project={project}
+            onUpdate={handleUpdateProject}
+          />
+        )}
+
+        {editEpisode && (
+          <EditEpisodeDialog
+            open={!!editEpisode}
+            onOpenChange={(open) => { if (!open) setEditEpisode(null) }}
+            episode={editEpisode}
+            onUpdate={handleUpdateEpisode}
+          />
+        )}
+
+        {deleteEpisode && (
+          <ConfirmDeleteDialog
+            open={!!deleteEpisode}
+            onOpenChange={(open) => { if (!open) setDeleteEpisode(null) }}
+            title="Delete Episode?"
+            description="This will permanently delete the episode and all its content."
+            entityName={deleteEpisode.title}
+            isLoading={isDeletingEpisode}
+            onConfirm={handleConfirmDeleteEpisode}
+          />
+        )}
       </div>
     </div>
   )

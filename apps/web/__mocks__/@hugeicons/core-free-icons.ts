@@ -17,3 +17,5 @@ export const Download01Icon = mockIcon
 export const Loading03Icon = mockIcon
 export const UserCircle02Icon = mockIcon
 export const Logout01Icon = mockIcon
+export const PencilEdit01Icon = mockIcon
+export const Delete02Icon = mockIcon

@@ -15,3 +15,5 @@ export const CheckmarkCircle01Icon = mockIcon
 export const LinkIcon = mockIcon
 export const Download01Icon = mockIcon
 export const Loading03Icon = mockIcon
+export const UserCircle02Icon = mockIcon
+export const Logout01Icon = mockIcon

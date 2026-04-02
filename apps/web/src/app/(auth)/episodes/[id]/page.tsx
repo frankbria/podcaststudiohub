@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { contentSourceSchema, type ContentSourceFormData } from "@/lib/validation"
+import { showSuccessToast, showErrorToast } from "@/lib/toast"
 import { RobustEventSource, startPolling, ConnectionStatus } from "@/lib/event-source-manager"
 import { AudioPlayerSkeleton } from "@/components/skeletons/AudioPlayerSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
@@ -117,9 +118,12 @@ export default function EpisodePage() {
         if (data.generation_progress?.progress !== undefined) {
           setProgress(data.generation_progress.progress)
         }
+      } else {
+        showErrorToast("Failed to load episode")
       }
     } catch (error) {
       console.error("Failed to load episode:", error)
+      showErrorToast("Failed to load episode: Network error")
     } finally {
       setLoading(false)
     }
@@ -215,10 +219,17 @@ export default function EpisodePage() {
         setProgressMessage(STATUS_MESSAGES[newStatus])
       }
 
-      if (newStatus === "complete" || newStatus === "failed") {
+      if (newStatus === "complete") {
         setConnectionStatus("complete")
         robustESRef.current?.close()
         stopPollingRef.current?.()
+        showSuccessToast("Podcast generated successfully")
+        loadEpisode()
+      } else if (newStatus === "failed") {
+        setConnectionStatus("complete")
+        robustESRef.current?.close()
+        stopPollingRef.current?.()
+        showErrorToast("Podcast generation failed")
         loadEpisode()
       }
     }
@@ -290,12 +301,16 @@ export default function EpisodePage() {
       )
 
       if (response.ok) {
+        showSuccessToast("Content source added")
         setShowAddContentDialog(false)
         reset()
         loadContentSources()
+      } else {
+        showErrorToast("Failed to add content source: " + response.statusText)
       }
     } catch (error) {
       console.error("Failed to add content source:", error)
+      showErrorToast("Failed to add content source: Network error")
     }
   }
 
@@ -316,10 +331,14 @@ export default function EpisodePage() {
         { method: "POST", headers: getAuthHeaders() }
       )
       if (response.ok) {
+        showSuccessToast("Podcast generation started")
         loadEpisode()
+      } else {
+        showErrorToast("Failed to generate podcast: " + response.statusText)
       }
     } catch (error) {
       console.error("Failed to generate podcast:", error)
+      showErrorToast("Failed to generate podcast: Network error")
     } finally {
       setGenerating(false)
     }
@@ -344,9 +363,13 @@ export default function EpisodePage() {
         setTtsConfigs((prev) => [...prev, newConfig])
         setSelectedTtsConfigId(newConfig.id)
         setNewTtsName("")
+        showSuccessToast("TTS configuration saved")
+      } else {
+        showErrorToast("Failed to save TTS configuration")
       }
     } catch (error) {
       console.error("Failed to create TTS config:", error)
+      showErrorToast("Failed to save TTS configuration: Network error")
     } finally {
       setSavingTts(false)
     }
@@ -360,11 +383,15 @@ export default function EpisodePage() {
         body: JSON.stringify({ tts_config_id: selectedTtsConfigId || null }),
       })
       if (response.ok) {
+        showSuccessToast("TTS settings applied")
         await loadEpisode()
         setShowTTSDialog(false)
+      } else {
+        showErrorToast("Failed to apply TTS settings")
       }
     } catch (error) {
       console.error("Failed to apply TTS config:", error)
+      showErrorToast("Failed to apply TTS settings: Network error")
     }
   }
 

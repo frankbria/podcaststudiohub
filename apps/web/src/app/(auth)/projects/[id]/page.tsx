@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { episodeSchema, type EpisodeFormData } from "@/lib/validation"
+import { showSuccessToast, showErrorToast } from "@/lib/toast"
 import { EpisodeListSkeleton } from "@/components/skeletons/EpisodeListSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -63,9 +64,12 @@ export default function ProjectPage() {
       if (response.ok) {
         const data = await response.json() as Project
         setProject(data)
+      } else {
+        showErrorToast("Failed to load project")
       }
     } catch (error) {
       console.error("Failed to load project:", error)
+      showErrorToast("Failed to load project: Network error")
     } finally {
       setLoading(false)
     }
@@ -80,9 +84,12 @@ export default function ProjectPage() {
       if (response.ok) {
         const data = await response.json() as { items?: Episode[] }
         setEpisodes(data.items ?? [])
+      } else {
+        showErrorToast("Failed to load episodes")
       }
     } catch (error) {
       console.error("Failed to load episodes:", error)
+      showErrorToast("Failed to load episodes: Network error")
     }
   }, [params.id, getToken])
 
@@ -111,14 +118,18 @@ export default function ProjectPage() {
       )
 
       if (response.ok) {
+        showSuccessToast("Episode created successfully")
         const episode = await response.json() as Episode
         setShowCreateDialog(false)
         reset()
         // Navigate to episode page to add content and generate
         router.push(`/episodes/${episode.id}`)
+      } else {
+        showErrorToast("Failed to create episode: " + response.statusText)
       }
     } catch (error) {
       console.error("Failed to create episode:", error)
+      showErrorToast("Failed to create episode: Network error")
     }
   }
 

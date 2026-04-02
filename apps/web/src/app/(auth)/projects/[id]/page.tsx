@@ -1,14 +1,21 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
-import { useSession } from "next-auth/react"
+import { useSession, type Session } from "next-auth/react"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { episodeSchema, type EpisodeFormData } from "@/lib/validation"
 import { showSuccessToast, showErrorToast } from "@/lib/toast"
+import { EpisodeListSkeleton } from "@/components/skeletons/EpisodeListSkeleton"
+import { EmptyState } from "@/components/empty-state/EmptyState"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { Inbox01Icon } from "@hugeicons/core-free-icons"
 
 interface Episode {
   id: string
@@ -32,25 +39,30 @@ export default function ProjectPage() {
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
-  const [newEpisodeTitle, setNewEpisodeTitle] = useState("")
 
-  useEffect(() => {
-    if (session) {
-      loadProject()
-      loadEpisodes()
-    }
-  }, [session, params.id])
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting, isValid },
+    reset,
+  } = useForm<EpisodeFormData>({
+    resolver: zodResolver(episodeSchema),
+    mode: "onChange",
+  })
 
-  const loadProject = async () => {
+  const getToken = useCallback(
+    () => (session as Session & { accessToken?: string })?.accessToken ?? "",
+    [session]
+  )
+
+  const loadProject = useCallback(async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects/${params.id}`, {
-        headers: {
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
-      })
-
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/projects/${params.id}`,
+        { headers: { Authorization: `Bearer ${getToken()}` } }
+      )
       if (response.ok) {
-        const data = await response.json()
+        const data = await response.json() as Project
         setProject(data)
       } else {
         showErrorToast("Failed to load project")
@@ -61,19 +73,17 @@ export default function ProjectPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [params.id, getToken])
 
-  const loadEpisodes = async () => {
+  const loadEpisodes = useCallback(async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`, {
-        headers: {
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
-      })
-
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`,
+        { headers: { Authorization: `Bearer ${getToken()}` } }
+      )
       if (response.ok) {
-        const data = await response.json()
-        setEpisodes(data.items || [])
+        const data = await response.json() as { items?: Episode[] }
+        setEpisodes(data.items ?? [])
       } else {
         showErrorToast("Failed to load episodes")
       }
@@ -81,27 +91,37 @@ export default function ProjectPage() {
       console.error("Failed to load episodes:", error)
       showErrorToast("Failed to load episodes: Network error")
     }
-  }
+  }, [params.id, getToken])
 
-  const createEpisode = async () => {
+  useEffect(() => {
+    if (session) {
+      loadProject()
+      loadEpisodes()
+    }
+  }, [session, loadProject, loadEpisodes])
+
+  const onSubmit = async (data: EpisodeFormData) => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${(session as any)?.accessToken}`,
-        },
-        body: JSON.stringify({
-          project_id: params.id,
-          title: newEpisodeTitle,
-        }),
-      })
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${getToken()}`,
+          },
+          body: JSON.stringify({
+            project_id: params.id,
+            title: data.title.trim(),
+          }),
+        }
+      )
 
       if (response.ok) {
-        const episode = await response.json()
         showSuccessToast("Episode created successfully")
+        const episode = await response.json() as Episode
         setShowCreateDialog(false)
-        setNewEpisodeTitle("")
+        reset()
         // Navigate to episode page to add content and generate
         router.push(`/episodes/${episode.id}`)
       } else {
@@ -110,6 +130,13 @@ export default function ProjectPage() {
     } catch (error) {
       console.error("Failed to create episode:", error)
       showErrorToast("Failed to create episode: Network error")
+    }
+  }
+
+  const handleDialogOpenChange = (open: boolean) => {
+    setShowCreateDialog(open)
+    if (!open) {
+      reset()
     }
   }
 
@@ -132,7 +159,13 @@ export default function ProjectPage() {
   }
 
   if (loading) {
-    return <div className="p-8">Loading...</div>
+    return (
+      <div className="min-h-screen bg-background p-8">
+        <div className="max-w-6xl mx-auto">
+          <EpisodeListSkeleton />
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -152,38 +185,39 @@ export default function ProjectPage() {
           </Button>
         </div>
 
-        <div className="space-y-4">
-          {episodes.map((episode) => (
-            <Card
-              key={episode.id}
-              className="cursor-pointer hover:shadow-lg transition-shadow"
-              onClick={() => router.push(`/episodes/${episode.id}`)}
-            >
-              <CardHeader>
-                <div className="flex justify-between items-start">
-                  <div>
-                    <CardTitle>{episode.title}</CardTitle>
-                    <CardDescription>{episode.description || "No description"}</CardDescription>
+        {episodes.length === 0 ? (
+          <EmptyState
+            icon={<HugeiconsIcon icon={Inbox01Icon} size={64} />}
+            title="No episodes in this project"
+            description="Create an episode to start generating podcasts"
+            action={{
+              label: "Create Episode",
+              onClick: () => setShowCreateDialog(true),
+            }}
+          />
+        ) : (
+          <div className="space-y-4">
+            {episodes.map((episode) => (
+              <Card
+                key={episode.id}
+                className="cursor-pointer hover:shadow-lg transition-shadow"
+                onClick={() => router.push(`/episodes/${episode.id}`)}
+              >
+                <CardHeader>
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <CardTitle>{episode.title}</CardTitle>
+                      <CardDescription>{episode.description || "No description"}</CardDescription>
+                    </div>
+                    {getStatusBadge(episode.generation_status)}
                   </div>
-                  {getStatusBadge(episode.generation_status)}
-                </div>
-              </CardHeader>
-            </Card>
-          ))}
+                </CardHeader>
+              </Card>
+            ))}
+          </div>
+        )}
 
-          {episodes.length === 0 && (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground mb-4">No episodes yet</p>
-                <Button onClick={() => setShowCreateDialog(true)}>
-                  Create Your First Episode
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-
-        <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
+        <Dialog open={showCreateDialog} onOpenChange={handleDialogOpenChange}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Create New Episode</DialogTitle>
@@ -191,19 +225,34 @@ export default function ProjectPage() {
                 Create a new podcast episode
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 mt-4">
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 mt-4" noValidate>
               <div>
-                <Label className="mb-1">Episode Title</Label>
+                <Label htmlFor="episode-title" className="mb-1">
+                  Episode Title <span className="text-destructive">*</span>
+                </Label>
                 <Input
-                  value={newEpisodeTitle}
-                  onChange={(e) => setNewEpisodeTitle(e.target.value)}
+                  id="episode-title"
+                  type="text"
                   placeholder="Episode 1: Introduction"
+                  aria-invalid={errors.title ? "true" : "false"}
+                  aria-describedby={errors.title ? "episode-title-error" : undefined}
+                  {...register("title")}
+                  className={errors.title ? "border-destructive" : ""}
                 />
+                {errors.title && (
+                  <p id="episode-title-error" className="text-destructive text-sm mt-1" role="alert">
+                    {errors.title.message}
+                  </p>
+                )}
               </div>
-              <Button onClick={createEpisode} className="w-full">
-                Create Episode
+              <Button
+                type="submit"
+                disabled={isSubmitting || !isValid}
+                className="w-full"
+              >
+                {isSubmitting ? "Creating..." : "Create Episode"}
               </Button>
-            </div>
+            </form>
           </DialogContent>
         </Dialog>
       </div>

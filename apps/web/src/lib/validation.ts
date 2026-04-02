@@ -51,11 +51,10 @@ export const contentSourceSchema = z
       }
       try {
         const parsed = new URL(data.url)
+        // Accept http and https (YouTube and other common hosts use https)
         const isAllowed =
           parsed.protocol === "http:" ||
-          parsed.protocol === "https:" ||
-          parsed.hostname.includes("youtube.com") ||
-          parsed.hostname.includes("youtu.be")
+          parsed.protocol === "https:"
         if (!isAllowed) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,

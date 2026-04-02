@@ -42,7 +42,7 @@ export default function ProjectPage() {
     reset,
   } = useForm<EpisodeFormData>({
     resolver: zodResolver(episodeSchema),
-    mode: "onBlur",
+    mode: "onChange",
   })
 
   const getToken = useCallback(

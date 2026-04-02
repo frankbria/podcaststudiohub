@@ -34,7 +34,7 @@ export default function DashboardPage() {
     reset,
   } = useForm<ProjectFormData>({
     resolver: zodResolver(projectSchema),
-    mode: "onBlur",
+    mode: "onChange",
   })
 
   const getToken = useCallback(

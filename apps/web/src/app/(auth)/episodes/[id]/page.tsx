@@ -157,7 +157,7 @@ export default function EpisodePage() {
     reset,
   } = useForm<ContentSourceFormData>({
     resolver: zodResolver(contentSourceSchema),
-    mode: "onBlur",
+    mode: "onChange",
     defaultValues: {
       sourceType: "url",
     },

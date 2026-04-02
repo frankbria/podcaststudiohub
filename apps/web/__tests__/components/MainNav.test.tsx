@@ -17,6 +17,14 @@ jest.mock('next-auth/react', () => ({
   signOut: (...args: unknown[]) => mockSignOut(...args),
 }))
 
+jest.mock('@/components/providers/theme-provider', () => ({
+  useTheme: () => ({
+    theme: 'system',
+    setTheme: jest.fn(),
+    resolvedTheme: 'light',
+  }),
+}))
+
 const mockUseSession = jest.requireMock('next-auth/react').useSession as jest.Mock
 
 describe('MainNav', () => {

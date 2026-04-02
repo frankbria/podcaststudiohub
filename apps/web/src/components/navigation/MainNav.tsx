@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { UserCircle02Icon, Logout01Icon } from "@hugeicons/core-free-icons"
+import { ThemeToggle } from "@/components/ThemeToggle"
 
 export function MainNav() {
   const router = useRouter()
@@ -46,6 +47,7 @@ export function MainNav() {
           </div>
 
           <div className="flex items-center gap-4">
+            <ThemeToggle />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button

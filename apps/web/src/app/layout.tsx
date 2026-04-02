@@ -3,6 +3,7 @@ import { Nunito_Sans } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/components/providers/auth-provider";
 import { ToastProvider } from "@/components/providers/toast-provider";
+import { ThemeProvider } from "@/components/providers/theme-provider";
 import { SkipLink } from "@/components/SkipLink";
 
 const nunitoSans = Nunito_Sans({
@@ -21,13 +22,22 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{var t=localStorage.getItem('theme')||'system';var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme: dark)').matches);if(d)document.documentElement.classList.add('dark');else document.documentElement.classList.remove('dark');}catch(e){}`,
+          }}
+        />
+      </head>
       <body className={nunitoSans.variable}>
         <SkipLink />
-        <AuthProvider>
-          <ToastProvider />
-          <main id="main-content">{children}</main>
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <ToastProvider />
+            <main id="main-content">{children}</main>
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

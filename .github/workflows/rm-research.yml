@@ -1,8 +1,8 @@
 name: "Repo Maintainer: Research"
 
 on:
-  schedule:
-    - cron: "0 0 * * 1"  # Weekly Monday midnight UTC
+  # schedule:
+  #   - cron: "0 0 * * 1"  # Weekly Monday midnight UTC
   workflow_dispatch:
 
 concurrency:

@@ -1,9 +1,9 @@
 name: "Repo Maintainer: Implementation Loop"
 
 on:
-  schedule:
-    # Build mode: every 4 hours. Switch cron in config.yml, then update here.
-    - cron: "0 */4 * * *"
+  # schedule:
+  #   # Build mode: every 4 hours. Switch cron in config.yml, then update here.
+  #   - cron: "0 */4 * * *"
   workflow_dispatch:
     inputs:
       force_issue:

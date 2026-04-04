@@ -4,9 +4,9 @@ on:
   workflow_run:
     workflows: ["PR Review Agent"]
     types: [completed]
-  schedule:
-    # Every 2 hours, offset from rm-loop's */4 schedule by 1 hour
-    - cron: "0 1,3,5,7,9,11,13,15,17,19,21,23 * * *"
+  # schedule:
+  #   # Every 2 hours, offset from rm-loop's */4 schedule by 1 hour
+  #   - cron: "0 1,3,5,7,9,11,13,15,17,19,21,23 * * *"
   workflow_dispatch:
     inputs:
       pr_number:

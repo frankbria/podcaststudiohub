@@ -22,7 +22,7 @@ so issue order == work order.
 - [x] **P1.1 #207** Rotate live AWS/OpenAI/ElevenLabs/Gemini/Transistor keys ✅ done 2026-06-14 (old AWS key deactivated; verified never committed to git; S3 object policy added)
       → **Frank rotates** (deactivate the flagged AWS access key — ID is in issue #207 — in IAM). Secret scanner ✅ done (see below).
 - [ ] **P1.2 #205** JWT verification ignores `type` claim — verification/refresh tokens usable as access tokens
-- [ ] **P1.3 #206** SSRF — content URLs + webhook targets fetched server-side, no private-IP/metadata block
+- [x] **P1.3 #206** SSRF — content URLs + webhook targets fetched server-side, no private-IP/metadata block ✅ done 2026-06-14 (PR #235; guard at validation+dispatch, redirects constrained; residual DNS-rebinding tracked as P4.7 #234)
 - [ ] **P1.4 #212** Backend JWT exposed to browser JS (NextAuth session) + leaked in SSE `?token=` URL
 
 ## Phase 2 — Restore the core product (generation pipeline)

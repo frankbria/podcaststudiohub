@@ -19,7 +19,7 @@ so issue order == work order.
 ---
 
 ## Phase 1 — Stop the bleeding (urgent security, mostly independent)
-- [ ] **P1.1 #207** Rotate live AWS/OpenAI/ElevenLabs/Gemini/Transistor keys in working-tree `apps/api/.env`
+- [x] **P1.1 #207** Rotate live AWS/OpenAI/ElevenLabs/Gemini/Transistor keys ✅ done 2026-06-14 (old AWS key deactivated; verified never committed to git; S3 object policy added)
       → **Frank rotates** (deactivate the flagged AWS access key — ID is in issue #207 — in IAM). Secret scanner ✅ done (see below).
 - [ ] **P1.2 #205** JWT verification ignores `type` claim — verification/refresh tokens usable as access tokens
 - [ ] **P1.3 #206** SSRF — content URLs + webhook targets fetched server-side, no private-IP/metadata block
@@ -63,7 +63,8 @@ so issue order == work order.
 ## Secrets / secret-scanner status
 - ✅ **gitleaks pre-commit hook installed** (`.pre-commit-config.yaml`, `pre-commit install` run). gitleaks
   passed on all tracked files (no committed secrets; the live keys are in gitignored `.env` only).
-- ⏳ **Frank to rotate** all keys in `apps/api/.env` (P1.1 / #207) and confirm none were ever pushed.
+- ✅ **Rotated 2026-06-14** — all keys cycled, old AWS key deactivated; full-history scan confirmed
+  the keys were never committed/pushed (precautionary rotation, not a leak); S3 object policy added (#207 closed).
 - Recommend moving real secrets to a secret manager / CI secrets; keep placeholders on dev machines.
 
 ## Release gate (Definition of Done for "ready-with-caveats")

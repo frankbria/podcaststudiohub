@@ -234,7 +234,18 @@ LOG_LEVEL=INFO
 OPENAI_API_KEY=
 GEMINI_API_KEY=
 ELEVENLABS_API_KEY=
+TRANSISTOR_API_KEY=
+
+# AWS S3 (audio storage) - see "AWS S3 / IAM permissions" below
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+AWS_S3_BUCKET=podcaststudiohub-audio
+AWS_REGION=us-east-1
 ```
+
+> Keep real secrets out of version control: these `.env` files are gitignored and must never be
+> committed. A `gitleaks` pre-commit hook (repo root `.pre-commit-config.yaml`) blocks accidental
+> commits of keys.
 
 **Frontend (`/opt/podcaststudiohub/frontend/.env.production`):**
 ```bash
@@ -243,6 +254,50 @@ NEXTAUTH_URL=https://dev.podcaststudiohub.me
 NEXTAUTH_SECRET=<same-as-github-secret>
 PORT=3003
 ```
+
+### AWS S3 / IAM permissions
+
+The API stores generated audio in S3 (`AWS_S3_BUCKET`, default `podcaststudiohub-audio`) using a
+dedicated IAM user (e.g. `fastapi-s3-uploader`). That user needs an identity-based policy granting
+**object-level** access only — the app never lists the bucket:
+
+| Action | Why |
+|---|---|
+| `s3:PutObject` | upload generated audio (incl. multipart for large/long-form files) |
+| `s3:GetObject` | download / `head_object` / presigned playback URLs |
+| `s3:DeleteObject` | remove audio when an episode is deleted |
+| `s3:AbortMultipartUpload` | clean up failed multipart uploads |
+
+`s3:ListBucket` is intentionally **not** granted (least privilege). `aws s3 ls` returns
+`AccessDenied` for this user *by design* — that is expected, not a misconfiguration.
+
+Minimal inline policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PodcastAudioObjectRW",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
+      "Resource": "arn:aws:s3:::podcaststudiohub-audio/*"
+    }
+  ]
+}
+```
+
+Apply it from AWS CloudShell (which runs as your admin console identity):
+
+```bash
+aws iam put-user-policy --user-name fastapi-s3-uploader \
+  --policy-name podcast-audio-object-rw --policy-document file://s3-policy.json
+```
+
+**Rotating the access key:** AWS keys can't be edited in place. Create a new key → update `.env`
+here and on the dev machine → `pm2 restart podcaststudiohub-api` → verify (PutObject/GetObject/
+DeleteObject) → **then** deactivate and delete the old key. Permissions live on the IAM user, not
+the key, so rotation never changes them.
 
 ## Nginx Configuration
 

@@ -442,6 +442,5 @@ The embedded Podcastfy package is also licensed under Apache 2.0.
 
 ---
 
-**Server**: 47.88.89.175
 **Repository**: https://github.com/frankbria/podcaststudiohub
 **Upstream**: https://github.com/souzatharsis/podcastfy

@@ -17,10 +17,14 @@ PHASE = {
 }
 
 for num, tag in sorted(PHASE.items(), key=lambda kv: kv[1]):
-    cur = subprocess.run(
+    view = subprocess.run(
         ["gh", "issue", "view", str(num), "--json", "title", "-q", ".title"],
         capture_output=True, text=True,
-    ).stdout.strip()
+    )
+    if view.returncode != 0:
+        print(f"#{num} ERROR: failed to fetch title: {view.stderr.strip()}")
+        continue
+    cur = view.stdout.strip()
     if cur.startswith(f"[{tag}]"):
         print(f"#{num} already tagged {tag}")
         continue

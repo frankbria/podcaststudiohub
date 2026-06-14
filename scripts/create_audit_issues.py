@@ -11,6 +11,9 @@ import sys
 import tempfile
 import os
 
+if len(sys.argv) < 2:
+    print("Usage: create_audit_issues.py <audit_json_file>", file=sys.stderr)
+    sys.exit(1)
 AUDIT_JSON = sys.argv[1]
 
 # Raw finding-label -> existing repo label (only labels that exist or we created).
@@ -50,9 +53,19 @@ SEV_LABELS = {
 }
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
-with open(AUDIT_JSON) as f:
-    data = json.load(f)
-issues = data["result"]["report"]["issues"]
+try:
+    with open(AUDIT_JSON) as f:
+        data = json.load(f)
+    issues = data["result"]["report"]["issues"]
+except FileNotFoundError:
+    print(f"Error: audit file not found: {AUDIT_JSON}", file=sys.stderr)
+    sys.exit(1)
+except json.JSONDecodeError as e:
+    print(f"Error: invalid JSON in {AUDIT_JSON}: {e}", file=sys.stderr)
+    sys.exit(1)
+except KeyError as e:
+    print(f"Error: missing expected key in audit JSON: {e}", file=sys.stderr)
+    sys.exit(1)
 issues.sort(key=lambda i: SEV_ORDER.get(i["severity"], 9))
 
 mapping = {}
@@ -69,15 +82,17 @@ for idx, issue in enumerate(issues, 1):
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as tf:
         tf.write(body)
         body_file = tf.name
-    cmd = ["gh", "issue", "create", "--title", issue["title"], "--body-file", body_file]
-    for lab in sorted(labels):
-        cmd += ["--label", lab]
-    print(f"[{idx}/{len(issues)}] ({issue['severity']}) {issue['title'][:70]}...")
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    os.unlink(body_file)
+    try:
+        cmd = ["gh", "issue", "create", "--title", issue["title"], "--body-file", body_file]
+        for lab in sorted(labels):
+            cmd += ["--label", lab]
+        print(f"[{idx}/{len(issues)}] ({issue['severity']}) {issue['title'][:70]}...")
+        res = subprocess.run(cmd, capture_output=True, text=True)
+    finally:
+        os.unlink(body_file)
     if res.returncode != 0:
         print("  ERROR:", res.stderr.strip())
-        mapping[issue["title"]] = {"error": res.stderr.strip(), "severity": issue["severity"]}
+        mapping[issue["title"]] = {"number": None, "url": None, "error": res.stderr.strip(), "severity": issue["severity"], "area": issue["area"]}
         continue
     url = res.stdout.strip()
     num = url.rstrip("/").split("/")[-1]

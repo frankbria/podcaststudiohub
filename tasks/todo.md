@@ -6,6 +6,10 @@ Generated from a multi-agent audit (10 reviewers + adversarial verification). Ea
 carries file:line evidence + acceptance criteria on GitHub. Titles are phase-tagged `[PX.Y]`
 so issue order == work order.
 
+> The **9 blockers** are #204, #205, #206, #207, #208, #209, #210, #211, #212 — they span
+> Phases 1–3 (not every Phase 1/2 item is a blocker: #213, #214, #217 are high/medium correctness
+> fixes, not release blockers). The release gate below requires Phases 1–3 done.
+
 > ⚠️ **The core mirage:** the app "seems to work" only because the test suite **mocks the
 > generation engine**. Against the pinned `podcastfy==0.4.1` (pip-installed in the venv — there
 > is **no** `podcastfy/` engine in the repo; `podcast-generator/` is empty scaffolding),

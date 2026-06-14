@@ -8,7 +8,7 @@ from sqlalchemy import select
 from uuid import UUID
 
 from ..database import get_db
-from ..services.auth_service import verify_jwt_token
+from ..services.auth_service import verify_jwt_token, verify_access_token
 from ..models.user import User
 
 # HTTPBearer with auto_error=False so missing credentials raise 401 (not 403)
@@ -91,8 +91,8 @@ async def get_current_user(
     token = credentials.credentials
 
     try:
-        # Decode and verify JWT token
-        payload = verify_jwt_token(token)
+        # Decode and verify JWT token (must be an access token, not verification/refresh)
+        payload = verify_access_token(token)
         user_id = payload.get("sub")
         tenant_id = payload.get("tenant_id")
 
@@ -230,8 +230,8 @@ async def get_current_user_from_query(
         )
 
     try:
-        # Decode and verify JWT token
-        payload = verify_jwt_token(jwt_token)
+        # Decode and verify JWT token (must be an access token, not verification/refresh)
+        payload = verify_access_token(jwt_token)
         user_id = payload.get("sub")
         tenant_id = payload.get("tenant_id")
 

@@ -20,11 +20,13 @@ from src.services.auth_service import (
     verify_password,
     create_jwt_token,
     verify_jwt_token,
+    verify_access_token,
     create_user,
     authenticate_user,
     create_verification_token,
     verify_verification_token,
 )
+from src.utils.jwt import create_refresh_token
 
 
 # =============================================================================
@@ -130,6 +132,41 @@ def test_verify_expired_jwt_token():
 
     with pytest.raises(ValueError, match="Invalid token"):
         verify_jwt_token(token)
+
+
+# =============================================================================
+# Access Token Type Enforcement Tests (issue #205)
+# =============================================================================
+
+def test_verify_access_token_accepts_access_token():
+    """verify_access_token returns the payload for a genuine access token."""
+    user_id = uuid4()
+    tenant_id = uuid4()
+    email = "access@example.com"
+
+    token = create_jwt_token(user_id, tenant_id, email)
+    payload = verify_access_token(token)
+
+    assert payload["sub"] == str(user_id)
+    assert payload["type"] == "access"
+
+
+def test_verify_access_token_rejects_verification_token():
+    """A 24h email-verification token must not pass as an access credential."""
+    user_id = uuid4()
+    tenant_id = uuid4()
+    token = create_verification_token(user_id, "verify@example.com", tenant_id)
+
+    with pytest.raises(ValueError, match="Invalid token type"):
+        verify_access_token(token)
+
+
+def test_verify_access_token_rejects_refresh_token():
+    """A 7-day refresh token must not pass as an access credential."""
+    token = create_refresh_token({"sub": str(uuid4()), "tenant_id": str(uuid4())})
+
+    with pytest.raises(ValueError, match="Invalid token type"):
+        verify_access_token(token)
 
 
 # =============================================================================
@@ -535,6 +572,54 @@ async def test_middleware_inactive_user_via_get_me(client: AsyncClient, test_db:
 
     assert response.status_code == 403
     assert "inactive" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_middleware_rejects_verification_token(client: AsyncClient):
+    """A real verification token for a real user must be rejected on the access path (issue #205)."""
+    register_response = await client.post(
+        "/auth/register",
+        json={
+            "email": "verifytoken@example.com",
+            "password": "VerifyToken123!",
+            "full_name": "Verify Token",
+        },
+    )
+    user = register_response.json()["user"]
+    verification_token = create_verification_token(
+        UUID(user["id"]), user["email"], UUID(user["tenant_id"])
+    )
+
+    response = await client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {verification_token}"},
+    )
+
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_middleware_rejects_refresh_token(client: AsyncClient):
+    """A real refresh token for a real user must be rejected on the access path (issue #205)."""
+    register_response = await client.post(
+        "/auth/register",
+        json={
+            "email": "refreshtoken@example.com",
+            "password": "RefreshToken123!",
+            "full_name": "Refresh Token",
+        },
+    )
+    user = register_response.json()["user"]
+    refresh_token = create_refresh_token(
+        {"sub": user["id"], "tenant_id": user["tenant_id"]}
+    )
+
+    response = await client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {refresh_token}"},
+    )
+
+    assert response.status_code == 401
 
 
 # =============================================================================

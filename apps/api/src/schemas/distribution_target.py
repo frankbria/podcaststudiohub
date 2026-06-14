@@ -10,6 +10,8 @@ from uuid import UUID
 from datetime import datetime, timezone
 from typing import Optional, Literal
 
+from ..utils.ssrf import SSRFValidationError, validate_public_url
+
 
 class WebhookDistributionCreate(BaseModel):
 	"""Schema for creating a webhook distribution target."""
@@ -41,11 +43,17 @@ class WebhookDistributionCreate(BaseModel):
 	@field_validator("url")
 	@classmethod
 	def validate_https_url(cls, v: str) -> str:
-		"""Validate that URL uses HTTPS and is well-formed."""
+		"""Validate that URL uses HTTPS, is well-formed, and is not internal."""
 		if not v.startswith("https://"):
 			raise ValueError("Webhook URL must use HTTPS (not HTTP)")
 		if len(v) > 500:
 			raise ValueError("Webhook URL must not exceed 500 characters")
+		# SSRF guard (issue #206): reject loopback/link-local/private/reserved
+		# targets (incl. 169.254.169.254) and non-standard ports.
+		try:
+			validate_public_url(v, allowed_schemes=("https",), allowed_ports={443})
+		except SSRFValidationError as exc:
+			raise ValueError(f"Webhook URL is not allowed: {exc}") from exc
 		return v
 
 	@field_validator("headers")

@@ -501,3 +501,102 @@ def test_url_timeout_error_includes_seconds():
 		"Website may be slow or unavailable. Try again later."
 	)
 	assert str(validator.URL_FETCH_TIMEOUT) in msg
+
+
+# ===========================================================================
+# SSRF protection (issue #206)
+# ===========================================================================
+
+
+@pytest.mark.parametrize("url", [
+	"http://169.254.169.254/latest/meta-data/",
+	"https://169.254.169.254/",
+	"http://127.0.0.1/",
+	"http://10.0.0.1/admin",
+	"http://172.16.0.1/",
+	"http://192.168.1.1/",
+	"http://[::1]/",
+	"http://localhost/",
+])
+def test_validate_url_not_internal_rejects(url):
+	"""Internal/metadata URLs must be rejected by the SSRF guard."""
+	validator = make_validator()
+	with pytest.raises(URLValidationError) as exc_info:
+		validator._validate_url_not_internal(url)
+	assert "not allowed" in str(exc_info.value).lower()
+
+
+def test_validate_url_not_internal_rejects_non_standard_port():
+	"""Non-standard ports are rejected (issue #206)."""
+	validator = make_validator()
+	with pytest.raises(URLValidationError):
+		validator._validate_url_not_internal("http://93.184.216.34:8080/")
+
+
+def test_validate_url_not_internal_allows_public():
+	"""Public IP literal on a standard port passes."""
+	validator = make_validator()
+	# Should not raise
+	validator._validate_url_not_internal("https://93.184.216.34/article")
+
+
+@pytest.mark.asyncio
+async def test_validate_url_source_rejects_metadata_endpoint():
+	"""validate_url_source rejects the cloud metadata endpoint before any fetch."""
+	validator = make_validator()
+	with pytest.raises(URLValidationError):
+		await validator.validate_url_source(
+			"http://169.254.169.254/latest/meta-data/", "Title"
+		)
+
+
+@pytest.mark.asyncio
+async def test_validate_by_type_url_rejects_internal_ip():
+	"""validate_by_type rejects RFC1918 content URLs."""
+	validator = make_validator()
+	with pytest.raises(URLValidationError):
+		await validator.validate_by_type(
+			source_type='url',
+			source_data={'url': 'http://10.0.0.1/', 'title': 'Test'},
+		)
+
+
+@pytest.mark.asyncio
+async def test_check_url_accessibility_rejects_redirect_to_internal():
+	"""A redirect whose target is an internal address must be rejected."""
+	validator = make_validator()
+	redirect_response = MagicMock()
+	redirect_response.status_code = 302
+	redirect_response.headers = {"location": "http://169.254.169.254/latest/meta-data/"}
+
+	with patch("src.services.source_validator_service.httpx.AsyncClient") as mock_client_cls:
+		mock_client = AsyncMock()
+		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+		mock_client.__aexit__ = AsyncMock(return_value=None)
+		mock_client.head = AsyncMock(return_value=redirect_response)
+		mock_client_cls.return_value = mock_client
+
+		with pytest.raises(URLValidationError) as exc_info:
+			await validator._check_url_accessibility("https://93.184.216.34/start")
+	assert "not allowed" in str(exc_info.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_check_url_accessibility_follows_safe_redirect():
+	"""A redirect to another public URL ending in 2xx should be accepted."""
+	validator = make_validator()
+	redirect_response = MagicMock()
+	redirect_response.status_code = 302
+	redirect_response.headers = {"location": "https://8.8.8.8/final"}
+	ok_response = MagicMock()
+	ok_response.status_code = 200
+
+	with patch("src.services.source_validator_service.httpx.AsyncClient") as mock_client_cls:
+		mock_client = AsyncMock()
+		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+		mock_client.__aexit__ = AsyncMock(return_value=None)
+		mock_client.head = AsyncMock(side_effect=[redirect_response, ok_response])
+		mock_client_cls.return_value = mock_client
+
+		# Should not raise
+		await validator._check_url_accessibility("https://93.184.216.34/start")

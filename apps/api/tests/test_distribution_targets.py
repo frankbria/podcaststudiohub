@@ -801,6 +801,34 @@ def test_webhook_create_http_rejected():
 	assert "https" in str(exc_info.value).lower() or "url" in str(exc_info.value).lower()
 
 
+@pytest.mark.parametrize("url", [
+	"https://169.254.169.254/",
+	"https://127.0.0.1/",
+	"https://10.0.0.1/hook",
+	"https://172.16.0.1/hook",
+	"https://192.168.1.1/hook",
+	"https://[::1]/",
+	"https://localhost/hook",
+])
+def test_webhook_create_internal_url_rejected(url):
+	"""SSRF: webhook URLs pointing at internal addresses are rejected (issue #206)."""
+	from src.schemas.distribution_target import WebhookDistributionCreate
+	import pydantic
+	with pytest.raises(pydantic.ValidationError) as exc_info:
+		WebhookDistributionCreate(name="Test", url=url, method="POST")
+	assert "not allowed" in str(exc_info.value).lower()
+
+
+def test_webhook_create_non_standard_port_rejected():
+	"""SSRF: non-standard ports are rejected for webhook URLs (issue #206)."""
+	from src.schemas.distribution_target import WebhookDistributionCreate
+	import pydantic
+	with pytest.raises(pydantic.ValidationError):
+		WebhookDistributionCreate(
+			name="Test", url="https://93.184.216.34:8443/hook", method="POST"
+		)
+
+
 def test_webhook_create_invalid_method():
 	"""Test that invalid HTTP method is rejected."""
 	from src.schemas.distribution_target import WebhookDistributionCreate
@@ -963,3 +991,44 @@ async def test_webhook_connection_test_with_encrypted_headers(client, auth_heade
 		"Authorization header was not decrypted before sending test request"
 	assert sent_headers.get("Content-Type") == "application/json", \
 		"Content-Type header should remain as-is"
+
+
+# ============================================================================
+# WEBHOOK DISPATCH SSRF TESTS (issue #206)
+# ============================================================================
+
+@pytest.mark.parametrize("url", [
+	"https://169.254.169.254/latest/meta-data/",
+	"https://127.0.0.1/",
+	"https://10.0.0.1/hook",
+	"https://192.168.1.1/hook",
+])
+def test_distribute_via_webhook_blocks_internal(url):
+	"""SSRF: dispatch-time guard rejects internal webhook targets (issue #206)."""
+	from src.tasks.platform_distribution import _distribute_via_webhook
+
+	task = MagicMock()
+	config = {"url": url, "method": "POST"}
+
+	with patch("requests.post") as mock_post, patch("requests.get") as mock_get:
+		with pytest.raises(ValueError) as exc_info:
+			_distribute_via_webhook("ep-1", config, {"title": "x"}, task)
+		assert "not allowed" in str(exc_info.value).lower()
+		mock_post.assert_not_called()
+		mock_get.assert_not_called()
+
+
+def test_distribute_via_webhook_disables_redirects_for_public():
+	"""Public webhook dispatch must disable redirects to prevent SSRF bounce."""
+	from src.tasks.platform_distribution import _distribute_via_webhook
+
+	task = MagicMock()
+	config = {"url": "https://93.184.216.34/hook", "method": "POST"}
+	resp = MagicMock()
+	resp.raise_for_status = MagicMock()
+
+	with patch("requests.post", return_value=resp) as mock_post:
+		result = _distribute_via_webhook("ep-1", config, {"title": "x"}, task)
+
+	assert result["status"] == "success"
+	assert mock_post.call_args.kwargs.get("allow_redirects") is False

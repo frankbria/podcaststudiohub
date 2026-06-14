@@ -7,9 +7,11 @@ keys before content sources are persisted. Implements GAP-015.
 
 import logging
 from typing import Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
+
+from ..utils.ssrf import SSRFValidationError, validate_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -71,30 +73,87 @@ class SourceValidatorService:
 				"Example: https://example.com/article"
 			)
 
+	def _validate_url_not_internal(
+		self, url: str, *, block_on_resolution_failure: bool = False
+	) -> None:
+		"""
+		Reject URLs that resolve to internal/non-public addresses (SSRF guard).
+
+		Args:
+			url: URL string to validate
+			block_on_resolution_failure: Set True on fetch paths (e.g. redirect
+				hops about to be requested) so an unresolvable host is rejected
+				rather than allowed through to the outbound request.
+
+		Raises:
+			URLValidationError: If the URL targets a private/loopback/link-local/
+				reserved address or a non-standard port (issue #206).
+		"""
+		try:
+			validate_public_url(
+				url,
+				allowed_ports={80, 443},
+				block_on_resolution_failure=block_on_resolution_failure,
+			)
+		except SSRFValidationError as exc:
+			raise URLValidationError(
+				f"URL is not allowed: {exc}. "
+				f"Provide a publicly accessible http(s) URL on a standard port."
+			) from exc
+
+	# Redirect status codes that carry a Location header to follow.
+	_REDIRECT_STATUS = (301, 302, 303, 307, 308)
+
 	async def _check_url_accessibility(self, url: str) -> None:
 		"""
-		Issue a HEAD request to verify the URL is publicly reachable.
+		Verify the URL is publicly reachable, following redirects manually.
+
+		Redirects are not auto-followed: each hop's target is re-validated with
+		the SSRF guard before it is requested, so a public URL cannot redirect
+		into an internal address (issue #206).
 
 		Args:
 			url: URL to check
 
 		Raises:
-			URLValidationError: If the URL is not accessible
+			URLValidationError: If the URL is not accessible or redirects to a
+				disallowed target.
 		"""
+		current_url = url
 		try:
 			async with httpx.AsyncClient(
 				timeout=self.URL_FETCH_TIMEOUT,
-				follow_redirects=True,
-				max_redirects=self.MAX_REDIRECT_HOPS,
+				follow_redirects=False,
 			) as client:
-				response = await client.head(url)
+				for _ in range(self.MAX_REDIRECT_HOPS + 1):
+					response = await client.head(current_url)
 
-			if not (200 <= response.status_code < 300):
-				raise URLValidationError(
-					f"URL returned HTTP {response.status_code}. "
-					f"Expected 2xx success response. "
-					f"Is the URL correct and publicly accessible?"
-				)
+					if response.status_code in self._REDIRECT_STATUS:
+						location = response.headers.get("location")
+						if not location:
+							raise URLValidationError(
+								"URL returned a redirect without a destination."
+							)
+						current_url = urljoin(current_url, location)
+						# Re-validate every redirect hop against the SSRF guard.
+						# This is a fetch path, so block unresolvable hops too.
+						self._validate_url_not_internal(
+							current_url, block_on_resolution_failure=True
+						)
+						continue
+
+					if not (200 <= response.status_code < 300):
+						raise URLValidationError(
+							f"URL returned HTTP {response.status_code}. "
+							f"Expected 2xx success response. "
+							f"Is the URL correct and publicly accessible?"
+						)
+					return
+
+			raise URLValidationError(
+				f"URL has too many redirects (max {self.MAX_REDIRECT_HOPS}). "
+				f"Check that the URL is correct and does not have redirect loops."
+			)
 
 		except URLValidationError:
 			raise
@@ -172,6 +231,7 @@ class SourceValidatorService:
 			URLValidationError: If validation fails
 		"""
 		self._validate_url_format(url)
+		self._validate_url_not_internal(url)
 		await self._check_url_accessibility(url)
 		return True, None
 

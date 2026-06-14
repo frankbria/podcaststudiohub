@@ -22,6 +22,7 @@ from src.services.content_extraction_service import (
 	ExtractionResult
 )
 from src.models import ContentSource
+from src.utils.ssrf import SSRFValidationError
 
 
 # ============================================================================
@@ -108,7 +109,7 @@ async def test_extract_from_url_success(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service.website_extractor, 'extract_content', return_value=extracted_text):
+		 patch.object(extraction_service, '_fetch_and_extract_safely', return_value=extracted_text):
 
 		mock_get.return_value = url_content_source
 
@@ -135,6 +136,66 @@ async def test_extract_from_url_success(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("internal_url", [
+	"http://169.254.169.254/latest/meta-data/",
+	"http://127.0.0.1/",
+	"http://10.0.0.1/admin",
+	"http://192.168.1.1/",
+])
+async def test_extract_from_url_blocks_ssrf(
+	extraction_service,
+	mock_db,
+	url_content_source,
+	internal_url,
+):
+	"""Internal/metadata URLs must be blocked at extraction dispatch (issue #206)."""
+	url_content_source.source_data = {'url': internal_url, 'title': 'x'}
+
+	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
+		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
+		 patch.object(extraction_service, '_fetch_and_extract_safely') as mock_extract:
+
+		mock_get.return_value = url_content_source
+
+		result = await extraction_service.extract_from_url(mock_db, url_content_source.id)
+
+		assert result.success is False
+		assert "not allowed" in result.error_message.lower()
+		# The underlying fetcher must never be reached.
+		mock_extract.assert_not_called()
+		# Status must be marked failed.
+		final_call = mock_update.call_args_list[-1]
+		assert final_call[0][2].extraction_status == 'failed'
+
+
+def test_fetch_and_extract_safely_blocks_redirect_to_internal(extraction_service):
+	"""SSRF: a redirect whose target is internal must be blocked mid-fetch (issue #206)."""
+	redirect = Mock()
+	redirect.status_code = 302
+	redirect.headers = {"location": "http://169.254.169.254/latest/meta-data/"}
+
+	with patch("src.services.content_extraction_service.requests.get", return_value=redirect):
+		with pytest.raises(SSRFValidationError):
+			extraction_service._fetch_and_extract_safely("https://93.184.216.34/start")
+
+
+def test_fetch_and_extract_safely_follows_safe_redirect(extraction_service):
+	"""A redirect to another public URL is followed and its content extracted."""
+	redirect = Mock()
+	redirect.status_code = 302
+	redirect.headers = {"location": "https://8.8.8.8/final"}
+	ok = Mock()
+	ok.status_code = 200
+	ok.text = "<html><body><p>Hello world content</p></body></html>"
+	ok.raise_for_status = Mock()
+
+	with patch("src.services.content_extraction_service.requests.get", side_effect=[redirect, ok]):
+		result = extraction_service._fetch_and_extract_safely("https://93.184.216.34/start")
+
+	assert "Hello world content" in result
+
+
+@pytest.mark.asyncio
 async def test_extract_from_url_404_error(
 	extraction_service,
 	mock_db,
@@ -146,7 +207,7 @@ async def test_extract_from_url_404_error(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service.website_extractor, 'extract_content', side_effect=http_error):
+		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=http_error):
 
 		mock_get.return_value = url_content_source
 
@@ -174,7 +235,7 @@ async def test_extract_from_url_timeout(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service.website_extractor, 'extract_content', side_effect=timeout_error):
+		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=timeout_error):
 
 		mock_get.return_value = url_content_source
 
@@ -200,7 +261,7 @@ async def test_extract_from_url_403_error(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source'), \
-		 patch.object(extraction_service.website_extractor, 'extract_content', side_effect=http_error):
+		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=http_error):
 
 		mock_get.return_value = url_content_source
 
@@ -223,7 +284,7 @@ async def test_extract_from_url_500_error(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source'), \
-		 patch.object(extraction_service.website_extractor, 'extract_content', side_effect=http_error):
+		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=http_error):
 
 		mock_get.return_value = url_content_source
 
@@ -536,7 +597,7 @@ async def test_status_transition_url_success(
 	"""Test extraction status transitions: pending → extracting → complete."""
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service.website_extractor, 'extract_content', return_value="content"):
+		 patch.object(extraction_service, '_fetch_and_extract_safely', return_value="content"):
 
 		mock_get.return_value = url_content_source
 
@@ -561,7 +622,7 @@ async def test_status_transition_url_failure(
 	"""Test extraction status transitions: pending → extracting → failed."""
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service.website_extractor, 'extract_content', side_effect=Timeout()):
+		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=Timeout()):
 
 		mock_get.return_value = url_content_source
 
@@ -613,7 +674,7 @@ async def test_database_update_error_message(
 	"""Test error_message column is updated on failure."""
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service.website_extractor, 'extract_content', side_effect=Timeout()):
+		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=Timeout()):
 
 		mock_get.return_value = url_content_source
 
@@ -636,7 +697,7 @@ async def test_database_update_clears_error_on_success(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service.website_extractor, 'extract_content', return_value="content"):
+		 patch.object(extraction_service, '_fetch_and_extract_safely', return_value="content"):
 
 		mock_get.return_value = url_content_source
 

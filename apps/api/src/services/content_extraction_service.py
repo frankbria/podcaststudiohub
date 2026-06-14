@@ -14,7 +14,11 @@ maintain async compatibility with the FastAPI application.
 import asyncio
 import logging
 from typing import Optional
+from urllib.parse import urljoin
 from uuid import UUID
+
+import requests
+from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 from requests.exceptions import RequestException, Timeout, HTTPError
 
@@ -23,10 +27,16 @@ from podcastfy.content_parser.pdf_extractor import PDFExtractor
 
 from ..models import ContentSource
 from ..schemas.content import ContentSourceUpdate
+from ..utils.ssrf import SSRFValidationError, validate_public_url
 from .content_service import get_content_source_by_id, update_content_source
 
 
 logger = logging.getLogger(__name__)
+
+# Redirect status codes that carry a Location header to follow.
+_REDIRECT_STATUS = (301, 302, 303, 307, 308)
+# Maximum redirect hops allowed during a single content fetch.
+_MAX_REDIRECT_HOPS = 3
 
 
 class ExtractionResult:
@@ -63,6 +73,59 @@ class ContentExtractionService:
 		"""Initialize the extraction service with Podcastfy extractors."""
 		self.website_extractor = WebsiteExtractor()
 		self.pdf_extractor = PDFExtractor()
+
+	def _fetch_and_extract_safely(self, url: str) -> str:
+		"""
+		Fetch and extract URL content with SSRF-safe manual redirect handling.
+
+		Redirects are not auto-followed: each hop is re-validated with the SSRF
+		guard before it is requested, so a public URL cannot redirect the
+		server-side fetch into an internal address such as the cloud metadata
+		endpoint (issue #206). Podcastfy's ``WebsiteExtractor`` follows redirects
+		unconditionally, so this performs the fetch itself and reuses the
+		extractor's parsing helpers for output consistency.
+
+		Args:
+			url: URL to fetch.
+
+		Returns:
+			Cleaned text content.
+
+		Raises:
+			SSRFValidationError: If the URL (or a redirect target) is internal.
+			requests.RequestException: On network/HTTP errors.
+		"""
+		extractor = self.website_extractor
+		headers = {"User-Agent": extractor.user_agent}
+		current_url = extractor.normalize_url(url)
+
+		for _ in range(_MAX_REDIRECT_HOPS + 1):
+			validate_public_url(
+				current_url,
+				allowed_ports={80, 443},
+				block_on_resolution_failure=True,
+			)
+			response = requests.get(
+				current_url,
+				headers=headers,
+				timeout=extractor.timeout,
+				allow_redirects=False,
+			)
+			if response.status_code in _REDIRECT_STATUS:
+				location = response.headers.get("location")
+				if not location:
+					break
+				current_url = urljoin(current_url, location)
+				continue
+
+			response.raise_for_status()
+			soup = BeautifulSoup(response.text, "html.parser")
+			extractor.remove_unwanted_elements(soup)
+			return extractor.clean_content(soup.get_text(separator="\n"))
+
+		raise requests.TooManyRedirects(
+			f"Exceeded the maximum of {_MAX_REDIRECT_HOPS} redirects"
+		)
 
 	async def extract_from_url(
 		self,
@@ -106,14 +169,27 @@ class ContentExtractionService:
 			await self._update_extraction_failed(db, content_source, error_msg)
 			return ExtractionResult(success=False, error_message=error_msg)
 
+		# SSRF guard: re-validate the host at dispatch time (block unresolvable
+		# hosts here too — this is the actual fetch path, so a host that fails
+		# the lookup but resolves to an internal IP must not slip through).
+		try:
+			validate_public_url(
+				url, allowed_ports={80, 443}, block_on_resolution_failure=True
+			)
+		except SSRFValidationError as exc:
+			error_msg = "URL is not allowed: targets a non-public address."
+			logger.warning(f"Blocked SSRF extraction for {url}: {exc}")
+			await self._update_extraction_failed(db, content_source, error_msg)
+			return ExtractionResult(success=False, error_message=error_msg)
+
 		# Update status to 'extracting'
 		await self._update_extraction_status(db, content_source, 'extracting')
 
 		try:
-			# Extract content using Podcastfy (async wrapper)
+			# Extract content with SSRF-safe, redirect-validating fetch.
 			logger.info(f"Extracting content from URL: {url}")
 			extracted_text = await asyncio.to_thread(
-				self.website_extractor.extract_content,
+				self._fetch_and_extract_safely,
 				url
 			)
 
@@ -124,6 +200,13 @@ class ContentExtractionService:
 				f"Successfully extracted {len(extracted_text)} characters from {url}"
 			)
 			return ExtractionResult(success=True, content=extracted_text)
+
+		except SSRFValidationError as exc:
+			# A redirect target resolved to an internal address mid-fetch.
+			error_msg = "URL is not allowed: targets a non-public address."
+			logger.warning(f"Blocked SSRF redirect during extraction of {url}: {exc}")
+			await self._update_extraction_failed(db, content_source, error_msg)
+			return ExtractionResult(success=False, error_message=error_msg)
 
 		except RequestException as e:
 			# Handle HTTP/network errors

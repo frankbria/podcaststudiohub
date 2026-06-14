@@ -1,0 +1,140 @@
+{
+  "fix(generation): podcast generation calls podcastfy 0.4.1 generate_podcast with invalid kwargs (file=, youtube_urls=) \u2014 every generation fails": {
+    "number": 204,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/204",
+    "severity": "critical",
+    "area": "core"
+  },
+  "fix(security): JWT verification ignores `type` claim \u2014 email-verification/refresh tokens usable as API access tokens": {
+    "number": 205,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/205",
+    "severity": "high",
+    "area": "api"
+  },
+  "fix(security): SSRF \u2014 user-supplied content URLs and webhook targets fetched server-side with no private-IP/metadata blocking": {
+    "number": 206,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/206",
+    "severity": "high",
+    "area": "api"
+  },
+  "chore(security): rotate live AWS/OpenAI/ElevenLabs/Gemini/Transistor credentials present in working-tree apps/api/.env": {
+    "number": 207,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/207",
+    "severity": "high",
+    "area": "infra"
+  },
+  "fix(infra): nginx serves authenticated SaaS over plain HTTP \u2014 no TLS, HSTS, CSP, or security headers": {
+    "number": 208,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/208",
+    "severity": "high",
+    "area": "infra"
+  },
+  "fix(infra): deployment runs as root with uvicorn bound to 0.0.0.0 (bypasses nginx)": {
+    "number": 209,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/209",
+    "severity": "high",
+    "area": "infra"
+  },
+  "fix(generation): PDF/file input is non-functional \u2014 no upload endpoint and extraction reads a non-existent local path (S3 key ignored)": {
+    "number": 210,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/210",
+    "severity": "high",
+    "area": "api"
+  },
+  "fix(distribution): platform distribution never triggered and publishes empty metadata \u2014 entire subsystem unreachable": {
+    "number": 211,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/211",
+    "severity": "high",
+    "area": "api"
+  },
+  "fix(security): backend JWT exposed to browser JS via NextAuth session + transmitted in SSE URL query string": {
+    "number": 212,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/212",
+    "severity": "high",
+    "area": "web"
+  },
+  "fix(api): /regenerate endpoint calls generate_podcast with wrong positional args \u2014 endpoint is broken (500) and leaves episode degraded": {
+    "number": 213,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/213",
+    "severity": "high",
+    "area": "api"
+  },
+  "fix(api): no guard against re-submitting generation for an already-running episode (race / indeterminate state)": {
+    "number": 214,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/214",
+    "severity": "medium",
+    "area": "api"
+  },
+  "fix(api): inconsistent S3 key layout \u2014 workflow-chain path drops the user-{id}/ tenant prefix": {
+    "number": 215,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/215",
+    "severity": "medium",
+    "area": "api"
+  },
+  "fix(api): Stripe webhook silently bypasses signature verification when secret unset (latent \u2014 Stripe currently cannot be enabled)": {
+    "number": 216,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/216",
+    "severity": "medium",
+    "area": "api"
+  },
+  "fix(api): TTS provider, conversation_config not forwarded to engine \u2014 every podcast uses OpenAI TTS": {
+    "number": 217,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/217",
+    "severity": "medium",
+    "area": "api"
+  },
+  "fix(api): invitation acceptance not bound to invited email; team tables lack RLS backstop": {
+    "number": 218,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/218",
+    "severity": "medium",
+    "area": "api"
+  },
+  "fix(api): expires_in hardcoded to 86400 but JWT expires in 30 minutes": {
+    "number": 219,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/219",
+    "severity": "medium",
+    "area": "api"
+  },
+  "fix(api): finalize task calls upload_to_s3_task inline (blocks worker, bypasses retries); SSE leaks DB session; on_upload_complete sets wrong status": {
+    "number": 220,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/220",
+    "severity": "medium",
+    "area": "api"
+  },
+  "fix(web): TTS 'Save Configuration' creates broken ElevenLabs configs \u2014 no voice-ID input, backend validates key presence only": {
+    "number": 221,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/221",
+    "severity": "medium",
+    "area": "web"
+  },
+  "fix(web): add server-side route protection (middleware) for the (auth) route group": {
+    "number": 222,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/222",
+    "severity": "medium",
+    "area": "web"
+  },
+  "fix(web): adopt or delete the unused api-client layer; replace ad-hoc fetch; fix signup loading + minor UX": {
+    "number": 223,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/223",
+    "severity": "medium",
+    "area": "web"
+  },
+  "fix(ci): harden agentic/CI workflows \u2014 issue-title shell injection, dispatch-input injection, mutable action pins, secret-in-argv": {
+    "number": 224,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/224",
+    "severity": "medium",
+    "area": "infra"
+  },
+  "docs: rewrite CLAUDE.md/README for the SaaS monorepo; fix broken file refs, auth model, JWT_ALGORITHM drift; remove dev cruft & IP": {
+    "number": 225,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/225",
+    "severity": "medium",
+    "area": "docs"
+  },
+  "fix(web): replace hardcoded gray Tailwind colors with design tokens; review EventSource cleanup & download try/finally": {
+    "number": 226,
+    "url": "https://github.com/frankbria/podcaststudiohub/issues/226",
+    "severity": "low",
+    "area": "web"
+  }
+}

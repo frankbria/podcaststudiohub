@@ -45,6 +45,7 @@ so issue order == work order.
 - [ ] **P4.4 #218** Invitation acceptance not bound to invited email; team tables lack RLS backstop
 - [ ] **P4.5 #219** `expires_in` hardcoded 86400 but JWT expires in 30 min *(relates to #205)*
 - [ ] **P4.6 #222** No server-side route protection (middleware) for the `(auth)` group — defense-in-depth
+- [ ] **P4.7 #234** IP-pin outbound fetches to close the residual DNS-rebinding SSRF TOCTOU *(fast-follow to #206/P1.3, which is done; core SSRF already mitigated — this is defense-in-depth, not a release blocker)*
 
 ## Phase 5 — UX, tech-debt, docs
 - [ ] **P5.1 #221** TTS "Save Configuration" creates broken ElevenLabs configs (no voice-ID input) *(do after #217)*
@@ -59,6 +60,7 @@ so issue order == work order.
 - `#221` (P5.1) is only meaningful once `#217` (P2.3) forwards TTS config.
 - `#210` (P2.5) needs `StorageService.download_file` wired (already exists, unused).
 - `#225` (P5.4) last — so docs describe the fixed system.
+- `#234` (P4.7) depends on `#206` (P1.3, done) — IP-pinning hardening of the shipped SSRF guard.
 
 ## Secrets / secret-scanner status
 - ✅ **gitleaks pre-commit hook installed** (`.pre-commit-config.yaml`, `pre-commit install` run). gitleaks

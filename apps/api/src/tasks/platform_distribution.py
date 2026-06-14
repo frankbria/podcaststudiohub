@@ -326,6 +326,21 @@ def _distribute_via_webhook(episode_id: str, config: Dict, metadata: Dict, task:
     if not webhook_url:
         raise ValueError("Webhook URL not provided in config")
 
+    # SSRF guard (issue #206): re-validate at dispatch time to defeat DNS
+    # rebinding since the target was created/validated. Reject internal hosts
+    # and non-standard ports; redirects are disabled below so a public host
+    # cannot bounce the request into an internal address.
+    from ..utils.ssrf import SSRFValidationError, validate_public_url
+    try:
+        validate_public_url(
+            webhook_url,
+            allowed_schemes=("https",),
+            allowed_ports={443},
+            block_on_resolution_failure=True,
+        )
+    except SSRFValidationError as exc:
+        raise ValueError(f"Webhook URL is not allowed: {exc}") from exc
+
     headers = config.get('headers', {})
     method = config.get('method', 'POST')
 
@@ -335,11 +350,15 @@ def _distribute_via_webhook(episode_id: str, config: Dict, metadata: Dict, task:
         "event": "episode_published"
     }
 
-    # Send webhook with episode data
+    # Send webhook with episode data (redirects disabled to prevent SSRF bounce)
     if method == "POST":
-        response = requests.post(webhook_url, json=payload, headers=headers, timeout=30)
+        response = requests.post(
+            webhook_url, json=payload, headers=headers, timeout=30, allow_redirects=False
+        )
     else:
-        response = requests.get(webhook_url, headers=headers, params=payload, timeout=30)
+        response = requests.get(
+            webhook_url, headers=headers, params=payload, timeout=30, allow_redirects=False
+        )
 
     response.raise_for_status()
 

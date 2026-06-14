@@ -73,19 +73,28 @@ class SourceValidatorService:
 				"Example: https://example.com/article"
 			)
 
-	def _validate_url_not_internal(self, url: str) -> None:
+	def _validate_url_not_internal(
+		self, url: str, *, block_on_resolution_failure: bool = False
+	) -> None:
 		"""
 		Reject URLs that resolve to internal/non-public addresses (SSRF guard).
 
 		Args:
 			url: URL string to validate
+			block_on_resolution_failure: Set True on fetch paths (e.g. redirect
+				hops about to be requested) so an unresolvable host is rejected
+				rather than allowed through to the outbound request.
 
 		Raises:
 			URLValidationError: If the URL targets a private/loopback/link-local/
 				reserved address or a non-standard port (issue #206).
 		"""
 		try:
-			validate_public_url(url, allowed_ports={80, 443})
+			validate_public_url(
+				url,
+				allowed_ports={80, 443},
+				block_on_resolution_failure=block_on_resolution_failure,
+			)
 		except SSRFValidationError as exc:
 			raise URLValidationError(
 				f"URL is not allowed: {exc}. "
@@ -127,7 +136,10 @@ class SourceValidatorService:
 							)
 						current_url = urljoin(current_url, location)
 						# Re-validate every redirect hop against the SSRF guard.
-						self._validate_url_not_internal(current_url)
+						# This is a fetch path, so block unresolvable hops too.
+						self._validate_url_not_internal(
+							current_url, block_on_resolution_failure=True
+						)
 						continue
 
 					if not (200 <= response.status_code < 300):

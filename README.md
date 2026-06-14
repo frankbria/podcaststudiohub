@@ -92,6 +92,7 @@ podcaststudiohub/
 ```bash
 git clone https://github.com/frankbria/podcaststudiohub.git
 cd podcaststudiohub
+pre-commit install   # installs secret-scanner and hygiene hooks (requires pre-commit: pip install pre-commit)
 ```
 
 #### 2. Set Up Backend (API)
@@ -396,9 +397,10 @@ Contributions are welcome! Please:
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+3. Run `pre-commit install` once after cloning so the secret-scanner and hygiene hooks run on every commit
+4. Commit your changes (`git commit -m 'Add amazing feature'`)
+5. Push to the branch (`git push origin feature/amazing-feature`)
+6. Open a Pull Request
 
 ### Code Style
 

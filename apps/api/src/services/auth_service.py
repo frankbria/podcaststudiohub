@@ -122,6 +122,32 @@ def verify_jwt_token(token: str) -> dict:
         raise ValueError(f"Invalid token: {str(e)}")
 
 
+def verify_access_token(token: str) -> dict:
+    """
+    Decode and validate a JWT *access* token.
+
+    Unlike verify_jwt_token, this enforces that the token's `type` claim is
+    'access', so long-lived verification (24h) and refresh (7d) tokens — which
+    are signed with the same JWT_SECRET_KEY — cannot be used as API access
+    credentials (see issue #205).
+
+    Args:
+        token: JWT token string to verify
+
+    Returns:
+        Decoded payload dictionary
+
+    Raises:
+        ValueError: If token is invalid, expired, or not an access token
+    """
+    payload = verify_jwt_token(token)  # raises ValueError on bad token
+
+    if payload.get("type") != "access":
+        raise ValueError("Invalid token type")
+
+    return payload
+
+
 # ============================================================================
 # Email Verification Token Functions
 # ============================================================================

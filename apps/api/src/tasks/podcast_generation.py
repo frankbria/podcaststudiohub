@@ -25,9 +25,7 @@ def generate_podcast_task(
     episode_id: str,
     urls: Optional[List[str]] = None,
     text_content: Optional[str] = None,
-    file_paths: Optional[List[str]] = None,
     image_paths: Optional[List[str]] = None,
-    youtube_urls: Optional[List[str]] = None,
     topic: Optional[str] = None,
     tts_model: str = "openai",
     conversation_config: Optional[Dict[str, Any]] = None,
@@ -51,11 +49,9 @@ def generate_podcast_task(
     Args:
         self: Celery task instance (for progress updates)
         episode_id: UUID of the episode being generated
-        urls: List of URLs to extract content from
-        text_content: Raw text content
-        file_paths: List of file paths (PDFs, documents, etc.)
+        urls: List of URLs to extract content from (regular + YouTube URLs)
+        text_content: Raw text content (also carries pre-extracted file/PDF content)
         image_paths: List of image file paths
-        youtube_urls: List of YouTube URLs
         topic: Topic for content generation (uses web search)
         tts_model: TTS provider (openai, elevenlabs, gemini, etc.)
         conversation_config: Custom conversation configuration
@@ -112,13 +108,13 @@ def generate_podcast_task(
             }
         )
 
-        # Generate the podcast using existing CLI
+        # Generate the podcast using existing CLI.
+        # podcastfy 0.4.1 has no `file`/`youtube_urls` kwargs: YouTube URLs flow
+        # through `urls`, and file/PDF sources are pre-extracted into `text`.
         result = generate_podcast(
             urls=urls,
             text=text_content,
-            file=file_paths,
             image_paths=image_paths,
-            youtube_urls=youtube_urls,
             topic=topic,
             tts_model=tts_model,
             conversation_config=conversation_config,

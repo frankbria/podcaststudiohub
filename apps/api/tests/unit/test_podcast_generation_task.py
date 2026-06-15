@@ -1,22 +1,40 @@
 """
 Tests for podcast generation Celery task parameter handling.
 
-Covers GAP-001: parameter name mismatch between router and task.
-- Router calls generate_podcast_task.delay(file_paths=..., text_content=...)
-- Task must accept file_paths and text_content (not pdf_paths and text)
+Covers issue #204: the task previously called podcastfy 0.4.1's
+``generate_podcast()`` with ``file=`` and ``youtube_urls=`` kwargs that do not
+exist in the installed signature, so every generation failed with TypeError.
+
+The task must only pass kwargs that exist in the real podcastfy signature:
+``urls, text, image_paths, tts_model, conversation_config, longform, topic``.
+YouTube URLs arrive via ``urls``; file/PDF sources arrive pre-extracted via
+``text_content`` (mapped to ``text``).
 """
 
+import inspect
 import sys
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 from uuid import uuid4
 
+# Real podcastfy function — imported so tests assert against the ACTUAL
+# installed signature (not a permissive MagicMock). This is the drift guard.
+from podcastfy.client import generate_podcast as real_generate_podcast
 from src.tasks.podcast_generation import generate_podcast_task
 
 
-def _mock_podcastfy_modules():
-	"""Return mocked podcastfy client + modules dict for sys.modules patching."""
+def _mock_podcastfy_modules(return_value="/tmp/output.mp3"):
+	"""Return mocked podcastfy client + modules dict for sys.modules patching.
+
+	The ``generate_podcast`` attribute is an ``autospec`` of the real function,
+	so passing any kwarg the real podcastfy signature does not accept raises
+	TypeError — exactly the failure mode issue #204 was about. This prevents the
+	false-green that plain MagicMocks produced.
+	"""
 	mock_client = MagicMock()
+	mock_client.generate_podcast = create_autospec(
+		real_generate_podcast, return_value=return_value
+	)
 	mock_podcastfy = types.ModuleType("podcastfy")
 	mock_podcastfy.client = mock_client
 	return mock_client, {
@@ -25,26 +43,46 @@ def _mock_podcastfy_modules():
 	}
 
 
+def _run_task(**task_kwargs):
+	"""Run the Celery task body with podcastfy autospec-mocked, return (result, mock_gen)."""
+	mock_client, mock_modules = _mock_podcastfy_modules()
+	mock_gen = mock_client.generate_podcast
+
+	audio_instance = MagicMock()
+	audio_instance.__len__ = MagicMock(return_value=60000)
+
+	with patch.object(generate_podcast_task, 'update_state'), \
+		 patch.dict(sys.modules, mock_modules), \
+		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=1024), \
+		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
+		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
+
+		mock_audio.from_file.return_value = audio_instance
+		result = generate_podcast_task.run(**task_kwargs)
+
+	return result, mock_gen
+
+
 # ============================================================================
-# PARAMETER NAME TESTS (signature inspection — no imports needed)
+# PARAMETER NAME TESTS (signature inspection)
 # ============================================================================
 
-def test_task_accepts_file_paths_parameter():
-	"""Task signature must accept file_paths (not pdf_paths) to match router call."""
-	import inspect
+def test_task_does_not_accept_invalid_parameters():
+	"""Task must not expose file_paths / youtube_urls (no valid podcastfy mapping)."""
 	sig = inspect.signature(generate_podcast_task.run)
 	params = list(sig.parameters.keys())
-	assert 'file_paths' in params, (
-		"Task must accept 'file_paths' parameter (router sends file_paths=...)"
+	assert 'file_paths' not in params, (
+		"Task must not accept 'file_paths' — podcastfy 0.4.1 has no 'file' kwarg; "
+		"file sources are pre-extracted into text_content."
 	)
-	assert 'pdf_paths' not in params, (
-		"Task must not use deprecated 'pdf_paths' parameter"
+	assert 'youtube_urls' not in params, (
+		"Task must not accept 'youtube_urls' — podcastfy 0.4.1 has no such kwarg; "
+		"YouTube URLs flow through 'urls'."
 	)
 
 
 def test_task_accepts_text_content_parameter():
 	"""Task signature must accept text_content (not text) to match router call."""
-	import inspect
 	sig = inspect.signature(generate_podcast_task.run)
 	params = list(sig.parameters.keys())
 	assert 'text_content' in params, (
@@ -55,127 +93,95 @@ def test_task_accepts_text_content_parameter():
 	)
 
 
-def test_task_file_paths_defaults_to_none():
-	"""file_paths parameter must default to None."""
-	import inspect
+def test_task_accepts_urls_parameter():
+	"""Task must accept urls (regular + YouTube URLs both flow here)."""
 	sig = inspect.signature(generate_podcast_task.run)
-	assert sig.parameters['file_paths'].default is None
+	assert 'urls' in sig.parameters
 
 
 def test_task_text_content_defaults_to_none():
 	"""text_content parameter must default to None."""
-	import inspect
 	sig = inspect.signature(generate_podcast_task.run)
 	assert sig.parameters['text_content'].default is None
 
 
 # ============================================================================
-# INTEGRATION: task passes parameters correctly to podcastfy CLI
-#
-# With bind=True, `generate_podcast_task` IS the Celery task instance and
-# `.run(...)` is an instance method — `self` is already bound to the task.
-# We patch `update_state` on the task instance for progress calls.
+# SIGNATURE DRIFT GUARD — kwargs the task passes must bind to the REAL podcastfy
+# signature. This is the test required by issue #204's acceptance criteria.
 # ============================================================================
 
-def test_task_passes_file_paths_to_generate_podcast():
-	"""Task must pass file_paths to generate_podcast() as the 'file' argument."""
-	episode_id = str(uuid4())
-	file_paths = ["/tmp/test.pdf", "/tmp/other.pdf"]
-
-	mock_client, mock_modules = _mock_podcastfy_modules()
-	mock_gen = MagicMock(return_value="/tmp/output.mp3")
-	mock_client.generate_podcast = mock_gen
-
-	audio_instance = MagicMock()
-	audio_instance.__len__ = MagicMock(return_value=60000)
-
-	with patch.object(generate_podcast_task, 'update_state'), \
-		 patch.dict(sys.modules, mock_modules), \
-		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=1024), \
-		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
-		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
-
-		mock_audio.from_file.return_value = audio_instance
-
-		generate_podcast_task.run(
-			episode_id=episode_id,
-			file_paths=file_paths,
-		)
-
-	mock_gen.assert_called_once()
-	call_kwargs = mock_gen.call_args[1]
-	assert call_kwargs.get('file') == file_paths, (
-		f"Expected file={file_paths}, got file={call_kwargs.get('file')}"
+def test_task_kwargs_bind_against_real_generate_podcast_signature():
+	"""Every kwarg the task passes must be accepted by the real generate_podcast()."""
+	_, mock_gen = _run_task(
+		episode_id=str(uuid4()),
+		urls=["https://youtube.com/watch?v=abc"],
+		text_content="Pre-extracted file content.",
+		topic="AI safety",
+		tts_model="elevenlabs",
+		longform=True,
 	)
 
+	mock_gen.assert_called_once()
+	call_kwargs = mock_gen.call_args.kwargs
+
+	# Binding against the real signature raises TypeError on any drift.
+	inspect.signature(real_generate_podcast).bind(**call_kwargs)
+
+	# Explicitly guard the two historically-wrong kwargs.
+	assert 'file' not in call_kwargs
+	assert 'youtube_urls' not in call_kwargs
+
+
+def test_task_does_not_pass_invalid_kwargs_to_generate_podcast():
+	"""Task must never pass file= or youtube_urls= to generate_podcast()."""
+	_, mock_gen = _run_task(
+		episode_id=str(uuid4()),
+		urls=["https://example.com"],
+	)
+	call_kwargs = mock_gen.call_args.kwargs
+	assert 'file' not in call_kwargs
+	assert 'youtube_urls' not in call_kwargs
+	assert 'output_dir' not in call_kwargs
+
+
+# ============================================================================
+# INTEGRATION: task passes parameters correctly to podcastfy CLI
+# ============================================================================
 
 def test_task_passes_text_content_to_generate_podcast():
 	"""Task must pass text_content to generate_podcast() as the 'text' argument."""
-	episode_id = str(uuid4())
 	text_content = "This is the podcast content."
-
-	mock_client, mock_modules = _mock_podcastfy_modules()
-	mock_gen = MagicMock(return_value="/tmp/output.mp3")
-	mock_client.generate_podcast = mock_gen
-
-	audio_instance = MagicMock()
-	audio_instance.__len__ = MagicMock(return_value=60000)
-
-	with patch.object(generate_podcast_task, 'update_state'), \
-		 patch.dict(sys.modules, mock_modules), \
-		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=1024), \
-		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
-		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
-
-		mock_audio.from_file.return_value = audio_instance
-
-		generate_podcast_task.run(
-			episode_id=episode_id,
-			text_content=text_content,
-		)
+	_, mock_gen = _run_task(episode_id=str(uuid4()), text_content=text_content)
 
 	mock_gen.assert_called_once()
-	call_kwargs = mock_gen.call_args[1]
+	call_kwargs = mock_gen.call_args.kwargs
 	assert call_kwargs.get('text') == text_content, (
 		f"Expected text={text_content!r}, got text={call_kwargs.get('text')!r}"
 	)
 
 
+def test_task_passes_urls_to_generate_podcast():
+	"""URLs (including YouTube) must be forwarded via the 'urls' kwarg."""
+	urls = ["https://youtube.com/watch?v=abc", "https://example.com"]
+	_, mock_gen = _run_task(episode_id=str(uuid4()), urls=urls)
+
+	call_kwargs = mock_gen.call_args.kwargs
+	assert call_kwargs.get('urls') == urls
+
+
 def test_task_no_type_error_with_router_parameter_names():
-	"""Calling task with router's parameter names must not raise TypeError."""
-	episode_id = str(uuid4())
-
-	mock_client, mock_modules = _mock_podcastfy_modules()
-	mock_client.generate_podcast = MagicMock(return_value="/tmp/output.mp3")
-
-	audio_instance = MagicMock()
-	audio_instance.__len__ = MagicMock(return_value=60000)
-
-	with patch.object(generate_podcast_task, 'update_state'), \
-		 patch.dict(sys.modules, mock_modules), \
-		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=1024), \
-		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
-		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
-
-		mock_audio.from_file.return_value = audio_instance
-
-		# This is exactly what the router sends — must not raise TypeError
-		result = generate_podcast_task.run(
-			episode_id=episode_id,
-			urls=["https://example.com"],
-			file_paths=["/tmp/doc.pdf"],
-			text_content="Some text",
-		)
-
+	"""Calling task with the router's parameter names must not raise / fail."""
+	result, _ = _run_task(
+		episode_id=str(uuid4()),
+		urls=["https://example.com"],
+		text_content="Some text",
+	)
 	assert result["status"] == "success"
 
 
 def test_task_returns_success_result():
 	"""Task must return dict with status=success on successful generation."""
-	episode_id = str(uuid4())
-
-	mock_client, mock_modules = _mock_podcastfy_modules()
-	mock_client.generate_podcast = MagicMock(return_value="/tmp/episode.mp3")
+	mock_client, mock_modules = _mock_podcastfy_modules(return_value="/tmp/episode.mp3")
 
 	audio_instance = MagicMock()
 	audio_instance.__len__ = MagicMock(return_value=120000)
@@ -189,7 +195,7 @@ def test_task_returns_success_result():
 		mock_audio.from_file.return_value = audio_instance
 
 		result = generate_podcast_task.run(
-			episode_id=episode_id,
+			episode_id=str(uuid4()),
 			urls=["https://example.com"],
 		)
 
@@ -201,10 +207,10 @@ def test_task_returns_success_result():
 
 def test_task_returns_failed_result_on_exception():
 	"""Task must return dict with status=failed after retries exhausted."""
-	episode_id = str(uuid4())
-
 	mock_client, mock_modules = _mock_podcastfy_modules()
-	mock_client.generate_podcast = MagicMock(side_effect=RuntimeError("Podcastfy crashed"))
+	mock_client.generate_podcast = create_autospec(
+		real_generate_podcast, side_effect=RuntimeError("Podcastfy crashed")
+	)
 
 	with patch.object(generate_podcast_task, 'update_state'), \
 		 patch.dict(sys.modules, mock_modules), \
@@ -215,7 +221,7 @@ def test_task_returns_failed_result_on_exception():
 		 ):
 
 		result = generate_podcast_task.run(
-			episode_id=episode_id,
+			episode_id=str(uuid4()),
 			urls=["https://example.com"],
 		)
 

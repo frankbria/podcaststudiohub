@@ -244,7 +244,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
-    { name = "podcastfy", specifier = ">=0.4.1" },
+    { name = "podcastfy", specifier = "==0.4.1" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },

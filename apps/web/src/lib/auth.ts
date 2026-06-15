@@ -76,10 +76,16 @@ export const authOptions: NextAuthOptions = {
       return token;
     },
     async session({ session, token }) {
-      // Send properties to the client
+      // Send properties to the client.
+      // NOTE: the backend accessToken is intentionally NOT copied onto the
+      // session. The session is readable by browser JS (via /api/auth/session +
+      // useSession), so exposing the token there lets any XSS or malicious
+      // dependency exfiltrate a working API credential. The token stays only in
+      // the server-side JWT (httpOnly cookie); authenticated backend calls are
+      // proxied through /api/proxy, which reads it via getToken server-side
+      // (issue #212).
       session.user.id = token.userId as string;
       (session.user as typeof session.user & { tenantId: string }).tenantId = token.tenantId as string;
-      (session as typeof session & { accessToken: string }).accessToken = token.accessToken as string;
       return session;
     },
   },

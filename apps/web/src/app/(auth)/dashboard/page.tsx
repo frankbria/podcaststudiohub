@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useRouter } from "next/navigation"
-import { useSession, type Session } from "next-auth/react"
+import { useSession } from "next-auth/react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
@@ -29,7 +29,7 @@ interface Project {
 
 export default function DashboardPage() {
   const router = useRouter()
-  const { data: session, status } = useSession()
+  const { status } = useSession()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
@@ -47,16 +47,13 @@ export default function DashboardPage() {
     mode: "onChange",
   })
 
-  const getToken = useCallback(
-    () => (session as Session & { accessToken?: string })?.accessToken ?? "",
-    [session]
-  )
-
+  // Authenticated backend calls go through the same-origin /api/proxy Route
+  // Handler, which injects the bearer token server-side from the httpOnly
+  // session cookie. The cookie is sent automatically on same-origin requests,
+  // so no Authorization header (and no client-side token) is needed (#212).
   const loadProjects = useCallback(async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects`, {
-        headers: { Authorization: `Bearer ${getToken()}` },
-      })
+      const response = await fetch(`/api/proxy/projects`)
 
       if (response.ok) {
         const data = await response.json() as { items?: Project[] }
@@ -70,7 +67,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false)
     }
-  }, [getToken])
+  }, [])
 
   useEffect(() => {
     if (status === "unauthenticated") {
@@ -82,11 +79,10 @@ export default function DashboardPage() {
 
   const onSubmit = async (data: ProjectFormData) => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/projects`, {
+      const response = await fetch(`/api/proxy/projects`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${getToken()}`,
         },
         body: JSON.stringify({
           title: data.title.trim(),
@@ -122,12 +118,11 @@ export default function DashboardPage() {
   const handleUpdateProject = async (updated: Project) => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/projects/${updated.id}`,
+        `/api/proxy/projects/${updated.id}`,
         {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${getToken()}`,
           },
           body: JSON.stringify({
             title: updated.title,
@@ -156,10 +151,9 @@ export default function DashboardPage() {
     setIsDeleting(true)
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/projects/${deleteProject.id}`,
+        `/api/proxy/projects/${deleteProject.id}`,
         {
           method: "DELETE",
-          headers: { Authorization: `Bearer ${getToken()}` },
         }
       )
 

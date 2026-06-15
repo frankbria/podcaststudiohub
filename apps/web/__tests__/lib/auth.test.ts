@@ -114,7 +114,7 @@ describe('authOptions callbacks', () => {
     expect(result).toEqual({ existing: 'val' })
   })
 
-  it('session callback maps token properties to session', async () => {
+  it('session callback maps id and tenantId but NEVER exposes accessToken (#212)', async () => {
     const { authOptions } = require('@/lib/auth')
     const sessionCallback = authOptions.callbacks.session
     const token = { userId: 'u1', tenantId: 'ten1', accessToken: 'tok' }
@@ -122,6 +122,18 @@ describe('authOptions callbacks', () => {
     const result = await sessionCallback({ session, token })
     expect(result.user.id).toBe('u1')
     expect((result.user as any).tenantId).toBe('ten1')
-    expect((result as any).accessToken).toBe('tok')
+    // The backend token must stay server-side; the client session must not carry it.
+    expect((result as any).accessToken).toBeUndefined()
+  })
+
+  it('jwt callback still stores accessToken on the server-side token (#212)', async () => {
+    const { authOptions } = require('@/lib/auth')
+    const jwtCallback = authOptions.callbacks.jwt
+    const result = await jwtCallback({
+      token: {},
+      user: { id: 'u1', accessToken: 'tok', tenantId: 'ten1' },
+    })
+    // The token lives in the httpOnly JWT cookie, read server-side via getToken.
+    expect(result.accessToken).toBe('tok')
   })
 })

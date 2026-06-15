@@ -16,7 +16,6 @@ from ..models.episode import Episode
 from ..models.content_source import ContentSource
 from ..models.user import User
 from ..dependencies import get_current_user
-from ..middleware.auth import get_current_user_from_query
 from ..tasks.podcast_generation import generate_podcast_task
 
 logger = logging.getLogger(__name__)
@@ -132,7 +131,7 @@ async def generate_podcast(
 @router.get("/episodes/{episode_id}/progress")
 async def get_generation_progress_stream(
     episode_id: UUID,
-    current_user: User = Depends(get_current_user_from_query),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -140,9 +139,12 @@ async def get_generation_progress_stream(
 
     Streams progress updates as they occur during podcast generation.
 
-    Authentication: Accepts JWT token via query parameter (?token=<jwt>) to support
-    the browser EventSource API, which cannot send custom headers. Falls back to the
-    standard Authorization header for backward compatibility.
+    Authentication: standard ``Authorization: Bearer`` header only. The browser
+    ``EventSource`` API cannot set custom headers, so the web client reaches this
+    endpoint through a same-origin Next.js proxy that injects the header
+    server-side. JWTs are never accepted in the URL/query string, since tokens in
+    URLs leak into proxy/access logs, browser history, and Referer headers
+    (issue #212).
     """
     # Verify episode access
     result = await db.execute(

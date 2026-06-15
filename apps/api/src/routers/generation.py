@@ -112,6 +112,15 @@ async def generate_podcast(
             ),
         )
 
+    # Guard against queuing an empty job: every source may have been skipped above
+    # (e.g. source_data mutated via the update path to drop its url/content key, which
+    # is not re-validated). Without usable urls or text there is nothing to generate.
+    if not urls and not text_content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No usable content found in the episode's sources; nothing to generate.",
+        )
+
     # Resolve composition / distribution flags against global feature settings.
     # Per-request flags are only honoured when the feature is globally enabled.
     use_composition = enable_composition and settings.ENABLE_AUDIO_COMPOSITION

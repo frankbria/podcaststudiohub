@@ -148,3 +148,42 @@ async def test_generate_passes_url_source_via_urls(client, episode_and_auth):
     call_kwargs = mock_delay.call_args.kwargs
     assert "file_paths" not in call_kwargs
     assert "https://example.com/a" in call_kwargs["urls"]
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_when_no_usable_content(client, episode_and_auth):
+    """If every source is skipped (e.g. source_data mutated to drop its url), reject."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=_mock_http_200(),
+    ):
+        create = await client.post(
+            f"/episodes/{episode_id}/content?auto_extract=false",
+            headers=headers,
+            json={
+                "episode_id": episode_id,
+                "source_type": "url",
+                "source_data": {"url": "https://example.com/a", "title": "A"},
+            },
+        )
+    assert create.status_code == 201, create.text
+    source_id = create.json()["id"]
+
+    # The update path does not re-validate source_data, so the url key can vanish.
+    upd = await client.put(
+        f"/content/{source_id}",
+        headers=headers,
+        json={"source_data": {"title": "A"}},
+    )
+    assert upd.status_code == 200, upd.text
+
+    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate", headers=headers
+        )
+
+    assert resp.status_code == 400
+    assert "nothing to generate" in resp.json()["detail"].lower()
+    mock_delay.assert_not_called()

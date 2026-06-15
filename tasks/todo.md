@@ -23,7 +23,7 @@ so issue order == work order.
       → **Frank rotates** (deactivate the flagged AWS access key — ID is in issue #207 — in IAM). Secret scanner ✅ done (see below).
 - [ ] **P1.2 #205** JWT verification ignores `type` claim — verification/refresh tokens usable as access tokens
 - [ ] **P1.3 #206** SSRF — content URLs + webhook targets fetched server-side, no private-IP/metadata block
-- [ ] **P1.4 #212** Backend JWT exposed to browser JS (NextAuth session) + leaked in SSE `?token=` URL
+- [x] **P1.4 #212** Backend JWT exposed to browser JS (NextAuth session) + leaked in SSE `?token=` URL ✅ PR #237 (server-side /api/proxy; SSE query-token path removed)
 
 ## Phase 2 — Restore the core product (generation pipeline)
 - [ ] **P2.1 #204** 🔴 `generate_podcast()` called with invalid kwargs → **every generation fails**. *Unblocks the rest of Phase 2.* Add an autospec/signature-asserting test; pin `podcastfy==0.4.1`.
@@ -88,31 +88,32 @@ ticket/cookie machinery needed.
 - Token read server-side via `getToken()` (next-auth/jwt), which decodes the same httpOnly cookie.
 - Backend query-param token auth path removed (defense-in-depth; unused after this change).
 
-### Frontend (apps/web)
-- [ ] `src/lib/auth.ts` — stop exposing the token (delete `session.accessToken`); keep it in the JWT only.
-- [ ] `src/app/api/proxy/[...path]/route.ts` (new) — catch-all proxy; `getToken` → 401 if absent;
+### Frontend (apps/web) — ✅ done (PR #237)
+- [x] `src/lib/auth.ts` — stop exposing the token (delete `session.accessToken`); keep it in the JWT only.
+- [x] `src/app/api/proxy/[...path]/route.ts` (new) — catch-all proxy; `getToken` → 401 if absent;
       forward method/body/query to `${API_URL}` with `Authorization: Bearer`; stream SSE; never log/URL the token.
-- [ ] `src/lib/api-client.ts` — base → `/api/proxy`; drop header auth; `createEventSource` w/o `?token=`.
-- [ ] `src/app/(auth)/dashboard/page.tsx` — calls → `/api/proxy/...`; drop token/Authorization.
-- [ ] `src/app/(auth)/projects/[id]/page.tsx` — same.
-- [ ] `src/app/(auth)/episodes/[id]/page.tsx` — same; SSE + polling → proxy; remove `getAuthHeaders`.
-- [ ] `src/types/api.ts` — remove `accessToken` from client `Session`/`User` types.
+      (Also: 500 on unset secret; redirect-Location rewrite/drop; cookie/authorization header stripping.)
+- [x] `src/lib/api-client.ts` — `createEventSource` w/o `?token=`.
+- [x] `src/app/(auth)/dashboard/page.tsx` — calls → `/api/proxy/...`; drop token/Authorization.
+- [x] `src/app/(auth)/projects/[id]/page.tsx` — same.
+- [x] `src/app/(auth)/episodes/[id]/page.tsx` — same; SSE + polling → proxy; remove `getAuthHeaders`.
+- [x] `src/types/api.ts` — remove `accessToken` from client `Session` type.
 
-### Backend (apps/api) — defense-in-depth
-- [ ] `src/routers/generation.py` — SSE endpoint → header-only `get_current_user`.
-- [ ] `src/middleware/auth.py` — remove unused `get_current_user_from_query` (keep `extract_token_from_header`).
+### Backend (apps/api) — defense-in-depth — ✅ done
+- [x] `src/routers/generation.py` — SSE endpoint → header-only `get_current_user`.
+- [x] `src/middleware/auth.py` — remove unused `get_current_user_from_query` (kept `extract_token_from_header`).
 
-### Tests
-- [ ] `__tests__/lib/auth.test.ts` — session does NOT expose `accessToken`; jwt still stores it.
-- [ ] `__tests__/app/api/proxy/route.test.ts` (new) — Bearer injected; forwards method/body/query; 401 w/o token; SSE passthrough.
-- [ ] `__tests__/lib/api-client.test.ts` — proxy base + SSE without token query.
-- [ ] `apps/api/tests/test_sse_auth.py` — header auth works; `?token=` does NOT authenticate (401).
-- [ ] `apps/api/tests/unit/test_sse_auth_dependency.py` — remove (dependency deleted).
+### Tests — ✅ done
+- [x] `__tests__/lib/auth.test.ts` — session does NOT expose `accessToken`; jwt still stores it.
+- [x] `__tests__/app/api/proxy/route.test.ts` (new) — Bearer injected; forwards method/body/query; 401 w/o token; SSE passthrough.
+- [x] `__tests__/lib/api-client.test.ts` — SSE without token query.
+- [x] `apps/api/tests/test_sse_auth.py` — header auth works; `?token=` does NOT authenticate (401).
+- [x] `apps/api/tests/unit/test_sse_auth_dependency.py` — removed (dependency deleted).
 
-### Acceptance criteria
-- [ ] Token kept server-side; API calls proxied via Route Handlers; no `accessToken` on client session.
-- [ ] SSE authenticated without the JWT in the URL.
-- [ ] No token query param can leak to logs (none exists by design).
+### Acceptance criteria — ✅ verified live (Phase 11 demo)
+- [x] Token kept server-side; API calls proxied via Route Handlers; no `accessToken` on client session.
+- [x] SSE authenticated without the JWT in the URL.
+- [x] No token query param can leak to logs (none exists by design; backend rejects `?token=`).
 
 ### Deviations / assumptions
 - `getToken()` reads the server-only JWT claim (AC says `getServerSession`, but the token is intentionally off the session).

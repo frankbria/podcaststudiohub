@@ -224,24 +224,24 @@ async def regenerate_podcast(
     """
     Regenerate podcast for an episode
 
-    Resets generation status and restarts the generation process
+    Restarts the generation process by delegating to ``generate_podcast``, which
+    validates the episode's content sources and resets ``generation_status`` to
+    ``"queued"`` with fresh progress.
+
+    We intentionally do NOT pre-reset the episode to ``"draft"`` before delegating.
+    ``generate_podcast`` can raise (404 missing episode, 400 no usable content)
+    before it queues anything; committing a status/progress reset first would leave
+    the episode degraded on those failures (issue #213). Delegating directly keeps
+    the episode untouched unless generation is actually queued.
     """
-    # Get episode
-    result = await db.execute(
-        select(Episode).where(
-            Episode.id == episode_id,
-            Episode.tenant_id == current_user.tenant_id,
-        )
+    # Delegate with explicit keyword arguments. ``generate_podcast`` inserts the
+    # ``enable_composition`` / ``enable_distribution`` Query params between
+    # ``episode_id`` and ``current_user``; positional binding would misalign the
+    # arguments and pass the Depends() sentinels as ``current_user`` / ``db``.
+    return await generate_podcast(
+        episode_id=episode_id,
+        enable_composition=False,
+        enable_distribution=False,
+        current_user=current_user,
+        db=db,
     )
-    episode = result.scalar_one_or_none()
-
-    if not episode:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Episode not found")
-
-    # Reset generation status
-    episode.generation_status = "draft"
-    episode.generation_progress = {}
-    await db.commit()
-
-    # Call generate endpoint
-    return await generate_podcast(episode_id, current_user, db)

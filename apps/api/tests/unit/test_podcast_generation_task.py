@@ -14,6 +14,7 @@ YouTube URLs arrive via ``urls``; file/PDF sources arrive pre-extracted via
 import inspect
 import sys
 import types
+from typing import Any
 from unittest.mock import MagicMock, create_autospec, patch
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ from podcastfy.client import generate_podcast as real_generate_podcast
 from src.tasks.podcast_generation import generate_podcast_task
 
 
-def _mock_podcastfy_modules(return_value="/tmp/output.mp3"):
+def _mock_podcastfy_modules(return_value: str = "/tmp/output.mp3") -> tuple[MagicMock, dict[str, Any]]:
 	"""Return mocked podcastfy client + modules dict for sys.modules patching.
 
 	The ``generate_podcast`` attribute is an ``autospec`` of the real function,
@@ -43,7 +44,7 @@ def _mock_podcastfy_modules(return_value="/tmp/output.mp3"):
 	}
 
 
-def _run_task(**task_kwargs):
+def _run_task(**task_kwargs: Any) -> tuple[dict[str, Any], MagicMock]:
 	"""Run the Celery task body with podcastfy autospec-mocked, return (result, mock_gen)."""
 	mock_client, mock_modules = _mock_podcastfy_modules()
 	mock_gen = mock_client.generate_podcast

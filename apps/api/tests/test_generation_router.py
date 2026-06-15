@@ -7,11 +7,16 @@ Covers issue #204: file/PDF sources must be pre-extracted into ``text`` (podcast
 """
 
 import pytest
+from typing import Any
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from httpx import AsyncClient
 
-def _mock_http_200():
+Headers = dict[str, str]
+
+
+def _mock_http_200() -> AsyncMock:
     """Return a context-manager mock that yields a 200 HEAD response (URL validator)."""
     mock_response = MagicMock()
     mock_response.status_code = 200
@@ -24,7 +29,7 @@ def _mock_http_200():
 
 
 @pytest.fixture
-async def episode_and_auth(client):
+async def episode_and_auth(client: AsyncClient) -> tuple[str, Headers]:
     """Create user + project + episode, return (episode_id, auth_headers)."""
     reg = await client.post("/auth/register", json={
         "email": f"gen_{uuid4()}@example.com",
@@ -54,7 +59,7 @@ async def episode_and_auth(client):
     return ep.json()["id"], headers
 
 
-async def _create_pdf_source(client, episode_id, headers):
+async def _create_pdf_source(client: AsyncClient, episode_id: str, headers: Headers) -> dict[str, Any]:
     resp = await client.post(
         f"/episodes/{episode_id}/content?auto_extract=false",
         headers=headers,
@@ -68,7 +73,7 @@ async def _create_pdf_source(client, episode_id, headers):
     return resp.json()
 
 
-async def _mark_complete(client, content_id, headers, extracted):
+async def _mark_complete(client: AsyncClient, content_id: str, headers: Headers, extracted: str) -> None:
     resp = await client.put(
         f"/content/{content_id}",
         headers=headers,

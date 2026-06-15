@@ -95,9 +95,13 @@ async def generate_podcast(
                     f"'{source.extraction_status}' — falling back to source_data"
                 )
             if source.source_type in ("url", "youtube"):
-                urls.append(source.source_data.get("url"))
+                url = source.source_data.get("url")
+                if url:
+                    urls.append(url)
             elif source.source_type == "text":
-                text_content.append(source.source_data.get("content"))
+                content = source.source_data.get("content")
+                if content:
+                    text_content.append(content)
 
     if unextracted_files:
         raise HTTPException(

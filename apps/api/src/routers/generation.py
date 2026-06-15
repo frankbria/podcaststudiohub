@@ -96,11 +96,11 @@ async def generate_podcast(
                 )
             if source.source_type in ("url", "youtube"):
                 url = source.source_data.get("url")
-                if url:
-                    urls.append(url)
+                if isinstance(url, str) and url.strip():
+                    urls.append(url.strip())
             elif source.source_type == "text":
                 content = source.source_data.get("content")
-                if content:
+                if isinstance(content, str) and content.strip():
                     text_content.append(content)
 
     if unextracted_files:

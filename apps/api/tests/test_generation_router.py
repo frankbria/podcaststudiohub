@@ -171,11 +171,12 @@ async def test_generate_rejects_when_no_usable_content(client, episode_and_auth)
     assert create.status_code == 201, create.text
     source_id = create.json()["id"]
 
-    # The update path does not re-validate source_data, so the url key can vanish.
+    # The update path does not re-validate source_data, so the url can become
+    # whitespace-only — which must be treated as no usable content.
     upd = await client.put(
         f"/content/{source_id}",
         headers=headers,
-        json={"source_data": {"title": "A"}},
+        json={"source_data": {"url": "   ", "title": "A"}},
     )
     assert upd.status_code == 200, upd.text
 

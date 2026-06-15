@@ -177,22 +177,17 @@ class ApiClient {
   /**
    * Server-Sent Events connection for real-time updates.
    *
-   * When includeAuth is true, the JWT token is appended as a query parameter.
-   * This is required for SSE connections because the EventSource API (W3C spec)
-   * does not support custom headers such as Authorization: Bearer <token>.
+   * The token is NEVER appended to the URL. The EventSource API (W3C spec)
+   * cannot set an Authorization header, so SSE must be reached through the
+   * same-origin Next.js proxy (`/api/proxy/...`), which injects the bearer token
+   * server-side from the httpOnly session cookie. Putting the token in the URL
+   * would leak it into proxy/access logs, browser history, and Referer headers
+   * (issue #212).
    *
-   * @param endpoint - API endpoint path
-   * @param includeAuth - Whether to append the JWT token as a query parameter (default: false)
+   * @param endpoint - API endpoint path (relative to the same-origin proxy)
    */
-  createEventSource(endpoint: string, includeAuth: boolean = false): EventSource {
-    let url = `${this.baseUrl}${endpoint}`;
-
-    if (includeAuth && this.token) {
-      const separator = endpoint.includes('?') ? '&' : '?';
-      url = `${url}${separator}token=${encodeURIComponent(this.token)}`;
-    }
-
-    return new EventSource(url);
+  createEventSource(endpoint: string): EventSource {
+    return new EventSource(`${this.baseUrl}${endpoint}`);
   }
 }
 

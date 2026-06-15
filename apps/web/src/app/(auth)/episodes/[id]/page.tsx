@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter, useParams } from "next/navigation"
-import { useSession, type Session } from "next-auth/react"
+import { useSession } from "next-auth/react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
@@ -55,10 +55,6 @@ interface TTSConfig {
   is_default: boolean
 }
 
-interface AuthSession extends Session {
-  accessToken?: string
-}
-
 const ACTIVE_STATUSES = ["queued", "extracting", "generating", "synthesizing", "uploading"]
 
 const STATUS_MESSAGES: Record<string, string> = {
@@ -82,7 +78,7 @@ const DEFAULT_CONFIGS: Record<string, Record<string, string>> = {
 export default function EpisodePage() {
   const router = useRouter()
   const params = useParams()
-  const { data: session } = useSession()
+  const { status: authStatus } = useSession()
   const [episode, setEpisode] = useState<Episode | null>(null)
   const [loading, setLoading] = useState(true)
   const [contentSources, setContentSources] = useState<ContentSource[]>([])
@@ -102,16 +98,13 @@ export default function EpisodePage() {
   const robustESRef = useRef<RobustEventSource | null>(null)
   const stopPollingRef = useRef<(() => void) | null>(null)
 
-  const getAuthHeaders = useCallback((): Record<string, string> => {
-    const token = (session as AuthSession)?.accessToken
-    return { Authorization: `Bearer ${token ?? ""}` }
-  }, [session])
-
+  // Backend calls (fetch + EventSource) go through the same-origin /api/proxy
+  // handler, which injects the bearer token server-side from the httpOnly cookie
+  // — sent automatically on same-origin requests, so no client token (#212).
   const loadEpisode = useCallback(async () => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}`,
-        { headers: getAuthHeaders() }
+        `/api/proxy/episodes/${params.id}`
       )
       if (response.ok) {
         const data = await response.json() as Episode
@@ -131,13 +124,12 @@ export default function EpisodePage() {
     } finally {
       setLoading(false)
     }
-  }, [params.id, getAuthHeaders])
+  }, [params.id])
 
   const loadContentSources = useCallback(async () => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/content/episodes/${params.id}/content`,
-        { headers: getAuthHeaders() }
+        `/api/proxy/content/episodes/${params.id}/content`
       )
       if (response.ok) {
         const data = await response.json() as { content_sources?: ContentSource[] } | ContentSource[]
@@ -149,13 +141,12 @@ export default function EpisodePage() {
     } catch (error) {
       console.error("Failed to load content sources:", error)
     }
-  }, [params.id, getAuthHeaders])
+  }, [params.id])
 
   const loadTTSConfigs = useCallback(async () => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/tts-configs`,
-        { headers: getAuthHeaders() }
+        `/api/proxy/tts-configs`
       )
       if (response.ok) {
         const data = await response.json() as { configs?: TTSConfig[] }
@@ -164,7 +155,7 @@ export default function EpisodePage() {
     } catch (error) {
       console.error("Failed to load TTS configs:", error)
     }
-  }, [getAuthHeaders])
+  }, [])
 
   const {
     register,
@@ -184,12 +175,12 @@ export default function EpisodePage() {
   const sourceType = watch("sourceType")
 
   useEffect(() => {
-    if (session) {
+    if (authStatus === "authenticated") {
       loadEpisode()
       loadContentSources()
       loadTTSConfigs()
     }
-  }, [session, loadEpisode, loadContentSources, loadTTSConfigs])
+  }, [authStatus, loadEpisode, loadContentSources, loadTTSConfigs])
 
   useEffect(() => {
     if (!episode?.generation_status || !ACTIVE_STATUSES.includes(episode.generation_status)) {
@@ -198,11 +189,12 @@ export default function EpisodePage() {
 
     setProgressMessage(STATUS_MESSAGES[episode.generation_status] ?? "")
 
-    // EventSource doesn't support custom headers (W3C spec limitation).
-    // Pass JWT token as a query parameter so the backend can authenticate the SSE connection.
-    const token = (session as AuthSession)?.accessToken
-    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : ""
-    const sseUrl = `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress${tokenParam}`
+    // EventSource cannot set an Authorization header (W3C spec). Instead of
+    // leaking the JWT in the URL, connect to the same-origin /api/proxy Route
+    // Handler, which injects the bearer token server-side and streams the SSE
+    // response back. The httpOnly session cookie is sent automatically on the
+    // same-origin request (#212).
+    const sseUrl = `/api/proxy/generation/episodes/${params.id}/progress`
 
     const handleMessage = (raw: unknown) => {
       const data = raw as { status: string; progress?: GenerationProgress }
@@ -242,14 +234,10 @@ export default function EpisodePage() {
       console.warn("SSE max retries exceeded — falling back to polling")
       setConnectionStatus("polling")
 
-      const pollUrl = `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/progress`
-      const fetchInit: RequestInit = token
-        ? { headers: { Authorization: `Bearer ${token}` } }
-        : {}
+      const pollUrl = `/api/proxy/generation/episodes/${params.id}/progress`
 
       stopPollingRef.current = startPolling({
         url: pollUrl,
-        fetchInit,
         interval: 5000,
         onMessage: handleMessage,
         onError: (err) => console.error("Polling error:", err),
@@ -279,7 +267,7 @@ export default function EpisodePage() {
       stopPollingRef.current?.()
       stopPollingRef.current = null
     }
-  }, [episode?.generation_status, params.id, session, loadEpisode])
+  }, [episode?.generation_status, params.id, loadEpisode])
 
   const onSubmitContent = async (data: ContentSourceFormData) => {
     try {
@@ -296,10 +284,10 @@ export default function EpisodePage() {
           }
 
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/content/episodes/${params.id}/content`,
+        `/api/proxy/content/episodes/${params.id}/content`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         }
       )
@@ -330,10 +318,9 @@ export default function EpisodePage() {
     setIsDeletingContent(true)
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/content/${deleteContentSource.id}`,
+        `/api/proxy/content/${deleteContentSource.id}`,
         {
           method: "DELETE",
-          headers: getAuthHeaders(),
         }
       )
 
@@ -358,8 +345,8 @@ export default function EpisodePage() {
     setProgressMessage(STATUS_MESSAGES.queued)
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/generation/episodes/${params.id}/generate`,
-        { method: "POST", headers: getAuthHeaders() }
+        `/api/proxy/generation/episodes/${params.id}/generate`,
+        { method: "POST" }
       )
       if (response.ok) {
         showSuccessToast("Podcast generation started")
@@ -379,9 +366,9 @@ export default function EpisodePage() {
     if (!newTtsName.trim()) return
     setSavingTts(true)
     try {
-      const createResponse = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/tts-configs`, {
+      const createResponse = await fetch(`/api/proxy/tts-configs`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: newTtsName,
           provider: newTtsProvider,
@@ -408,9 +395,9 @@ export default function EpisodePage() {
 
   const applyTTSConfig = async () => {
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/episodes/${params.id}`, {
+      const response = await fetch(`/api/proxy/episodes/${params.id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tts_config_id: selectedTtsConfigId || null }),
       })
       if (response.ok) {

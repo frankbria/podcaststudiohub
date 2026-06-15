@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useRouter, useParams } from "next/navigation"
-import { useSession, type Session } from "next-auth/react"
+import { useSession } from "next-auth/react"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
@@ -37,7 +37,7 @@ interface Project {
 export default function ProjectPage() {
   const router = useRouter()
   const params = useParams()
-  const { data: session } = useSession()
+  const { status: authStatus } = useSession()
   const [project, setProject] = useState<Project | null>(null)
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [loading, setLoading] = useState(true)
@@ -57,16 +57,12 @@ export default function ProjectPage() {
     mode: "onChange",
   })
 
-  const getToken = useCallback(
-    () => (session as Session & { accessToken?: string })?.accessToken ?? "",
-    [session]
-  )
-
+  // Backend calls go through the same-origin /api/proxy handler, which injects
+  // the bearer token server-side from the httpOnly cookie — no client token (#212).
   const loadProject = useCallback(async () => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/projects/${params.id}`,
-        { headers: { Authorization: `Bearer ${getToken()}` } }
+        `/api/proxy/projects/${params.id}`
       )
       if (response.ok) {
         const data = await response.json() as Project
@@ -80,13 +76,12 @@ export default function ProjectPage() {
     } finally {
       setLoading(false)
     }
-  }, [params.id, getToken])
+  }, [params.id])
 
   const loadEpisodes = useCallback(async () => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`,
-        { headers: { Authorization: `Bearer ${getToken()}` } }
+        `/api/proxy/episodes/projects/${params.id}/episodes`
       )
       if (response.ok) {
         const data = await response.json() as { items?: Episode[] }
@@ -98,24 +93,23 @@ export default function ProjectPage() {
       console.error("Failed to load episodes:", error)
       showErrorToast("Failed to load episodes: Network error")
     }
-  }, [params.id, getToken])
+  }, [params.id])
 
   useEffect(() => {
-    if (session) {
+    if (authStatus === "authenticated") {
       loadProject()
       loadEpisodes()
     }
-  }, [session, loadProject, loadEpisodes])
+  }, [authStatus, loadProject, loadEpisodes])
 
   const onSubmit = async (data: EpisodeFormData) => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/episodes/projects/${params.id}/episodes`,
+        `/api/proxy/episodes/projects/${params.id}/episodes`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${getToken()}`,
           },
           body: JSON.stringify({
             project_id: params.id,
@@ -149,12 +143,11 @@ export default function ProjectPage() {
   const handleUpdateProject = async (updated: Project) => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/projects/${updated.id}`,
+        `/api/proxy/projects/${updated.id}`,
         {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${getToken()}`,
           },
           body: JSON.stringify({
             title: updated.title,
@@ -179,12 +172,11 @@ export default function ProjectPage() {
   const handleUpdateEpisode = async (updated: Episode) => {
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/episodes/${updated.id}`,
+        `/api/proxy/episodes/${updated.id}`,
         {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${getToken()}`,
           },
           body: JSON.stringify({ title: updated.title }),
         }
@@ -210,10 +202,9 @@ export default function ProjectPage() {
     setIsDeletingEpisode(true)
     try {
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/episodes/${deleteEpisode.id}`,
+        `/api/proxy/episodes/${deleteEpisode.id}`,
         {
           method: "DELETE",
-          headers: { Authorization: `Bearer ${getToken()}` },
         }
       )
 

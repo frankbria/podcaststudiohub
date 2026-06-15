@@ -166,9 +166,13 @@ declare module 'next-auth' {
       name: string;
       tenantId: string;
     };
-    accessToken: string;
+    // NOTE: the backend accessToken is deliberately absent from the client
+    // session. It lives only in the server-side JWT (below) and is injected into
+    // backend calls by the /api/proxy Route Handler (issue #212).
   }
 
+  // The User object returned by `authorize` carries the backend token into the
+  // jwt callback; it is server-side only and never serialized to the client.
   interface User {
     id: string;
     email: string;

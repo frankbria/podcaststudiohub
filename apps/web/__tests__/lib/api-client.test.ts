@@ -147,27 +147,12 @@ describe('ApiClient', () => {
       expect(es).toBeDefined()
     })
 
-    it('with includeAuth=true appends ?token=... to the URL', () => {
+    it('NEVER appends the token to the URL, even when a token is set (#212)', () => {
       client.setToken('auth-token')
-      client.createEventSource('/events', true)
-      expect(MockEventSource).toHaveBeenCalledWith(
-        'http://localhost:8000/events?token=auth-token'
-      )
-    })
-
-    it('with includeAuth=true and existing query params uses & separator', () => {
-      client.setToken('auth-token')
-      client.createEventSource('/events?foo=bar', true)
-      expect(MockEventSource).toHaveBeenCalledWith(
-        'http://localhost:8000/events?foo=bar&token=auth-token'
-      )
-    })
-
-    it('does NOT append token when includeAuth=false', () => {
-      client.setToken('auth-token')
-      client.createEventSource('/events', false)
+      client.createEventSource('/events')
       const calledUrl: string = MockEventSource.mock.calls[0][0]
       expect(calledUrl).not.toContain('token=')
+      expect(calledUrl).not.toContain('auth-token')
     })
   })
 

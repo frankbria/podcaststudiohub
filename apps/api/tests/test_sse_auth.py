@@ -1,8 +1,12 @@
 """
-Tests for SSE (Server-Sent Events) authentication via query parameter token.
+Tests for SSE (Server-Sent Events) authentication.
 
-GAP-005: EventSource API cannot send custom headers, so JWT tokens must be
-accepted via query parameters for SSE endpoints.
+The SSE progress endpoint authenticates via the standard ``Authorization: Bearer``
+header only. The browser ``EventSource`` API cannot send custom headers, so the web
+client reaches this endpoint through a same-origin Next.js proxy that injects the
+header server-side (issue #212). The legacy ``?token=<jwt>`` query-parameter auth
+path has been removed because tokens in URLs leak into proxy/access logs, browser
+history, and Referer headers.
 """
 import pytest
 from uuid import uuid4, UUID as PyUUID
@@ -69,30 +73,13 @@ async def episode_with_user(client, registered_user):
 # =============================================================================
 
 @pytest.mark.asyncio
-async def test_progress_stream_with_query_token(client, episode_with_user, test_db):
-    """Test that SSE endpoint accepts JWT token in query parameter."""
-    episode_id, token, _ = episode_with_user
+async def test_progress_stream_with_header_token(client, episode_with_user, test_db):
+    """SSE endpoint authenticates via the Authorization header."""
+    episode_id, token, headers = episode_with_user
 
     # Set episode to "complete" so the SSE stream terminates after one event.
     # Without this, the endpoint loops forever (while True / sleep 2s) and the
     # test hangs because httpx reads the full response body.
-    await test_db.execute(
-        update(Episode).where(Episode.id == PyUUID(episode_id)).values(generation_status="complete")
-    )
-    await test_db.flush()
-
-    response = await client.get(
-        f"/generation/episodes/{episode_id}/progress?token={token}"
-    )
-    assert response.status_code == 200
-    assert "text/event-stream" in response.headers.get("content-type", "")
-
-
-@pytest.mark.asyncio
-async def test_progress_stream_with_header_token(client, episode_with_user, test_db):
-    """Test that SSE endpoint still accepts JWT token in Authorization header (backward compat)."""
-    episode_id, token, headers = episode_with_user
-
     await test_db.execute(
         update(Episode).where(Episode.id == PyUUID(episode_id)).values(generation_status="complete")
     )
@@ -107,8 +94,29 @@ async def test_progress_stream_with_header_token(client, episode_with_user, test
 
 
 @pytest.mark.asyncio
+async def test_progress_stream_query_token_is_rejected(client, episode_with_user, test_db):
+    """A JWT supplied only in the ?token= query string must NOT authenticate.
+
+    This is the core of issue #212: tokens must never travel in the URL, so the
+    query-parameter auth path is gone and a query-only token is treated as no
+    credentials at all (401).
+    """
+    episode_id, token, _ = episode_with_user
+
+    await test_db.execute(
+        update(Episode).where(Episode.id == PyUUID(episode_id)).values(generation_status="complete")
+    )
+    await test_db.flush()
+
+    response = await client.get(
+        f"/generation/episodes/{episode_id}/progress?token={token}"
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_progress_stream_without_token(client, episode_with_user):
-    """Test that SSE endpoint returns 401 when no token provided."""
+    """SSE endpoint returns 401 when no token is provided."""
     episode_id, _, _ = episode_with_user
 
     response = await client.get(
@@ -119,18 +127,19 @@ async def test_progress_stream_without_token(client, episode_with_user):
 
 @pytest.mark.asyncio
 async def test_progress_stream_with_invalid_token(client, episode_with_user):
-    """Test that SSE endpoint returns 401 for invalid token."""
+    """SSE endpoint returns 401 for an invalid header token."""
     episode_id, _, _ = episode_with_user
 
     response = await client.get(
-        f"/generation/episodes/{episode_id}/progress?token=invalid.token.here"
+        f"/generation/episodes/{episode_id}/progress",
+        headers={"Authorization": "Bearer invalid.token.here"}
     )
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_progress_stream_with_expired_token(client, episode_with_user, test_db):
-    """Test that SSE endpoint returns 401 for expired token."""
+    """SSE endpoint returns 401 for an expired token."""
     episode_id, _, _ = episode_with_user
 
     # Create a token that is already expired
@@ -147,14 +156,15 @@ async def test_progress_stream_with_expired_token(client, episode_with_user, tes
             expires_delta=timedelta(seconds=-1)  # Already expired
         )
         response = await client.get(
-            f"/generation/episodes/{episode_id}/progress?token={expired_token}"
+            f"/generation/episodes/{episode_id}/progress",
+            headers={"Authorization": f"Bearer {expired_token}"}
         )
         assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_progress_stream_tenant_isolation(client, episode_with_user):
-    """Test that a user cannot access another user's episode progress stream."""
+    """A user cannot access another user's episode progress stream."""
     episode_id, _, _ = episode_with_user
 
     # Register a second user
@@ -168,35 +178,20 @@ async def test_progress_stream_tenant_isolation(client, episode_with_user):
 
     # Second user should not be able to access first user's episode
     response = await client.get(
-        f"/generation/episodes/{episode_id}/progress?token={other_token}"
+        f"/generation/episodes/{episode_id}/progress",
+        headers={"Authorization": f"Bearer {other_token}"}
     )
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_progress_stream_nonexistent_episode(client, registered_user):
-    """Test that SSE endpoint returns 404 for non-existent episode."""
-    token, _ = registered_user
+    """SSE endpoint returns 404 for a non-existent episode."""
+    token, headers = registered_user
     fake_episode_id = uuid4()
 
     response = await client.get(
-        f"/generation/episodes/{fake_episode_id}/progress?token={token}"
-    )
-    assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_progress_stream_query_token_takes_precedence(client, episode_with_user, test_db):
-    """Test that query param token is used when both query param and header are present."""
-    episode_id, token, headers = episode_with_user
-
-    await test_db.execute(
-        update(Episode).where(Episode.id == PyUUID(episode_id)).values(generation_status="complete")
-    )
-    await test_db.flush()
-
-    response = await client.get(
-        f"/generation/episodes/{episode_id}/progress?token={token}",
+        f"/generation/episodes/{fake_episode_id}/progress",
         headers=headers
     )
-    assert response.status_code == 200
+    assert response.status_code == 404

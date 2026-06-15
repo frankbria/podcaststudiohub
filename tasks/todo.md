@@ -79,48 +79,60 @@ so issue order == work order.
 
 ---
 
-## Active work — Issue #212 (P1.4): backend JWT exposed to browser + SSE URL token leak
+## Active work — Issue #204 (P2.1): generation calls podcastfy with invalid kwargs
 
-**Plan source:** self-authored (issue had acceptance criteria but no implementation plan).
+**Plan source:** comment (CodeRabbit coding plan), adapted to the codebase.
 
-**Design:** a **same-origin Next.js proxy Route Handler** injects the bearer token server-side
-from the httpOnly NextAuth JWT cookie. The browser never sees the token, and it never appears in
-any URL/query (including SSE — the stream is proxied through the same handler). No new
-ticket/cookie machinery needed.
-- Token read server-side via `getToken()` (next-auth/jwt), which decodes the same httpOnly cookie.
-- Backend query-param token auth path removed (defense-in-depth; unused after this change).
+**Problem:** the Celery task calls podcastfy 0.4.1 `generate_podcast()` with `file=` and
+`youtube_urls=` kwargs that don't exist in the installed signature → **every** generation
+fails with `TypeError`. Existing tests mock `generate_podcast` with a plain `MagicMock`
+(no autospec) and actually **assert** the buggy kwargs, so they were false-green.
 
-### Frontend (apps/web) — ✅ done (PR #237)
-- [x] `src/lib/auth.ts` — stop exposing the token (delete `session.accessToken`); keep it in the JWT only.
-- [x] `src/app/api/proxy/[...path]/route.ts` (new) — catch-all proxy; `getToken` → 401 if absent;
-      forward method/body/query to `${API_URL}` with `Authorization: Bearer`; stream SSE; never log/URL the token.
-      (Also: 500 on unset secret; redirect-Location rewrite/drop; cookie/authorization header stripping.)
-- [x] `src/lib/api-client.ts` — `createEventSource` w/o `?token=`.
-- [x] `src/app/(auth)/dashboard/page.tsx` — calls → `/api/proxy/...`; drop token/Authorization.
-- [x] `src/app/(auth)/projects/[id]/page.tsx` — same.
-- [x] `src/app/(auth)/episodes/[id]/page.tsx` — same; SSE + polling → proxy; remove `getAuthHeaders`.
-- [x] `src/types/api.ts` — remove `accessToken` from client `Session` type.
+Real podcastfy 0.4.1 signature (no `file`, no `youtube_urls`):
+`(urls, url_file, transcript_file, tts_model, transcript_only, config, conversation_config, image_paths, is_local, text, llm_model_name, api_key_label, topic, longform)`
 
-### Backend (apps/api) — defense-in-depth — ✅ done
-- [x] `src/routers/generation.py` — SSE endpoint → header-only `get_current_user`.
-- [x] `src/middleware/auth.py` — remove unused `get_current_user_from_query` (kept `extract_token_from_header`).
+### Step 1 — Fix the Celery task call (core bug)
+- [ ] `apps/api/src/tasks/podcast_generation.py` — drop `file=file_paths` and
+      `youtube_urls=youtube_urls` from the `generate_podcast(...)` call; keep only valid
+      kwargs (`urls`, `text`, `image_paths`, `tts_model`, `conversation_config`,
+      `longform`, `topic`). Remove `file_paths`/`youtube_urls` from the task signature.
 
-### Tests — ✅ done
-- [x] `__tests__/lib/auth.test.ts` — session does NOT expose `accessToken`; jwt still stores it.
-- [x] `__tests__/app/api/proxy/route.test.ts` (new) — Bearer injected; forwards method/body/query; 401 w/o token; SSE passthrough.
-- [x] `__tests__/lib/api-client.test.ts` — SSE without token query.
-- [x] `apps/api/tests/test_sse_auth.py` — header auth works; `?token=` does NOT authenticate (401).
-- [x] `apps/api/tests/unit/test_sse_auth_dependency.py` — removed (dependency deleted).
+### Step 2 — Router: drop file_paths assembly, enforce extraction for files
+- [ ] `apps/api/src/routers/generation.py` — remove `file_paths` assembly + the
+      `file_paths=` delay arg; add validation that returns HTTP 400 if any **file**-type
+      source has `extraction_status != "complete"` (URL/YouTube/text keep their valid
+      `source_data` fallback).
 
-### Acceptance criteria — ✅ verified live (Phase 11 demo)
-- [x] Token kept server-side; API calls proxied via Route Handlers; no `accessToken` on client session.
-- [x] SSE authenticated without the JWT in the URL.
-- [x] No token query param can leak to logs (none exists by design; backend rejects `?token=`).
+### Step 3 — Delete dead PodcastService
+- [ ] Delete `apps/api/src/services/podcast_service.py` (same bug, unused).
+- [ ] Delete `apps/api/tests/unit/test_podcast_service.py`.
 
-### Deviations / assumptions
-- `getToken()` reads the server-only JWT claim (AC says `getServerSession`, but the token is intentionally off the session).
-- SSE solved by **proxy-streaming** (stronger than the AC's cookie/ticket options); tradeoff: SSE connections held open on the Next.js server (fine at current scale).
-- Download flow unaffected (presigned `s3_url`, no JWT). Token refresh out of scope (none exists).
+### Step 4 — Pin podcastfy
+- [ ] `apps/api/pyproject.toml`: `podcastfy>=0.4.1` → `==0.4.1`; refresh `uv.lock`
+      (already resolves to 0.4.1 — spec tightening only).
+
+### Step 5 — Tests (drift guard + fix the false-green ones)
+- [ ] Add a signature-drift guard binding the task's exact kwargs against the **real**
+      `podcastfy.client.generate_podcast` via `inspect.signature(...).bind(...)`.
+- [ ] Rewrite the 3 tests that encode the bug
+      (`test_task_passes_file_paths_to_generate_podcast`,
+      `test_task_accepts_file_paths_parameter`,
+      `test_task_no_type_error_with_router_parameter_names`); use `autospec` so bad kwargs raise.
+
+### Acceptance criteria
+- [ ] Inputs map to real signature: YouTube → `urls=`; file/PDF pre-extracted → `text=`. `file=`/`youtube_urls=`/`output_dir=`/`file_paths=` removed.
+- [ ] A test asserts call kwargs against `inspect.signature(generate_podcast)` (or autospec).
+- [ ] `podcastfy` pinned to `==0.4.1`.
+- [ ] Dead `PodcastService` + its test deleted.
+- [ ] Full api test suite green; lint clean.
+
+### Deviations from CodeRabbit's plan
+1. **Existing tests encode the bug** — three tests actively assert `file=file_paths` /
+   accept `file_paths`; they must be rewritten/inverted, not merely tweaked (this is the
+   false-green root cause).
+2. **Validation scope**: reject only **file**-type sources lacking extraction; URL/YouTube/text
+   keep their legitimate `source_data` fallback (podcastfy fetches URLs and accepts raw text).
+3. **Lock file** already pins 0.4.1 → no resolution change.
 
 ---
 

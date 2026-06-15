@@ -66,11 +66,13 @@ async def generate_podcast(
             detail="Episode must have at least one content source"
         )
 
-    # Prepare content data
-    # Prefer extracted_content (from ContentExtractionService) over raw source_data
+    # Prepare content data.
+    # Prefer extracted_content (from ContentExtractionService) over raw source_data.
+    # podcastfy 0.4.1 has no kwarg for file paths, so file/PDF sources MUST be
+    # pre-extracted into text; YouTube URLs flow through `urls`.
     urls = []
-    file_paths = []
     text_content = []
+    unextracted_files = []
 
     for source in content_sources:
         if source.extraction_status == "complete" and source.extracted_content:
@@ -80,21 +82,44 @@ async def generate_podcast(
                 f"Using extracted content for source {source.id} "
                 f"({source.source_type}, {len(source.extracted_content)} chars)"
             )
+        elif source.source_type in ("pdf", "file", "image"):
+            # File-backed sources (s3_key) without completed extraction cannot be
+            # generated: podcastfy cannot read the raw s3_key. Reject so the caller
+            # knows extraction must finish first (see HTTP 400 below).
+            unextracted_files.append(str(source.id))
         else:
-            # Fall back to raw source_data if extraction hasn't completed
-            if source.extraction_status not in ("complete",):
+            # url / youtube / text can fall back to raw source_data
+            if source.extraction_status != "complete":
                 logger.warning(
                     f"Content source {source.id} extraction_status="
                     f"'{source.extraction_status}' — falling back to source_data"
                 )
-            if source.source_type == "url":
-                urls.append(source.source_data.get("url"))
-            elif source.source_type == "youtube":
-                urls.append(source.source_data.get("url"))
-            elif source.source_type == "file":
-                file_paths.append(source.source_data.get("s3_key"))
+            if source.source_type in ("url", "youtube"):
+                url = source.source_data.get("url")
+                if isinstance(url, str) and url.strip():
+                    urls.append(url.strip())
             elif source.source_type == "text":
-                text_content.append(source.source_data.get("content"))
+                content = source.source_data.get("content")
+                if isinstance(content, str) and content.strip():
+                    text_content.append(content)
+
+    if unextracted_files:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "File sources must finish extraction before generation. "
+                f"Pending extraction for source(s): {', '.join(unextracted_files)}"
+            ),
+        )
+
+    # Guard against queuing an empty job: every source may have been skipped above
+    # (e.g. source_data mutated via the update path to drop its url/content key, which
+    # is not re-validated). Without usable urls or text there is nothing to generate.
+    if not urls and not text_content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No usable content found in the episode's sources; nothing to generate.",
+        )
 
     # Resolve composition / distribution flags against global feature settings.
     # Per-request flags are only honoured when the feature is globally enabled.
@@ -105,7 +130,6 @@ async def generate_podcast(
     task = generate_podcast_task.delay(
         episode_id=str(episode_id),
         urls=urls if urls else None,
-        file_paths=file_paths if file_paths else None,
         text_content="\n\n".join(text_content) if text_content else None,
         enable_composition=use_composition,
         enable_distribution=use_distribution,

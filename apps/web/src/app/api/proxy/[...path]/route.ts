@@ -41,12 +41,23 @@ async function handler(
   req: NextRequest,
   ctx: { params: Promise<{ path?: string[] }> }
 ): Promise<Response> {
+  // Without a secret, getToken can't decrypt the session and would 401 every
+  // request silently. Fail loudly instead so the misconfiguration is obvious.
+  const secret = process.env.NEXTAUTH_SECRET
+  if (!secret) {
+    console.error('[api-proxy] NEXTAUTH_SECRET is not set — cannot authenticate requests')
+    return new Response(JSON.stringify({ detail: 'Server misconfiguration' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
   // getToken's `req` union comes from next-auth's bundled next/server types,
   // which are structurally identical but a distinct instance from ours; the cast
   // bridges that mismatch without weakening the rest of the handler's typing.
   const token = await getToken({
     req: req as unknown as Parameters<typeof getToken>[0]['req'],
-    secret: process.env.NEXTAUTH_SECRET,
+    secret,
   })
   const accessToken = token?.accessToken as string | undefined
 
@@ -58,7 +69,7 @@ async function handler(
   }
 
   const { path = [] } = await ctx.params
-  const search = req.nextUrl.search // includes the leading "?" or is empty
+  const search = req.nextUrl.search
   const targetUrl = `${getApiBaseUrl()}/${path.map(encodeURIComponent).join('/')}${search}`
 
   const headers = new Headers()
@@ -83,6 +94,24 @@ async function handler(
   const responseHeaders = new Headers(upstream.headers)
   for (const name of STRIP_RESPONSE_HEADERS) {
     responseHeaders.delete(name)
+  }
+
+  // We use redirect:'manual', so a 3xx Location would otherwise reach the browser
+  // pointing at the internal backend host — leaking it and bypassing the proxy
+  // (and its auth injection). Rewrite same-backend redirects to a proxy-relative
+  // path; drop anything pointing elsewhere.
+  const location = responseHeaders.get('location')
+  if (location) {
+    try {
+      const target = new URL(location, getApiBaseUrl())
+      if (target.origin === new URL(getApiBaseUrl()).origin) {
+        responseHeaders.set('location', `/api/proxy${target.pathname}${target.search}`)
+      } else {
+        responseHeaders.delete('location')
+      }
+    } catch {
+      responseHeaders.delete('location')
+    }
   }
 
   // Returning the upstream body (a ReadableStream) streams JSON and SSE alike.

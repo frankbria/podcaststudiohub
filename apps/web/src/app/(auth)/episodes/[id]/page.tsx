@@ -78,7 +78,7 @@ const DEFAULT_CONFIGS: Record<string, Record<string, string>> = {
 export default function EpisodePage() {
   const router = useRouter()
   const params = useParams()
-  const { data: session } = useSession()
+  const { status: authStatus } = useSession()
   const [episode, setEpisode] = useState<Episode | null>(null)
   const [loading, setLoading] = useState(true)
   const [contentSources, setContentSources] = useState<ContentSource[]>([])
@@ -98,10 +98,9 @@ export default function EpisodePage() {
   const robustESRef = useRef<RobustEventSource | null>(null)
   const stopPollingRef = useRef<(() => void) | null>(null)
 
-  // Authenticated backend calls go through the same-origin /api/proxy Route
-  // Handler, which injects the bearer token server-side from the httpOnly
-  // session cookie. Same-origin requests (fetch and EventSource) send that
-  // cookie automatically, so no client-side token is needed (#212).
+  // Backend calls (fetch + EventSource) go through the same-origin /api/proxy
+  // handler, which injects the bearer token server-side from the httpOnly cookie
+  // — sent automatically on same-origin requests, so no client token (#212).
   const loadEpisode = useCallback(async () => {
     try {
       const response = await fetch(
@@ -176,12 +175,12 @@ export default function EpisodePage() {
   const sourceType = watch("sourceType")
 
   useEffect(() => {
-    if (session) {
+    if (authStatus === "authenticated") {
       loadEpisode()
       loadContentSources()
       loadTTSConfigs()
     }
-  }, [session, loadEpisode, loadContentSources, loadTTSConfigs])
+  }, [authStatus, loadEpisode, loadContentSources, loadTTSConfigs])
 
   useEffect(() => {
     if (!episode?.generation_status || !ACTIVE_STATUSES.includes(episode.generation_status)) {

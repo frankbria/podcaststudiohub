@@ -47,10 +47,8 @@ export default function DashboardPage() {
     mode: "onChange",
   })
 
-  // Authenticated backend calls go through the same-origin /api/proxy Route
-  // Handler, which injects the bearer token server-side from the httpOnly
-  // session cookie. The cookie is sent automatically on same-origin requests,
-  // so no Authorization header (and no client-side token) is needed (#212).
+  // Backend calls go through the same-origin /api/proxy handler, which injects
+  // the bearer token server-side from the httpOnly cookie — no client token (#212).
   const loadProjects = useCallback(async () => {
     try {
       const response = await fetch(`/api/proxy/projects`)

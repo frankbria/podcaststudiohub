@@ -64,6 +64,58 @@ describe('API proxy route handler', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('returns 401 when the session token has no accessToken field', async () => {
+    getTokenMock.mockResolvedValue({}) // valid token object, missing accessToken
+
+    const res = await GET(makeRequest('GET', { path: 'projects' }), ctx(['projects']))
+
+    expect(res.status).toBe(401)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 500 (not a silent 401) when NEXTAUTH_SECRET is unset', async () => {
+    delete process.env.NEXTAUTH_SECRET
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await GET(makeRequest('GET', { path: 'projects' }), ctx(['projects']))
+
+    expect(res.status).toBe(500)
+    expect(getTokenMock).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it('rewrites a backend redirect Location to a proxy-relative path', async () => {
+    getTokenMock.mockResolvedValue({ accessToken: 'secret-jwt' })
+    fetchMock.mockResolvedValue(
+      new Response(null, {
+        status: 307,
+        headers: { location: 'http://backend:8000/episodes/abc' },
+      })
+    )
+
+    const res = await GET(makeRequest('GET', { path: 'episodes' }), ctx(['episodes']))
+
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toBe('/api/proxy/episodes/abc')
+    // The internal backend host must never reach the browser.
+    expect(res.headers.get('location')).not.toContain('backend:8000')
+  })
+
+  it('drops a cross-origin redirect Location entirely', async () => {
+    getTokenMock.mockResolvedValue({ accessToken: 'secret-jwt' })
+    fetchMock.mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: { location: 'https://evil.example.com/phish' },
+      })
+    )
+
+    const res = await GET(makeRequest('GET', { path: 'episodes' }), ctx(['episodes']))
+
+    expect(res.headers.get('location')).toBeNull()
+  })
+
   it('forwards GET to the backend and injects the Authorization header server-side', async () => {
     getTokenMock.mockResolvedValue({ accessToken: 'secret-jwt' })
     fetchMock.mockResolvedValue(

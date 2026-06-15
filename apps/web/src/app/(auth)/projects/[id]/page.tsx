@@ -37,7 +37,7 @@ interface Project {
 export default function ProjectPage() {
   const router = useRouter()
   const params = useParams()
-  const { data: session } = useSession()
+  const { status: authStatus } = useSession()
   const [project, setProject] = useState<Project | null>(null)
   const [episodes, setEpisodes] = useState<Episode[]>([])
   const [loading, setLoading] = useState(true)
@@ -57,9 +57,8 @@ export default function ProjectPage() {
     mode: "onChange",
   })
 
-  // Authenticated backend calls go through the same-origin /api/proxy Route
-  // Handler, which injects the bearer token server-side from the httpOnly
-  // session cookie — no client-side token needed (#212).
+  // Backend calls go through the same-origin /api/proxy handler, which injects
+  // the bearer token server-side from the httpOnly cookie — no client token (#212).
   const loadProject = useCallback(async () => {
     try {
       const response = await fetch(
@@ -97,11 +96,11 @@ export default function ProjectPage() {
   }, [params.id])
 
   useEffect(() => {
-    if (session) {
+    if (authStatus === "authenticated") {
       loadProject()
       loadEpisodes()
     }
-  }, [session, loadProject, loadEpisodes])
+  }, [authStatus, loadProject, loadEpisodes])
 
   const onSubmit = async (data: EpisodeFormData) => {
     try {

@@ -82,6 +82,190 @@ async def _mark_complete(client: AsyncClient, content_id: str, headers: Headers,
     assert resp.status_code == 200, resp.text
 
 
+# ---------------------------------------------------------------------------
+# Issue #217: episode/project TTS provider + conversation_config must be
+# forwarded to the Celery task (otherwise every podcast silently uses OpenAI).
+# ---------------------------------------------------------------------------
+
+# Text long enough to clear the source validator (>=50 chars, >=10 words).
+_TEXT_BODY = (
+    "This is a sufficiently long piece of text content used by the generation "
+    "tests so that source validation accepts it as a usable podcast source."
+)
+
+ELEVENLABS_TTS_CONFIG = {
+    "model": "eleven_multilingual_v2",
+    "voice_1_id": "21m00Tcm4TlvDq8ikWAM",
+    "voice_2_id": "AZnzlk1XvdvUeBnXmlld",
+}
+GEMINI_TTS_CONFIG = {"model": "en-US-Studio-MultiSpeaker", "language_code": "en-US"}
+
+
+async def _create_text_source(client: AsyncClient, episode_id: str, headers: Headers) -> None:
+    """Attach a usable text content source so generation has something to do."""
+    resp = await client.post(
+        f"/episodes/{episode_id}/content?auto_extract=false",
+        headers=headers,
+        json={
+            "episode_id": episode_id,
+            "source_type": "text",
+            "source_data": {"content": _TEXT_BODY},
+        },
+    )
+    assert resp.status_code == 201, resp.text
+
+
+async def _create_tts_config(
+    client: AsyncClient, headers: Headers, provider: str, config: dict[str, Any]
+) -> str:
+    resp = await client.post(
+        "/tts-configs",
+        headers=headers,
+        json={"name": f"{provider} cfg", "provider": provider, "config": config},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+async def _create_template(client: AsyncClient, headers: Headers, config: dict[str, Any]) -> str:
+    resp = await client.post(
+        "/conversation-templates",
+        headers=headers,
+        json={"name": "Tmpl", "description": "t", "config": config},
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+@pytest.fixture
+async def episode_project_and_auth(client: AsyncClient) -> tuple[str, str, Headers]:
+    """Create user + project + episode, return (episode_id, project_id, auth_headers)."""
+    reg = await client.post("/auth/register", json={
+        "email": f"gencfg_{uuid4()}@example.com",
+        "password": "SecurePass123!",
+        "full_name": "Gen Cfg Tester",
+    })
+    assert reg.status_code == 201
+    headers = {"Authorization": f"Bearer {reg.json()['access_token']}"}
+
+    proj = await client.post("/projects", headers=headers, json={
+        "name": "Gen Cfg Project",
+        "podcast_metadata": {"show_title": "Show", "author": "A", "description": "D"},
+    })
+    assert proj.status_code == 201
+    project_id = proj.json()["id"]
+
+    ep = await client.post("/episodes", headers=headers, json={
+        "project_id": project_id,
+        "episode_number": 1,
+        "episode_metadata": {"title": "Ep", "description": "Episode"},
+    })
+    assert ep.status_code == 201
+    return ep.json()["id"], project_id, headers
+
+
+@pytest.mark.asyncio
+async def test_generate_forwards_episode_tts_provider(client, episode_project_and_auth):
+    """A non-OpenAI episode TTS config is forwarded as tts_model to the task."""
+    episode_id, _project_id, headers = episode_project_and_auth
+    await _create_text_source(client, episode_id, headers)
+
+    tts_id = await _create_tts_config(client, headers, "elevenlabs", ELEVENLABS_TTS_CONFIG)
+    upd = await client.put(
+        f"/episodes/{episode_id}", headers=headers, json={"tts_config_id": tts_id}
+    )
+    assert upd.status_code == 200, upd.text
+
+    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-tts")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate", headers=headers
+        )
+
+    assert resp.status_code == 202, resp.text
+    mock_delay.assert_called_once()
+    assert mock_delay.call_args.kwargs["tts_model"] == "elevenlabs"
+
+
+@pytest.mark.asyncio
+async def test_generate_falls_back_to_project_default_tts(client, episode_project_and_auth):
+    """With no episode TTS config, the project default provider is forwarded."""
+    episode_id, project_id, headers = episode_project_and_auth
+    await _create_text_source(client, episode_id, headers)
+
+    tts_id = await _create_tts_config(client, headers, "gemini", GEMINI_TTS_CONFIG)
+    upd = await client.put(
+        f"/projects/{project_id}", headers=headers, json={"default_tts_config_id": tts_id}
+    )
+    assert upd.status_code == 200, upd.text
+
+    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-gemini")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate", headers=headers
+        )
+
+    assert resp.status_code == 202, resp.text
+    mock_delay.assert_called_once()
+    assert mock_delay.call_args.kwargs["tts_model"] == "gemini"
+
+
+@pytest.mark.asyncio
+async def test_generate_forwards_conversation_config(client, episode_project_and_auth):
+    """An episode template + TTS config produce a conversation_config dict."""
+    episode_id, _project_id, headers = episode_project_and_auth
+    await _create_text_source(client, episode_id, headers)
+
+    template_cfg = {
+        "word_count": 300,
+        "conversation_style": ["casual"],
+        "roles_person1": "host",
+        "roles_person2": "expert guest",
+        "dialogue_structure": ["Introduction", "Main Content", "Conclusion"],
+        "podcast_name": "X",
+        "output_language": "en",
+        "creativity": 0.7,
+    }
+    template_id = await _create_template(client, headers, template_cfg)
+    tts_id = await _create_tts_config(client, headers, "elevenlabs", ELEVENLABS_TTS_CONFIG)
+    upd = await client.put(
+        f"/episodes/{episode_id}",
+        headers=headers,
+        json={"template_id": template_id, "tts_config_id": tts_id},
+    )
+    assert upd.status_code == 200, upd.text
+
+    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-cfg")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate", headers=headers
+        )
+
+    assert resp.status_code == 202, resp.text
+    conv = mock_delay.call_args.kwargs["conversation_config"]
+    assert conv["word_count"] == 300
+    assert conv["text_to_speech"] == ELEVENLABS_TTS_CONFIG
+
+
+@pytest.mark.asyncio
+async def test_generate_without_config_uses_task_default(client, episode_project_and_auth):
+    """With no TTS/template config, the task default (openai) is preserved."""
+    episode_id, _project_id, headers = episode_project_and_auth
+    await _create_text_source(client, episode_id, headers)
+
+    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-default")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate", headers=headers
+        )
+
+    assert resp.status_code == 202, resp.text
+    call_kwargs = mock_delay.call_args.kwargs
+    # Not passed → task default tts_model="openai" / conversation_config=None applies.
+    assert "tts_model" not in call_kwargs
+    assert "conversation_config" not in call_kwargs
+
+
 @pytest.mark.asyncio
 async def test_generate_rejects_unextracted_file_source(client, episode_and_auth):
     """A PDF source still pending extraction must yield HTTP 400, not dispatch."""

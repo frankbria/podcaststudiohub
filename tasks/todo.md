@@ -31,7 +31,7 @@ so issue order == work order.
 - [x] **P2.3 #217** Episode `tts_model`/`conversation_config` never forwarded → always OpenAI TTS ✅ done (generation.py eager-loads tts_config/template, normalises gemini_multi→geminimulti, forwards to task)
 - [x] **P2.4 #214** No guard against re-submitting generation for an in-progress episode (race) ✅ 409 guard in generate_podcast (`_RESTARTABLE_STATUSES`); regenerate inherits it; unit+integration tests
 - [ ] **P2.5 #210** PDF/file input non-functional — no upload endpoint; extraction ignores S3 key *(needs StorageService + #204)*
-- [ ] **P2.6 #211** Distribution subsystem unreachable + would publish blank episodes *(needs #204 producing real episodes + metadata)*
+- [x] **P2.6 #211** Distribution subsystem unreachable + would publish blank episodes ✅ PR #243 (router loads active targets → platforms dict; task populates metadata from Episode+s3_url; compose→upload→distribute ordering; no-publish-without-uploaded-audio guard; Spotify audio_url fix)
 
 ## Phase 3 — Deployment hardening (gate before any prod deploy)
 - [ ] **P3.1 #208** nginx serves authenticated SaaS over plain HTTP — enable TLS + HSTS/CSP/security headers

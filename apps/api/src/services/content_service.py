@@ -69,27 +69,34 @@ async def add_content_source(
     return content_source
 
 
-async def _upload_pdf_to_s3(file_path: str, s3_key: str) -> Optional[str]:
+async def _upload_pdf_to_s3(file_path: str, s3_key: str) -> str:
     """
     Upload a PDF to S3 and return its URL.
 
-    Returns None when S3 is not configured (development mode), mirroring the
-    audio-snippet upload helper. Kept at module scope so tests can patch it.
+    Kept at module scope so tests can patch it. Raises 503 when S3 is not
+    configured, since a PDF that is not stored cannot later be extracted.
 
     Args:
         file_path: Local temp file path to upload.
         s3_key: Destination S3 object key.
 
     Returns:
-        S3 URL string, or None if S3 is not configured.
+        S3 URL string.
+
+    Raises:
+        HTTPException: 503 if S3 storage is not configured.
     """
     from ..config import settings
     from ..services.storage_service import StorageService
 
     bucket = getattr(settings, "AWS_S3_BUCKET", None)
     if not bucket:
-        # S3 not configured — development mode, skip upload.
-        return None
+        # Without S3 the PDF cannot be persisted anywhere extraction can read it,
+        # so reject the upload rather than recording an unretrievable s3_key.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="File storage is not configured; PDF uploads are unavailable.",
+        )
 
     storage = StorageService(bucket_name=bucket, region_name=settings.AWS_REGION)
     return await storage.upload_file(
@@ -163,6 +170,14 @@ async def upload_pdf_content(
                 f"File too large ({file_size} bytes). "
                 f"Maximum allowed size is {MAX_PDF_SIZE_BYTES // (1024 * 1024)} MB"
             ),
+        )
+
+    # Verify the bytes are actually a PDF (magic header) so non-PDF content is
+    # rejected synchronously with 422 rather than failing later during extraction.
+    if not file_bytes.startswith(b"%PDF-"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Uploaded file is not a valid PDF (missing %PDF- header).",
         )
 
     # Build a tenant/episode-scoped S3 key with a sanitized filename

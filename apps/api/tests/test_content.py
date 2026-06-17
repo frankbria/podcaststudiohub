@@ -1235,6 +1235,24 @@ async def test_upload_pdf_rejects_wrong_content_type(client, episode_and_auth):
 
 
 @pytest.mark.asyncio
+async def test_upload_pdf_rejects_non_pdf_bytes(client, episode_and_auth):
+    """A .pdf/application/pdf upload whose bytes are not a PDF is rejected with 422."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files={"file": ("document.pdf", io.BytesIO(b"not a real pdf"), "application/pdf")},
+        )
+
+    assert response.status_code == 422
+    assert "pdf" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
 async def test_upload_pdf_rejects_oversize(client, episode_and_auth):
     """A PDF larger than the 50MB limit is rejected with 413."""
     episode_id, headers = episode_and_auth
@@ -1252,6 +1270,24 @@ async def test_upload_pdf_rejects_oversize(client, episode_and_auth):
 
     assert response.status_code == 413
     assert "too large" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_storage_not_configured(client, episode_and_auth):
+    """When S3 is not configured, the upload is rejected with 503 (not a dead record)."""
+    episode_id, headers = episode_and_auth
+
+    from src.config import settings as app_settings
+
+    with patch.object(app_settings, "AWS_S3_BUCKET", None):
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(),
+        )
+
+    assert response.status_code == 503
+    assert "storage" in response.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

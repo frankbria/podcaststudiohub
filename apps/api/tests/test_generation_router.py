@@ -118,6 +118,7 @@ async def _create_text_source(client: AsyncClient, episode_id: str, headers: Hea
 async def _create_tts_config(
     client: AsyncClient, headers: Headers, provider: str, config: dict[str, Any]
 ) -> str:
+    """Create a TTS configuration via the API and return its id."""
     resp = await client.post(
         "/tts-configs",
         headers=headers,
@@ -128,6 +129,7 @@ async def _create_tts_config(
 
 
 async def _create_template(client: AsyncClient, headers: Headers, config: dict[str, Any]) -> str:
+    """Create a conversation template via the API and return its id."""
     resp = await client.post(
         "/conversation-templates",
         headers=headers,

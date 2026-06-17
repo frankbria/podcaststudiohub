@@ -28,7 +28,7 @@ so issue order == work order.
 ## Phase 2 — Restore the core product (generation pipeline)
 - [ ] **P2.1 #204** 🔴 `generate_podcast()` called with invalid kwargs → **every generation fails**. *Unblocks the rest of Phase 2.* Add an autospec/signature-asserting test; pin `podcastfy==0.4.1`.
 - [ ] **P2.2 #213** `/regenerate` passes wrong positional args → guaranteed 500, leaves episode degraded
-- [ ] **P2.3 #217** Episode `tts_model`/`conversation_config` never forwarded → always OpenAI TTS
+- [x] **P2.3 #217** Episode `tts_model`/`conversation_config` never forwarded → always OpenAI TTS ✅ done (generation.py eager-loads tts_config/template, normalises gemini_multi→geminimulti, forwards to task)
 - [ ] **P2.4 #214** No guard against re-submitting generation for an in-progress episode (race)
 - [ ] **P2.5 #210** PDF/file input non-functional — no upload endpoint; extraction ignores S3 key *(needs StorageService + #204)*
 - [ ] **P2.6 #211** Distribution subsystem unreachable + would publish blank episodes *(needs #204 producing real episodes + metadata)*
@@ -96,7 +96,7 @@ podcastfy 0.4.1 `generate_podcast()`. `create_episode` does **not** persist
 (`EpisodeUpdate`), so tests configure episodes/projects via PUT.
 
 ### Step 1 — Eager-load config relationships in the generate query
-- [ ] `apps/api/src/routers/generation.py` — import `joinedload` (`sqlalchemy.orm`) and
+- [x] `apps/api/src/routers/generation.py` — import `joinedload` (`sqlalchemy.orm`) and
       `Project` (`..models.project`); add `.options(...)` to the `select(Episode)` query in
       `generate_podcast`: `joinedload(Episode.tts_config)`, `joinedload(Episode.template)`,
       `joinedload(Episode.project).joinedload(Project.default_tts_config)`,
@@ -104,30 +104,32 @@ podcastfy 0.4.1 `generate_podcast()`. `create_episode` does **not** persist
       (Relationships are lazy by default → would raise in the async context.)
 
 ### Step 2 — Resolve effective config + forward to the task
-- [ ] `apps/api/src/routers/generation.py` — after fetching the episode resolve
+- [x] `apps/api/src/routers/generation.py` — after fetching the episode resolve
       `effective_tts = episode.tts_config or episode.project.default_tts_config` and
       `effective_template = episode.template or episode.project.default_template`.
       `tts_model = effective_tts.provider if effective_tts else None`. Build
       `conversation_config` (None if neither): start from `effective_template.config`,
-      add a `text_to_speech` key = `effective_tts.config` if a TTS config resolved. Pass
-      `tts_model`/`conversation_config` into `generate_podcast_task.delay(...)` only when
-      non-None (preserve task defaults for unconfigured episodes).
+      add a `text_to_speech` key from `_podcastfy_text_to_speech()` (translates flat
+      voice_1/voice_2 fields + model → podcastfy's nested `text_to_speech.<provider>`
+      schema). `gemini_multi` normalised to `geminimulti`. Pass `tts_model`/
+      `conversation_config` into `generate_podcast_task.delay(...)` only when non-None
+      (preserve task defaults for unconfigured episodes).
 
 ### Step 3 — Tests (in existing `apps/api/tests/test_generation_router.py`)
-- [ ] `test_generate_forwards_episode_tts_provider` — episode TTS = ElevenLabs →
+- [x] `test_generate_forwards_episode_tts_provider` — episode TTS = ElevenLabs →
       task receives `tts_model="elevenlabs"`.
-- [ ] `test_generate_falls_back_to_project_default_tts` — no episode config, project
+- [x] `test_generate_falls_back_to_project_default_tts` — no episode config, project
       `default_tts_config` = Gemini → task receives `tts_model="gemini"`.
-- [ ] `test_generate_forwards_conversation_config` — episode template set → task
+- [x] `test_generate_forwards_conversation_config` — episode template set → task
       receives `conversation_config` with the template's config + a `text_to_speech` key.
-- [ ] `test_generate_without_config_uses_task_default` — no config → `tts_model` /
+- [x] `test_generate_without_config_uses_task_default` — no config → `tts_model` /
       `conversation_config` NOT passed (task default `openai` preserved).
 
 ### Acceptance criteria
-- [ ] Resolve episode/project TTS config and pass `tts_model` (+ `conversation_config`)
+- [x] Resolve episode/project TTS config and pass `tts_model` (+ `conversation_config`)
       into `generate_podcast_task.delay(...)`.
-- [ ] Test asserting a non-OpenAI selection is honored.
-- [ ] Full api test suite green; lint clean.
+- [x] Test asserting a non-OpenAI selection is honored.
+- [x] Full api test suite green; lint clean.
 
 ### Deviations from CodeRabbit's plan
 1. **Tests in existing `test_generation_router.py`** (not a new `test_generation.py`) —

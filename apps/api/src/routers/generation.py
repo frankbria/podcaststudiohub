@@ -187,9 +187,12 @@ async def generate_podcast(
     conversation_config = None
     if effective_template or effective_tts:
         conversation_config = {}
-        if effective_template and effective_template.config:
+        # config columns are JSONB; they are dict-validated on write (Pydantic),
+        # but guard against a non-dict value from the store so a corrupt row
+        # degrades to "use defaults" instead of raising at dispatch time.
+        if effective_template and isinstance(effective_template.config, dict):
             conversation_config.update(effective_template.config)
-        if effective_tts and effective_tts.config:
+        if effective_tts and isinstance(effective_tts.config, dict):
             conversation_config["text_to_speech"] = _podcastfy_text_to_speech(
                 effective_tts.provider, effective_tts.config
             )

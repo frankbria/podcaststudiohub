@@ -24,6 +24,44 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generation", tags=["Generation"])
 
+# podcastfy 0.4.1's TTSProviderFactory registers providers as
+# {openai, elevenlabs, edge, gemini, geminimulti}. The app stores the
+# multi-speaker provider as "gemini_multi" (underscore), which podcastfy would
+# reject as unsupported — normalize it before forwarding (issue #217).
+_PODCASTFY_TTS_PROVIDER = {"gemini_multi": "geminimulti"}
+
+
+def _podcastfy_tts_model(provider: str) -> str:
+    """Map a stored TTS provider name to podcastfy's expected provider key."""
+    return _PODCASTFY_TTS_PROVIDER.get(provider, provider)
+
+
+def _podcastfy_text_to_speech(provider: str, config: dict) -> dict:
+    """Translate a stored TTS config into podcastfy's ``text_to_speech`` schema.
+
+    The app persists a flat per-provider dict (``model`` plus ``voice_1``/
+    ``voice_2`` or ``voice_1_id``/``voice_2_id``), but podcastfy 0.4.1 reads
+    ``text_to_speech.<provider>.default_voices.{question,answer}`` and
+    ``text_to_speech.<provider>.model``. Without this mapping the user's voice/
+    model selection lands on keys podcastfy never reads and is silently ignored.
+    """
+    pf_provider = _podcastfy_tts_model(provider)
+    question = config.get("voice_1") or config.get("voice_1_id")
+    answer = config.get("voice_2") or config.get("voice_2_id")
+
+    provider_block: dict = {}
+    voices = {}
+    if question:
+        voices["question"] = question
+    if answer:
+        voices["answer"] = answer
+    if voices:
+        provider_block["default_voices"] = voices
+    if config.get("model"):
+        provider_block["model"] = config["model"]
+
+    return {"default_tts_model": pf_provider, pf_provider: provider_block}
+
 
 @router.post("/episodes/{episode_id}/generate", status_code=status.HTTP_202_ACCEPTED)
 async def generate_podcast(
@@ -144,7 +182,7 @@ async def generate_podcast(
     effective_tts = episode.tts_config or (project.default_tts_config if project else None)
     effective_template = episode.template or (project.default_template if project else None)
 
-    tts_model = effective_tts.provider if effective_tts else None
+    tts_model = _podcastfy_tts_model(effective_tts.provider) if effective_tts else None
 
     conversation_config = None
     if effective_template or effective_tts:
@@ -152,7 +190,9 @@ async def generate_podcast(
         if effective_template and effective_template.config:
             conversation_config.update(effective_template.config)
         if effective_tts and effective_tts.config:
-            conversation_config["text_to_speech"] = effective_tts.config
+            conversation_config["text_to_speech"] = _podcastfy_text_to_speech(
+                effective_tts.provider, effective_tts.config
+            )
 
     # Only pass resolved config kwargs; omit them so the task keeps its defaults
     # (tts_model='openai', conversation_config=None) for unconfigured episodes.

@@ -211,6 +211,32 @@ async def test_generate_falls_back_to_project_default_tts(client, episode_projec
 
 
 @pytest.mark.asyncio
+async def test_generate_normalizes_gemini_multi_provider(client, episode_project_and_auth):
+    """The app's 'gemini_multi' provider is normalized to podcastfy's 'geminimulti'."""
+    episode_id, _project_id, headers = episode_project_and_auth
+    await _create_text_source(client, episode_id, headers)
+
+    tts_id = await _create_tts_config(client, headers, "gemini_multi", GEMINI_TTS_CONFIG)
+    upd = await client.put(
+        f"/episodes/{episode_id}", headers=headers, json={"tts_config_id": tts_id}
+    )
+    assert upd.status_code == 200, upd.text
+
+    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-gm")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate", headers=headers
+        )
+
+    assert resp.status_code == 202, resp.text
+    kwargs = mock_delay.call_args.kwargs
+    assert kwargs["tts_model"] == "geminimulti"
+    # The nested text_to_speech block is keyed by the normalized provider name.
+    assert "geminimulti" in kwargs["conversation_config"]["text_to_speech"]
+    assert kwargs["conversation_config"]["text_to_speech"]["default_tts_model"] == "geminimulti"
+
+
+@pytest.mark.asyncio
 async def test_generate_forwards_conversation_config(client, episode_project_and_auth):
     """An episode template + TTS config produce a conversation_config dict."""
     episode_id, _project_id, headers = episode_project_and_auth
@@ -243,8 +269,17 @@ async def test_generate_forwards_conversation_config(client, episode_project_and
 
     assert resp.status_code == 202, resp.text
     conv = mock_delay.call_args.kwargs["conversation_config"]
+    # Template fields are forwarded at the top level (podcastfy reads them there).
     assert conv["word_count"] == 300
-    assert conv["text_to_speech"] == ELEVENLABS_TTS_CONFIG
+    # The flat TTS config is translated into podcastfy's nested text_to_speech
+    # schema so the user's model + voices are actually honored (issue #217).
+    tts = conv["text_to_speech"]
+    assert tts["default_tts_model"] == "elevenlabs"
+    assert tts["elevenlabs"]["model"] == "eleven_multilingual_v2"
+    assert tts["elevenlabs"]["default_voices"] == {
+        "question": "21m00Tcm4TlvDq8ikWAM",
+        "answer": "AZnzlk1XvdvUeBnXmlld",
+    }
 
 
 @pytest.mark.asyncio

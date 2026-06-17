@@ -29,7 +29,7 @@ so issue order == work order.
 - [ ] **P2.1 #204** 🔴 `generate_podcast()` called with invalid kwargs → **every generation fails**. *Unblocks the rest of Phase 2.* Add an autospec/signature-asserting test; pin `podcastfy==0.4.1`.
 - [ ] **P2.2 #213** `/regenerate` passes wrong positional args → guaranteed 500, leaves episode degraded
 - [x] **P2.3 #217** Episode `tts_model`/`conversation_config` never forwarded → always OpenAI TTS ✅ done (generation.py eager-loads tts_config/template, normalises gemini_multi→geminimulti, forwards to task)
-- [ ] **P2.4 #214** No guard against re-submitting generation for an in-progress episode (race)
+- [x] **P2.4 #214** No guard against re-submitting generation for an in-progress episode (race) ✅ 409 guard in generate_podcast (`_RESTARTABLE_STATUSES`); regenerate inherits it; unit+integration tests
 - [ ] **P2.5 #210** PDF/file input non-functional — no upload endpoint; extraction ignores S3 key *(needs StorageService + #204)*
 - [ ] **P2.6 #211** Distribution subsystem unreachable + would publish blank episodes *(needs #204 producing real episodes + metadata)*
 
@@ -79,65 +79,53 @@ so issue order == work order.
 
 ---
 
-## Active work — Issue #217 (P2.3): TTS model / conversation_config never forwarded
+## Active work — Issue #214 (P2.4): no guard against re-submitting an in-progress generation
 
 **Plan source:** comment (CodeRabbit coding plan), adapted to the codebase.
 
-**Problem:** the generation router never passes the episode's `tts_model` or
-`conversation_config`, so the Celery task default (`tts_model="openai"`) is always used.
-User/episode TTS selection is silently ignored and every generation requires
-`OPENAI_API_KEY` regardless of the chosen provider.
+**Problem:** `POST /generation/episodes/{id}/generate` dispatches a new Celery task
+regardless of `generation_status`. A second submission while one is in flight races to
+write `s3_url`/`s3_key`/`generation_status`, and overwrites the in-progress
+`celery_task_id` in `generation_progress` so SSE only tracks the newer task.
 
-**Verified:** `Episode.tts_config`/`Episode.template`/`Episode.project` +
-`Project.default_tts_config`/`Project.default_template` relationships all exist; the
-Celery task already accepts `tts_model`/`conversation_config` and forwards them to
-podcastfy 0.4.1 `generate_podcast()`. `create_episode` does **not** persist
-`tts_config_id`/`template_id` — those are only settable via the update path
-(`EpisodeUpdate`), so tests configure episodes/projects via PUT.
+**Verified:** `Episode.generation_status` is a Text column (default `'draft'`); the
+generate endpoint sets it to `"queued"` on dispatch. `regenerate_podcast` delegates to
+`generate_podcast`, so it inherits any guard added there. The existing
+`test_generation_router.py` already has an `episode_and_auth` fixture +
+`_create_text_source` helper to drive a real dispatch with Celery mocked.
 
-### Step 1 — Eager-load config relationships in the generate query
-- [x] `apps/api/src/routers/generation.py` — import `joinedload` (`sqlalchemy.orm`) and
-      `Project` (`..models.project`); add `.options(...)` to the `select(Episode)` query in
-      `generate_podcast`: `joinedload(Episode.tts_config)`, `joinedload(Episode.template)`,
-      `joinedload(Episode.project).joinedload(Project.default_tts_config)`,
-      `joinedload(Episode.project).joinedload(Project.default_template)`.
-      (Relationships are lazy by default → would raise in the async context.)
+### Step 1 — Add in-progress guard (`apps/api/src/routers/generation.py`)
+- [x] Module constant `_RESTARTABLE_STATUSES = frozenset({"draft", "complete", "failed"})`.
+- [x] In `generate_podcast`, immediately after the 404 check, if
+      `episode.generation_status not in _RESTARTABLE_STATUSES` raise
+      `HTTPException(status_code=409, detail=...)` naming the current status. Placed before
+      content assembly so an in-flight episode is rejected before any Celery dispatch.
 
-### Step 2 — Resolve effective config + forward to the task
-- [x] `apps/api/src/routers/generation.py` — after fetching the episode resolve
-      `effective_tts = episode.tts_config or episode.project.default_tts_config` and
-      `effective_template = episode.template or episode.project.default_template`.
-      `tts_model = effective_tts.provider if effective_tts else None`. Build
-      `conversation_config` (None if neither): start from `effective_template.config`,
-      add a `text_to_speech` key from `_podcastfy_text_to_speech()` (translates flat
-      voice_1/voice_2 fields + model → podcastfy's nested `text_to_speech.<provider>`
-      schema). `gemini_multi` normalised to `geminimulti`. Pass `tts_model`/
-      `conversation_config` into `generate_podcast_task.delay(...)` only when non-None
-      (preserve task defaults for unconfigured episodes).
-
-### Step 3 — Tests (in existing `apps/api/tests/test_generation_router.py`)
-- [x] `test_generate_forwards_episode_tts_provider` — episode TTS = ElevenLabs →
-      task receives `tts_model="elevenlabs"`.
-- [x] `test_generate_falls_back_to_project_default_tts` — no episode config, project
-      `default_tts_config` = Gemini → task receives `tts_model="gemini"`.
-- [x] `test_generate_forwards_conversation_config` — episode template set → task
-      receives `conversation_config` with the template's config + a `text_to_speech` key.
-- [x] `test_generate_without_config_uses_task_default` — no config → `tts_model` /
-      `conversation_config` NOT passed (task default `openai` preserved).
+### Step 2 — Tests (existing `apps/api/tests/test_generation_router.py`)
+- [x] `test_generate_rejects_when_already_in_progress` — integration: first POST → 202
+      (status `queued`), second POST → 409 and `delay` not called again.
+- [x] `test_generate_allowed_from_restartable_status[draft/complete/failed]` — unit: each
+      restartable status passes the guard and dispatches.
+- [x] `test_generate_rejects_each_in_progress_status[queued/extracting/generating/uploading/
+      composing/distributing]` — unit: every in-flight status → 409, no dispatch.
 
 ### Acceptance criteria
-- [x] Resolve episode/project TTS config and pass `tts_model` (+ `conversation_config`)
-      into `generate_podcast_task.delay(...)`.
-- [x] Test asserting a non-OpenAI selection is honored.
-- [x] Full api test suite green; lint clean.
+- [x] Reject with 409 when `generation_status` is in an in-progress set
+      (queued/processing/uploading/composing/distributing/…).
+- [x] Test asserting the 409 / idempotent behavior.
+- [x] Full api suite green (661 passed); ruff clean.
 
 ### Deviations from CodeRabbit's plan
-1. **Tests in existing `test_generation_router.py`** (not a new `test_generation.py`) —
-   avoids a duplicate test module and matches the established pattern.
-2. **Integration tests via the real `client` fixture + PUT endpoints** (not AsyncMock
-   unit tests) — `create_episode` ignores the config FKs, so they are only set via update;
-   this exercises real code paths.
-3. **Added a 4th test** (no-config default preserved) to lock in backward compatibility.
+1. **Tests in existing `test_generation_router.py`** (not a new file — it already exists
+   with the right fixtures).
+2. **Guard = "NOT in {draft, complete, failed}"** (CodeRabbit design choice 2) — covers all
+   current/future in-progress states, matching the issue's listed set.
+3. **Used unit tests (mocked episode) for the allow/deny matrix** instead of DB-status
+   mutation — the shared RLS test-DB session can't be re-read through the API after a
+   direct status write (mirrors `test_regenerate_does_not_degrade_episode_on_failure`).
+4. **Fixed a pre-existing mis-mock** in `test_regenerate_endpoint.py`: it stubbed
+   `scalar_one_or_none` but the query uses `.unique().scalar_one_or_none()` (from #217),
+   so the guard saw an unconfigured MagicMock. Aligned the mock to the real query shape.
 
 ---
 

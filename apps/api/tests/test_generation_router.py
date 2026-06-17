@@ -11,6 +11,7 @@ from typing import Any
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import HTTPException
 from httpx import AsyncClient
 
 Headers = dict[str, str]
@@ -369,6 +370,125 @@ async def test_generate_passes_url_source_via_urls(client, episode_and_auth):
     call_kwargs = mock_delay.call_args.kwargs
     assert "file_paths" not in call_kwargs
     assert "https://example.com/a" in call_kwargs["urls"]
+
+
+# ---------------------------------------------------------------------------
+# Issue #214: re-submitting generation for an in-progress episode must be
+# rejected with HTTP 409 (otherwise two tasks race to write s3_url/s3_key/
+# generation_status and the in-progress celery_task_id is overwritten).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_when_already_in_progress(client, episode_and_auth):
+    """A second generate while status is in-progress (queued) yields 409, no re-dispatch."""
+    episode_id, headers = episode_and_auth
+    await _create_text_source(client, episode_id, headers)
+
+    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-1")
+        first = await client.post(
+            f"/generation/episodes/{episode_id}/generate", headers=headers
+        )
+        assert first.status_code == 202, first.text
+        assert first.json()["status"] == "queued"
+
+        # Episode is now 'queued' (in-progress); a second submission must be rejected.
+        second = await client.post(
+            f"/generation/episodes/{episode_id}/generate", headers=headers
+        )
+
+    assert second.status_code == 409, second.text
+    # Current status is surfaced in the detail for debugging clarity.
+    assert "queued" in second.json()["detail"].lower()
+    # Only the first submission dispatched a task.
+    mock_delay.assert_called_once()
+
+
+@pytest.mark.parametrize("restartable_status", ["draft", "complete", "failed"])
+@pytest.mark.asyncio
+async def test_generate_allowed_from_restartable_status(restartable_status):
+    """draft/complete/failed are restartable: the guard lets generation re-dispatch.
+
+    Unit-level (mirrors ``test_regenerate_does_not_degrade_episode_on_failure``):
+    the shared test-DB transaction can't be re-read through the API after a status
+    mutation, so the guard's allow-set is exercised against a mocked episode.
+    """
+    from src.routers.generation import generate_podcast
+
+    episode = MagicMock()
+    episode.generation_status = restartable_status
+    # No TTS/template/project config -> tts_model / conversation_config stay unset.
+    episode.tts_config = None
+    episode.template = None
+    episode.project = None
+
+    source = MagicMock()
+    source.source_type = "text"
+    source.extraction_status = "complete"
+    source.extracted_content = _TEXT_BODY
+
+    episode_result = MagicMock()
+    episode_result.unique.return_value.scalar_one_or_none.return_value = episode
+    content_result = MagicMock()
+    content_result.scalars.return_value.all.return_value = [source]
+
+    db = AsyncMock()
+    db.execute.side_effect = [episode_result, content_result]
+
+    current_user = MagicMock()
+    current_user.tenant_id = uuid4()
+
+    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-restart")
+        result = await generate_podcast(
+            episode_id=uuid4(),
+            enable_composition=False,
+            enable_distribution=False,
+            current_user=current_user,
+            db=db,
+        )
+
+    # Guard allowed it through: a task was dispatched and status reset to queued.
+    mock_delay.assert_called_once()
+    assert result["status"] == "queued"
+    assert episode.generation_status == "queued"
+
+
+@pytest.mark.parametrize(
+    "in_progress_status",
+    ["queued", "extracting", "generating", "uploading", "composing", "distributing"],
+)
+@pytest.mark.asyncio
+async def test_generate_rejects_each_in_progress_status(in_progress_status):
+    """Every non-restartable status is rejected with 409 before any dispatch."""
+    from src.routers.generation import generate_podcast
+
+    episode = MagicMock()
+    episode.generation_status = in_progress_status
+
+    episode_result = MagicMock()
+    episode_result.unique.return_value.scalar_one_or_none.return_value = episode
+
+    db = AsyncMock()
+    db.execute.side_effect = [episode_result]
+
+    current_user = MagicMock()
+    current_user.tenant_id = uuid4()
+
+    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        with pytest.raises(HTTPException) as exc_info:
+            await generate_podcast(
+                episode_id=uuid4(),
+                enable_composition=False,
+                enable_distribution=False,
+                current_user=current_user,
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 409
+    assert in_progress_status in exc_info.value.detail
+    mock_delay.assert_not_called()
 
 
 @pytest.mark.asyncio

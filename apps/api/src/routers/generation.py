@@ -18,6 +18,9 @@ from ..models.project import Project
 from ..models.content_source import ContentSource
 from ..models.user import User
 from ..dependencies import get_current_user
+from ..services.distribution_target_service import (
+    get_active_distribution_targets_for_project,
+)
 from ..tasks.podcast_generation import generate_podcast_task
 
 logger = logging.getLogger(__name__)
@@ -224,6 +227,25 @@ async def generate_podcast(
         extra_kwargs["tts_model"] = tts_model
     if conversation_config is not None:
         extra_kwargs["conversation_config"] = conversation_config
+
+    # Load active distribution targets and build the platforms mapping so the
+    # distribution stage actually fires (issue #211): the task gates distribution
+    # on `enable_distribution and bool(platforms)`, so without this the subsystem
+    # is unreachable. Configs stay encrypted here; the task decrypts them.
+    if use_distribution:
+        active_targets = await get_active_distribution_targets_for_project(
+            db, episode.project_id
+        )
+        if active_targets:
+            extra_kwargs["platforms"] = {
+                target.target_type: target.config for target in active_targets
+            }
+        else:
+            logger.info(
+                "Episode %s: distribution requested but no active targets for "
+                "project %s — skipping distribution.",
+                episode_id, episode.project_id,
+            )
 
     # Start Celery task
     task = generate_podcast_task.delay(

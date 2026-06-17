@@ -332,6 +332,40 @@ async def get_distribution_targets(
 	return list(targets), total
 
 
+async def get_active_distribution_targets_for_project(
+	db: AsyncSession,
+	project_id: UUID,
+) -> list[DistributionTarget]:
+	"""
+	Get all active distribution targets scoped to a project.
+
+	Used by the generation flow to build the ``platforms`` mapping passed to the
+	Celery task so distribution actually fires (issue #211). RLS filters by tenant
+	automatically; here we additionally require an explicit project scope and an
+	active target.
+
+	Credentials in each target's ``config`` remain encrypted at this layer — the
+	distribution task decrypts them just before dispatch.
+
+	Args:
+		db: Database session
+		project_id: Project whose active targets should be loaded
+
+	Returns:
+		List of active DistributionTarget rows for the project, newest first
+		(empty if the project has no active targets).
+	"""
+	result = await db.execute(
+		select(DistributionTarget)
+		.where(
+			DistributionTarget.project_id == project_id,
+			DistributionTarget.is_active.is_(True),
+		)
+		.order_by(DistributionTarget.created_at.desc())
+	)
+	return list(result.scalars().all())
+
+
 async def get_distribution_target_by_id(
 	db: AsyncSession,
 	target_id: UUID,

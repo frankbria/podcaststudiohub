@@ -504,6 +504,10 @@ def build_generation_workflow(
 	# Stage: platform distribution (optional)
 	if enable_distribution and platforms:
 		for platform_name, platform_config in platforms.items():
+			# episode_metadata is populated inside distribute_to_platform_task
+			# from the fresh Episode row. We pass {} here because s3_url is only
+			# set by the upload stage above, so any metadata built now would have
+			# a null audio_url (issue #211).
 			dist_sig = distribute_to_platform_task.s(
 				episode_id=episode_id,
 				platform=platform_name,

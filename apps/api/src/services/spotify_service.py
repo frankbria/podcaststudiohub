@@ -108,7 +108,13 @@ class SpotifyService:
 		if duration_seconds is not None:
 			payload["duration_ms"] = int(float(duration_seconds) * 1000)
 		if metadata.get("audio_url"):
-			payload["audio_preview_url"] = metadata["audio_url"]
+			# Spotify for Podcasters primarily ingests episodes through the show's
+			# RSS feed; the catalog Web API exposes audio only as the read-only
+			# `audio_preview_url`, which is not a valid field for submitting episode
+			# audio. Send the audio under `audio_url` (the submission field) instead
+			# of the read-only preview field. Direct API publishing remains
+			# best-effort and subject to platform limitations (issue #211).
+			payload["audio_url"] = metadata["audio_url"]
 
 		logger.info(
 			"Publishing episode to Spotify show %s: %s",

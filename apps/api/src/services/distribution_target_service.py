@@ -14,7 +14,7 @@ from uuid import UUID
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from ..models.distribution_target import DistributionTarget
 from ..schemas.distribution_target import (
@@ -337,28 +337,36 @@ async def get_active_distribution_targets_for_project(
 	project_id: UUID,
 ) -> list[DistributionTarget]:
 	"""
-	Get all active distribution targets scoped to a project.
+	Get the active distribution targets that apply when generating for a project.
 
 	Used by the generation flow to build the ``platforms`` mapping passed to the
 	Celery task so distribution actually fires (issue #211). RLS filters by tenant
-	automatically; here we additionally require an explicit project scope and an
-	active target.
+	automatically; on top of that this returns active targets that are either
+	scoped to this project OR account-level (``project_id IS NULL``).
+
+	Account-level targets must be included because the Spotify OAuth callback
+	creates targets without a project (``create_spotify_target`` is called with no
+	``project_id``), so a project-only filter would leave Spotify — a primary
+	supported platform — permanently unreachable.
 
 	Credentials in each target's ``config`` remain encrypted at this layer — the
 	distribution task decrypts them just before dispatch.
 
 	Args:
 		db: Database session
-		project_id: Project whose active targets should be loaded
+		project_id: Project the episode being generated belongs to
 
 	Returns:
-		List of active DistributionTarget rows for the project, newest first
-		(empty if the project has no active targets).
+		List of applicable active DistributionTarget rows, newest first (empty if
+		there are none).
 	"""
 	result = await db.execute(
 		select(DistributionTarget)
 		.where(
-			DistributionTarget.project_id == project_id,
+			or_(
+				DistributionTarget.project_id == project_id,
+				DistributionTarget.project_id.is_(None),
+			),
 			DistributionTarget.is_active.is_(True),
 		)
 		.order_by(DistributionTarget.created_at.desc())

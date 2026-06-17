@@ -122,6 +122,30 @@ async def test_active_targets_returns_only_active_for_project(client, test_db):
 
 
 @pytest.mark.asyncio
+async def test_active_targets_includes_account_level_targets(client, test_db):
+    """Account-level targets (project_id=None, e.g. Spotify OAuth) are included.
+
+    The Spotify OAuth callback creates targets without a project, so a project-only
+    filter would make Spotify distribution unreachable (issue #211).
+    """
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    project_scoped = await _create_webhook_target(
+        client, headers, project_id, "https://hook.example.com/scoped"
+    )
+    account_level = await _create_webhook_target(
+        client, headers, None, "https://hook.example.com/account"
+    )
+
+    await set_tenant_context(test_db, account_level["tenant_id"])
+    targets = await get_active_distribution_targets_for_project(test_db, project_id)
+
+    returned_ids = {str(t.id) for t in targets}
+    assert project_scoped["id"] in returned_ids
+    assert account_level["id"] in returned_ids
+
+
+@pytest.mark.asyncio
 async def test_active_targets_excludes_other_projects(client, test_db):
     """Targets scoped to a different project are not returned."""
     headers = await _register(client)
@@ -172,6 +196,7 @@ async def test_generate_forwards_platforms_when_distribution_enabled(client):
     )
 
     with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True), \
+         patch.object(generation_router.settings, "AWS_S3_BUCKET", "test-bucket"), \
          patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-dist")
         resp = await client.post(
@@ -186,6 +211,39 @@ async def test_generate_forwards_platforms_when_distribution_enabled(client):
     platforms = kwargs["platforms"]
     assert "webhook" in platforms
     assert platforms["webhook"]["url"] == "https://hook.example.com/publish"
+
+
+@pytest.mark.asyncio
+async def test_generate_keeps_one_target_per_type(client):
+    """Multiple active targets of the same type collapse to one platforms entry.
+
+    The platforms mapping is keyed by platform type (the task contract), so at
+    most one config per type is forwarded. This must not raise and must still
+    dispatch (the newest target wins).
+    """
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_webhook_target(client, headers, project_id, "https://hook.example.com/one")
+    await _create_webhook_target(client, headers, project_id, "https://hook.example.com/two")
+
+    with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True), \
+         patch.object(generation_router.settings, "AWS_S3_BUCKET", "test-bucket"), \
+         patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-dup")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate?enable_distribution=true",
+            headers=headers,
+        )
+
+    assert resp.status_code == 202, resp.text
+    platforms = mock_delay.call_args.kwargs["platforms"]
+    # Exactly one webhook entry, and it is one of the two configured URLs.
+    assert list(platforms.keys()) == ["webhook"]
+    assert platforms["webhook"]["url"] in (
+        "https://hook.example.com/one", "https://hook.example.com/two"
+    )
 
 
 @pytest.mark.asyncio
@@ -207,6 +265,35 @@ async def test_generate_omits_platforms_when_no_targets(client):
     assert resp.status_code == 202, resp.text
     mock_delay.assert_called_once()
     assert "platforms" not in mock_delay.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_distribution_without_s3_bucket(client):
+    """With no S3 bucket, distribution is skipped (graceful finalization path).
+
+    Forcing the workflow chain would schedule an invalid empty-bucket upload and
+    fail an otherwise successful generation.
+    """
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_webhook_target(client, headers, project_id, "https://hook.example.com/nob")
+
+    with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True), \
+         patch.object(generation_router.settings, "AWS_S3_BUCKET", ""), \
+         patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-nobucket")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate?enable_distribution=true",
+            headers=headers,
+        )
+
+    assert resp.status_code == 202, resp.text
+    kwargs = mock_delay.call_args.kwargs
+    assert "platforms" not in kwargs
+    # Distribution disabled because no bucket → task won't take the workflow path.
+    assert kwargs["enable_distribution"] is False
 
 
 @pytest.mark.asyncio

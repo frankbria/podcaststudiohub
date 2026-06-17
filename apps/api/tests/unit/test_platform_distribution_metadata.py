@@ -132,40 +132,45 @@ class TestDistributeTaskPopulatesMetadata:
 		assert captured["metadata"]["description"] == "A great episode"
 		assert captured["metadata"]["audio_url"].endswith(".mp3")
 
-	def test_task_falls_back_to_passed_metadata_when_db_unavailable(self):
-		"""A DB failure must not abort distribution — passed-in metadata is used."""
+	def test_task_does_not_publish_without_uploaded_audio(self):
+		"""No s3_url (upload failed or not committed) must never publish.
+
+		The task retries until its budget is exhausted, then fails — it must not
+		call the platform service with a non-existent audio URL (issue #211).
+		"""
 		from src.tasks.platform_distribution import distribute_to_platform_task
 
-		captured = {}
+		# Episode exists but has no s3_url yet (e.g. upload not committed / failed).
+		episode = _episode(s3_url=None)
+		session = MagicMock()
+		session.get.return_value = episode
+		session.__enter__ = MagicMock(return_value=session)
+		session.__exit__ = MagicMock(return_value=False)
 
-		def _fake_webhook(episode_id, config, metadata, task):
-			captured["metadata"] = metadata
-			return {
-				"status": "success",
-				"platform": "webhook",
-				"platform_episode_id": None,
-				"platform_url": config.get("url"),
-				"error": None,
-			}
+		webhook = MagicMock()
 
 		with patch(
-			"src.tasks.platform_distribution.SyncSessionLocal",
-			side_effect=RuntimeError("db down"),
+			"src.tasks.platform_distribution.SyncSessionLocal", return_value=session,
 		), patch(
 			"src.tasks.platform_distribution._decrypt_platform_config",
 			side_effect=lambda cfg, plat: cfg,
 		), patch(
-			"src.tasks.platform_distribution._distribute_via_webhook",
-			side_effect=_fake_webhook,
-		):
-			distribute_to_platform_task.request.update(id="test-task-2")
-			with patch.object(distribute_to_platform_task, "update_state", MagicMock()):
-				result = distribute_to_platform_task.run(
-					episode_id="00000000-0000-0000-0000-000000000002",
-					platform="webhook",
-					platform_config={"url": "https://hook.example.com/x"},
-					episode_metadata={"title": "Passed In"},
-				)
+			"src.tasks.platform_distribution._distribute_via_webhook", webhook,
+		), patch.object(
+			distribute_to_platform_task, "update_state", MagicMock(),
+		), patch.object(
+			distribute_to_platform_task, "retry",
+			side_effect=distribute_to_platform_task.MaxRetriesExceededError(),
+		) as mock_retry:
+			distribute_to_platform_task.request.update(id="test-task-2", retries=5)
+			result = distribute_to_platform_task.run(
+				episode_id="00000000-0000-0000-0000-000000000002",
+				platform="webhook",
+				platform_config={"url": "https://hook.example.com/x"},
+				episode_metadata={},
+			)
 
-		assert result["status"] == "success"
-		assert captured["metadata"] == {"title": "Passed In"}
+		# Missing audio → retried (then exhausted → failed); never published.
+		mock_retry.assert_called()
+		assert result["status"] == "failed"
+		webhook.assert_not_called()

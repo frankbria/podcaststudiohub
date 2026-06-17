@@ -232,14 +232,44 @@ async def generate_podcast(
     # distribution stage actually fires (issue #211): the task gates distribution
     # on `enable_distribution and bool(platforms)`, so without this the subsystem
     # is unreachable. Configs stay encrypted here; the task decrypts them.
+    # Distribution requires a publicly reachable audio URL, i.e. an S3 bucket. With
+    # no bucket the workflow-chain path would schedule an invalid empty-bucket
+    # upload and fail the whole run, whereas the default finalization path degrades
+    # gracefully — so only enable distribution when a bucket is configured.
+    if use_distribution and not settings.AWS_S3_BUCKET:
+        logger.warning(
+            "Episode %s: distribution requested but AWS_S3_BUCKET is not configured "
+            "— skipping distribution.",
+            episode_id,
+        )
+        use_distribution = False
+
     if use_distribution:
         active_targets = await get_active_distribution_targets_for_project(
             db, episode.project_id
         )
         if active_targets:
-            extra_kwargs["platforms"] = {
-                target.target_type: target.config for target in active_targets
-            }
+            # platforms is keyed by platform type (the task's contract), so it
+            # holds at most one config per type. When several active targets share
+            # a type, prefer the project-scoped one over an account-level
+            # (project_id IS NULL) target, then the newest — so an explicit project
+            # target always wins over a global default and we never publish to the
+            # wrong destination. Dropped same-type duplicates are logged rather than
+            # collapsed silently (multi-target-per-type distribution is a follow-up).
+            # The query returns newest-first; a stable sort by "is account-level"
+            # keeps project-scoped targets ahead while preserving newest-first order.
+            ordered_targets = sorted(active_targets, key=lambda t: t.project_id is None)
+            platforms: dict = {}
+            for target in ordered_targets:
+                if target.target_type in platforms:
+                    logger.warning(
+                        "Episode %s: multiple active %s targets apply to project %s; "
+                        "using the preferred target and skipping target %s.",
+                        episode_id, target.target_type, episode.project_id, target.id,
+                    )
+                    continue
+                platforms[target.target_type] = target.config
+            extra_kwargs["platforms"] = platforms
         else:
             logger.info(
                 "Episode %s: distribution requested but no active targets for "

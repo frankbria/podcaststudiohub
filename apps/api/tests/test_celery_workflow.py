@@ -155,6 +155,58 @@ class TestFullWorkflowChain:
         assert call_kwargs["platforms"] == platforms
         mock_chain.apply_async.assert_called_once()
 
+    def test_generation_metadata_persisted_before_workflow_dispatch(self):
+        """File metadata is written to the Episode before the workflow chain runs.
+
+        The workflow callbacks only persist S3 fields, so distribution/composition
+        runs would otherwise lose file_path/transcript_path/duration_seconds/
+        file_size_bytes that the default finalize path records (issue #211).
+        """
+        import sys
+        import types
+
+        episode_id = str(uuid.uuid4())
+        platforms = {"webhook": {"url": "https://hook.example.com"}}
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=120_000)  # 120.0s
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(return_value="/tmp/dist_meta.mp3")
+
+        mock_episode = MagicMock()
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_episode
+        mock_session.__enter__ = MagicMock(return_value=mock_session)
+        mock_session.__exit__ = MagicMock(return_value=False)
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=2000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+            patch("src.tasks.podcast_generation.build_generation_workflow", return_value=MagicMock()),
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_session),
+        ):
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_composition=False,
+                enable_distribution=True,
+                platforms=platforms,
+            )
+
+        assert result["status"] == "success"
+        assert mock_episode.file_path == "/tmp/dist_meta.mp3"
+        assert mock_episode.duration_seconds == 120.0
+        assert mock_episode.file_size_bytes == 2000
+        mock_session.commit.assert_called_once()
+
     def test_finalize_task_used_when_no_composition_or_distribution(self):
         """Default path (no composition, no distribution) uses finalize_episode_generation_task."""
         import sys
@@ -313,6 +365,68 @@ class TestWorkflowChainStructure:
 
         task_names = [t.task for t in workflow.tasks]
         assert task_names.count("distribute_to_platform") == 3
+
+    def test_chain_stages_are_immutable_signatures(self):
+        """Composition/distribution stages must use immutable (.si) signatures.
+
+        In a Celery chain a mutable .s() signature has the previous task's return
+        value prepended as the first positional arg, which would collide with the
+        keyword episode_id and raise at runtime (issue #211). Each stage re-reads
+        the Episode from the DB, so it must ignore the prior result.
+        """
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        platforms = {
+            "spotify": {"oauth_tokens": {}},
+            "webhook": {"url": "https://hook.example.com"},
+        }
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                episode_id=str(uuid.uuid4()),
+                audio_file_path="/tmp/audio.mp3",
+                enable_composition=True,
+                enable_distribution=True,
+                platforms=platforms,
+            )
+
+        for task_sig in workflow.tasks:
+            if task_sig.task in ("merge_audio_snippets", "distribute_to_platform"):
+                assert task_sig.immutable is True, (
+                    f"{task_sig.task} must be an immutable (.si) chain signature"
+                )
+
+    def test_composition_uploaded_and_distributed(self):
+        """With composition enabled, upload targets the composed file and runs
+        before distribution, so the distributed artifact is the composed audio
+        (issue #211). Distribution metadata is empty — it is read from the Episode
+        at runtime.
+        """
+        from src.tasks.podcast_generation import build_generation_workflow
+
+        episode_id = str(uuid.uuid4())
+        composed = f"/tmp/composed_{episode_id}.mp3"
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                episode_id=episode_id,
+                audio_file_path="/tmp/original.mp3",
+                enable_composition=True,
+                enable_distribution=True,
+                platforms={"webhook": {"url": "https://hook.example.com"}},
+            )
+
+        names = [t.task for t in workflow.tasks]
+        # Order: compose → upload → distribute.
+        assert names.index("merge_audio_snippets") < names.index("upload_to_s3")
+        assert names.index("upload_to_s3") < names.index("distribute_to_platform")
+
+        upload_task = next(t for t in workflow.tasks if t.task == "upload_to_s3")
+        assert upload_task.kwargs["file_path"] == composed
+
+        dist_task = next(t for t in workflow.tasks if t.task == "distribute_to_platform")
+        assert dist_task.kwargs["episode_metadata"] == {}
 
     def test_distribution_excluded_when_no_platforms(self):
         """distribute_to_platform not included when platforms is empty/None."""

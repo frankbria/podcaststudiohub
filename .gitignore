@@ -165,3 +165,7 @@ podcastfy/
 # Large notebook files
 podcastfy.ipynb
 usage/examples.ipynb
+# Local demo artifacts (issue-lifecycle demo verification — never committed)
+demo.md
+demo_*.md
+demo_*_runner.py

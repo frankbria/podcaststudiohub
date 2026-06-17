@@ -128,25 +128,37 @@ def distribute_to_platform_task(
         )
 
         # Populate episode metadata from the DB. The workflow builder passes an
-        # empty dict because s3_url is only set by the upload stage that runs
-        # before this task; loading the Episode here ensures non-empty
-        # title/description/audio_url (issue #211). Any passed-in values win.
-        try:
-            from src.models.episode import Episode
-            from uuid import UUID as _UUID
-            with SyncSessionLocal() as db:
-                episode = db.get(Episode, _UUID(episode_id))
-                if episode is not None:
-                    episode_metadata = _merge_episode_metadata(episode, episode_metadata)
-                else:
-                    logger.warning(
-                        "Episode %s not found while building distribution metadata",
-                        episode_id,
-                    )
-        except Exception as e:
+        # empty dict because the audio (and its Episode.s3_url) is only available
+        # after the upload stage that runs before this task; loading the Episode
+        # here yields non-empty title/description/audio_url (issue #211). Any
+        # passed-in values win.
+        from src.models.episode import Episode
+        from uuid import UUID as _UUID
+        with SyncSessionLocal() as db:
+            episode = db.get(Episode, _UUID(episode_id))
+            if episode is not None:
+                episode_metadata = _merge_episode_metadata(episode, episode_metadata)
+            else:
+                logger.warning(
+                    "Episode %s not found while building distribution metadata",
+                    episode_id,
+                )
+
+        # Never publish an episode whose audio was not actually uploaded. s3_url is
+        # written by on_upload_complete only on a successful upload, so its absence
+        # means the upload either failed or has not committed yet. Raising a
+        # transient error lets the retry handler below wait (the success callback
+        # races this chain task); after the retry budget is exhausted the task fails
+        # without publishing rather than pushing a non-existent audio URL to the
+        # platform (issue #211).
+        if not episode_metadata.get("audio_url"):
             logger.warning(
-                "Could not load episode metadata for %s (%s); using passed-in metadata",
-                episode_id, e,
+                "Episode %s audio not available yet (no s3_url) for %s distribution; "
+                "retrying before giving up.",
+                episode_id, platform,
+            )
+            raise RuntimeError(
+                f"Episode {episode_id} has no uploaded audio URL yet; cannot distribute."
             )
 
         # Decrypt any encrypted credentials in the config

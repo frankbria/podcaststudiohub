@@ -14,7 +14,7 @@ from uuid import UUID
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 
 from ..models.distribution_target import DistributionTarget
 from ..schemas.distribution_target import (
@@ -330,6 +330,48 @@ async def get_distribution_targets(
 	targets = result.scalars().all()
 
 	return list(targets), total
+
+
+async def get_active_distribution_targets_for_project(
+	db: AsyncSession,
+	project_id: UUID,
+) -> list[DistributionTarget]:
+	"""
+	Get the active distribution targets that apply when generating for a project.
+
+	Used by the generation flow to build the ``platforms`` mapping passed to the
+	Celery task so distribution actually fires (issue #211). RLS filters by tenant
+	automatically; on top of that this returns active targets that are either
+	scoped to this project OR account-level (``project_id IS NULL``).
+
+	Account-level targets must be included because the Spotify OAuth callback
+	creates targets without a project (``create_spotify_target`` is called with no
+	``project_id``), so a project-only filter would leave Spotify — a primary
+	supported platform — permanently unreachable.
+
+	Credentials in each target's ``config`` remain encrypted at this layer — the
+	distribution task decrypts them just before dispatch.
+
+	Args:
+		db: Database session
+		project_id: Project the episode being generated belongs to
+
+	Returns:
+		List of applicable active DistributionTarget rows, newest first (empty if
+		there are none).
+	"""
+	result = await db.execute(
+		select(DistributionTarget)
+		.where(
+			or_(
+				DistributionTarget.project_id == project_id,
+				DistributionTarget.project_id.is_(None),
+			),
+			DistributionTarget.is_active.is_(True),
+		)
+		.order_by(DistributionTarget.created_at.desc())
+	)
+	return list(result.scalars().all())
 
 
 async def get_distribution_target_by_id(

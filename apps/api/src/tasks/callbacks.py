@@ -129,6 +129,9 @@ def on_composition_complete(self: Task, result: Dict[str, Any], episode_id: str)
 		episode_id,
 		updates={
 			"file_path": result.get("output_path"),
+			# Persist the composed duration to the column so distribution publishes
+			# the composed length, not the pre-composition one (issue #211).
+			"duration_seconds": result.get("duration_seconds"),
 			"generation_status": "composing",
 		},
 		progress_updates={

@@ -177,6 +177,27 @@ def generate_podcast_task(
         )
 
         if use_workflow_chain:
+            # Persist the generated file metadata before handing off to the
+            # workflow chain. The chain's callbacks only write S3 fields/status, so
+            # without this any episode generated with composition or distribution
+            # would lose file_path/transcript_path/duration_seconds/file_size_bytes
+            # that the default finalize path records (issue #211).
+            try:
+                with SyncSessionLocal() as db:
+                    episode = db.get(Episode, uuid_module.UUID(episode_id))
+                    if episode is not None:
+                        episode.file_path = audio_file_path
+                        episode.transcript_path = generation_result.get("transcript_path")
+                        episode.duration_seconds = duration_seconds
+                        episode.file_size_bytes = file_size_bytes
+                        db.commit()
+            except Exception as persist_err:
+                logger.error(
+                    "Episode %s: failed to persist generation metadata before "
+                    "workflow dispatch: %s",
+                    episode_id, persist_err,
+                )
+
             # Trigger the full workflow: S3 upload → [composition] → [distribution]
             # Isolated try/except so a broker hiccup cannot mark a successful
             # generation as "failed" or orphan the audio file.
@@ -473,23 +494,25 @@ def build_generation_workflow(
 	bucket = s3_bucket or settings.AWS_S3_BUCKET or ""
 	s3_key = f"podcasts/episode-{episode_id}.mp3"
 
-	# Stage: S3 upload
-	upload_sig = upload_to_s3_task.s(
-		file_path=audio_file_path,
-		s3_key=s3_key,
-		bucket_name=bucket,
-		content_type="audio/mpeg",
-	).set(
-		link=on_upload_complete.s(episode_id=episode_id),
-		link_error=on_workflow_failure.s(episode_id=episode_id, task_name="upload_to_s3"),
-	)
+	# Chain stages use immutable signatures (.si). In a Celery chain a mutable
+	# .s() signature has the *previous* task's return value prepended as the first
+	# positional arg; since these stages are called with keyword args (episode_id=…)
+	# that would raise "got multiple values for argument 'episode_id'" at runtime.
+	# Each stage re-reads the Episode from the DB (state is persisted by the
+	# on_*_complete callbacks), so it does not need the prior task's result.
 
-	workflow_tasks = [upload_sig]
+	workflow_tasks = []
+
+	# Composition runs BEFORE upload so the artifact uploaded to S3 — and therefore
+	# the one distributed — is the composed file, not the pre-composition audio
+	# (issue #211). Without distribution/composition reordering, enabling both would
+	# publish the uncomposed audio.
+	final_audio_path = audio_file_path
 
 	# Stage: audio composition (optional)
 	if enable_composition:
 		composed_output = output_path or f"/tmp/composed_{episode_id}.mp3"
-		composition_sig = merge_audio_snippets_task.s(
+		composition_sig = merge_audio_snippets_task.si(
 			episode_id=episode_id,
 			timeline=composition_timeline or [],
 			output_path=composed_output,
@@ -500,11 +523,28 @@ def build_generation_workflow(
 			),
 		)
 		workflow_tasks.append(composition_sig)
+		final_audio_path = composed_output
 
-	# Stage: platform distribution (optional)
+	# Stage: S3 upload of the final artifact (composed if composition ran). On
+	# success on_upload_complete persists Episode.s3_url; distribution gates on that
+	# committed s3_url, so a failed upload never results in a published episode.
+	upload_sig = upload_to_s3_task.si(
+		file_path=final_audio_path,
+		s3_key=s3_key,
+		bucket_name=bucket,
+		content_type="audio/mpeg",
+	).set(
+		link=on_upload_complete.s(episode_id=episode_id),
+		link_error=on_workflow_failure.s(episode_id=episode_id, task_name="upload_to_s3"),
+	)
+	workflow_tasks.append(upload_sig)
+
+	# Stage: platform distribution (optional). All metadata (title/description/
+	# duration/explicit/audio_url) is read from the fresh Episode row inside
+	# distribute_to_platform_task, which waits for the committed s3_url (issue #211).
 	if enable_distribution and platforms:
 		for platform_name, platform_config in platforms.items():
-			dist_sig = distribute_to_platform_task.s(
+			dist_sig = distribute_to_platform_task.si(
 				episode_id=episode_id,
 				platform=platform_name,
 				platform_config=platform_config,

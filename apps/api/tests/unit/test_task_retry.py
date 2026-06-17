@@ -42,6 +42,24 @@ def _make_client_error(code: str, message: str = "AWS error") -> ClientError:
 	return ClientError({"Error": {"Code": code, "Message": message}}, "Operation")
 
 
+def _uploaded_episode_session():
+	"""A mock sync session whose Episode has a committed s3_url.
+
+	distribute_to_platform_task loads the Episode and refuses to publish without an
+	uploaded audio URL (issue #211), so distribution retry tests must present an
+	episode that has already been uploaded to reach the platform-dispatch path.
+	"""
+	episode = MagicMock()
+	episode.episode_metadata = {"title": "Ep", "description": "d"}
+	episode.duration_seconds = 60.0
+	episode.s3_url = "https://bucket.s3.amazonaws.com/podcasts/episode-x.mp3"
+	session = MagicMock()
+	session.get.return_value = episode
+	session.__enter__ = MagicMock(return_value=session)
+	session.__exit__ = MagicMock(return_value=False)
+	return session
+
+
 # ============================================================================
 # upload_to_s3_task retry tests
 # ============================================================================
@@ -300,6 +318,7 @@ class TestDistributeToPlatformTaskRetry:
 		from src.tasks.platform_distribution import distribute_to_platform_task
 
 		with (
+			patch("src.tasks.platform_distribution.SyncSessionLocal", return_value=_uploaded_episode_session()),
 			patch("src.tasks.platform_distribution._decrypt_platform_config") as mock_decrypt,
 			patch("src.tasks.platform_distribution._distribute_to_spotify") as mock_spotify,
 			patch.object(distribute_to_platform_task, "update_state"),
@@ -314,7 +333,7 @@ class TestDistributeToPlatformTaskRetry:
 			distribute_to_platform_task.request.update(retries=0)
 
 			result = distribute_to_platform_task.run(
-				episode_id="ep-dist-01",
+				episode_id="11111111-1111-1111-1111-111111111101",
 				platform="spotify",
 				platform_config={},
 				episode_metadata={},
@@ -328,6 +347,7 @@ class TestDistributeToPlatformTaskRetry:
 		from src.tasks.platform_distribution import distribute_to_platform_task
 
 		with (
+			patch("src.tasks.platform_distribution.SyncSessionLocal", return_value=_uploaded_episode_session()),
 			patch("src.tasks.platform_distribution._decrypt_platform_config") as mock_decrypt,
 			patch.object(distribute_to_platform_task, "update_state"),
 			patch.object(distribute_to_platform_task, "retry") as mock_retry,
@@ -336,7 +356,7 @@ class TestDistributeToPlatformTaskRetry:
 			distribute_to_platform_task.request.update(retries=0)
 
 			result = distribute_to_platform_task.run(
-				episode_id="ep-dist-02",
+				episode_id="11111111-1111-1111-1111-111111111102",
 				platform="unsupported_platform",
 				platform_config={},
 				episode_metadata={},
@@ -350,6 +370,7 @@ class TestDistributeToPlatformTaskRetry:
 		from src.tasks.platform_distribution import distribute_to_platform_task
 
 		with (
+			patch("src.tasks.platform_distribution.SyncSessionLocal", return_value=_uploaded_episode_session()),
 			patch("src.tasks.platform_distribution._decrypt_platform_config") as mock_decrypt,
 			patch("src.tasks.platform_distribution._distribute_to_spotify") as mock_spotify,
 			patch.object(distribute_to_platform_task, "update_state"),
@@ -364,7 +385,7 @@ class TestDistributeToPlatformTaskRetry:
 			distribute_to_platform_task.request.update(retries=0)
 
 			distribute_to_platform_task.run(
-				episode_id="ep-dist-03",
+				episode_id="11111111-1111-1111-1111-111111111103",
 				platform="spotify",
 				platform_config={},
 				episode_metadata={},

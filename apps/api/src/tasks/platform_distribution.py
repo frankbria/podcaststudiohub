@@ -60,6 +60,41 @@ def _decrypt_platform_config(config: Dict[str, Any], platform: str) -> Dict[str,
     return decrypted
 
 
+def _merge_episode_metadata(episode: Any, passed_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build distribution metadata from an Episode row, overlaying any passed-in values.
+
+    The workflow builder passes an empty ``episode_metadata`` because the audio's
+    ``s3_url`` is only set by the upload stage that runs *before* distribution in
+    the chain (issue #211). This reads the fresh Episode so Spotify/Apple/webhook
+    receive a real title, description and audio URL instead of blanks.
+
+    Args:
+        episode: Episode ORM row (or any object exposing the same attributes).
+        passed_metadata: Metadata forwarded by the caller; takes precedence over
+            DB-sourced values for any key it provides (with a non-None value).
+
+    Returns:
+        Merged metadata dict. DB-sourced keys with a ``None`` value are omitted so
+        downstream services fall back to their own defaults.
+    """
+    episode_meta = getattr(episode, "episode_metadata", None) or {}
+    duration = getattr(episode, "duration_seconds", None)
+    base: Dict[str, Any] = {
+        "title": episode_meta.get("title"),
+        "description": episode_meta.get("description"),
+        "duration_seconds": float(duration) if duration is not None else None,
+        "audio_url": getattr(episode, "s3_url", None),
+        "explicit": episode_meta.get("explicit", False),
+        "publish_date": episode_meta.get("publication_date"),
+    }
+    merged = {key: value for key, value in base.items() if value is not None}
+    for key, value in (passed_metadata or {}).items():
+        if value is not None:
+            merged[key] = value
+    return merged
+
+
 @celery_app.task(bind=True, name="distribute_to_platform", time_limit=300, max_retries=5)
 def distribute_to_platform_task(
     self: Task,
@@ -91,6 +126,40 @@ def distribute_to_platform_task(
                 'status': f'Starting distribution to {platform}...'
             }
         )
+
+        # Populate episode metadata from the DB. The workflow builder passes an
+        # empty dict because the audio (and its Episode.s3_url) is only available
+        # after the upload stage that runs before this task; loading the Episode
+        # here yields non-empty title/description/audio_url (issue #211). Any
+        # passed-in values win.
+        from src.models.episode import Episode
+        from uuid import UUID as _UUID
+        with SyncSessionLocal() as db:
+            episode = db.get(Episode, _UUID(episode_id))
+            if episode is not None:
+                episode_metadata = _merge_episode_metadata(episode, episode_metadata)
+            else:
+                logger.warning(
+                    "Episode %s not found while building distribution metadata",
+                    episode_id,
+                )
+
+        # Never publish an episode whose audio was not actually uploaded. s3_url is
+        # written by on_upload_complete only on a successful upload, so its absence
+        # means the upload either failed or has not committed yet. Raising a
+        # transient error lets the retry handler below wait (the success callback
+        # races this chain task); after the retry budget is exhausted the task fails
+        # without publishing rather than pushing a non-existent audio URL to the
+        # platform (issue #211).
+        if not episode_metadata.get("audio_url"):
+            logger.warning(
+                "Episode %s audio not available yet (no s3_url) for %s distribution; "
+                "retrying before giving up.",
+                episode_id, platform,
+            )
+            raise RuntimeError(
+                f"Episode {episode_id} has no uploaded audio URL yet; cannot distribute."
+            )
 
         # Decrypt any encrypted credentials in the config
         try:

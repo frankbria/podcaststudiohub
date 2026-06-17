@@ -181,6 +181,66 @@ longer passes raw `s3_key` to the engine.
 
 ---
 
+## Active work — Issue #211 (P2.6): distribution unreachable + publishes empty metadata
+
+**Plan source:** comment (CodeRabbit coding plan), adapted to verified current code.
+
+**Problem (verified):**
+1. `routers/generation.py:229-236` dispatches `generate_podcast_task.delay(...)` without
+   `platforms=`; task default `platforms=None`. Distribution gate
+   `enable_distribution and bool(platforms)` (podcast_generation.py:175-177) is never true →
+   distribution always skipped. No code loads active DistributionTarget rows.
+2. `build_generation_workflow` hardcodes `episode_metadata={}` (podcast_generation.py:511) →
+   Spotify/Apple/webhook would publish blank title/description and no audio_url.
+3. `spotify_service.publish_episode` maps audio to read-only `audio_preview_url`
+   (spotify_service.py:111).
+
+**Verified:** task already declares (unused) `platforms` param; `distribute_to_platform_task`
+already decrypts `config` via `_decrypt_platform_config` (so router passes raw encrypted
+config); `on_upload_complete` (callbacks.py:75) sets `Episode.s3_url` as the first chain
+stage → metadata must be populated *in the task* (post-upload), not at workflow-build time;
+sync DB access pattern is `with SyncSessionLocal() as db: db.get(Episode, UUID(id))`.
+
+### Step 1 — Service: active-targets query (`services/distribution_target_service.py`)
+- [ ] `get_active_distribution_targets_for_project(db, project_id)` (async): filter
+      `project_id` + `is_active == True`, newest-first; return `list[DistributionTarget]`
+      (raw encrypted `config`; decryption stays in the task).
+- [ ] Unit tests (async test_db): only-active; project filter; excludes inactive; empty when none.
+
+### Step 2 — Router: build + pass platforms dict (`routers/generation.py`)
+- [ ] When `use_distribution`, load active targets for `episode.project_id`, build
+      `platforms = {t.target_type: t.config for t in targets}`, pass `platforms=platforms`
+      to `.delay()` only when non-empty.
+- [ ] Integration test: active target + `enable_distribution=true` → `delay` called with
+      `platforms` = `{target_type: config}`.
+
+### Step 3 — Task: populate metadata at distribution time (`tasks/platform_distribution.py`)
+- [ ] Load Episode via `SyncSessionLocal`; merge DB metadata under any passed-in (passed-in
+      wins): title/description/explicit/publish_date ← `episode.episode_metadata`;
+      duration_seconds ← `episode.duration_seconds`; audio_url ← `episode.s3_url`.
+- [ ] Extract pure helper `_merge_episode_metadata(episode, passed)` for direct unit testing.
+- [ ] `build_generation_workflow` keeps `episode_metadata={}` + comment explaining the task
+      self-populates from the fresh row (avoids stale pre-upload s3_url).
+- [ ] Tests: helper merge + precedence; task populates non-empty title/description/audio_url.
+
+### Step 4 — Spotify mapping + docs (`services/spotify_service.py`)
+- [ ] Replace `audio_preview_url` with `audio_url` in payload; comment noting Spotify for
+      Podcasters primarily ingests via RSS and direct API publishing has platform limitations.
+
+### Acceptance criteria
+- [ ] Active targets loaded; `platforms` dict built; `platforms=` passed to `.delay()`.
+- [ ] `episode_metadata` populated (title/description/duration/explicit/audio_url) from Episode + S3 URL.
+- [ ] Spotify/Apple mechanism documented; `audio_preview_url` mapping fixed.
+- [ ] E2E test asserts distribution dispatch with non-empty metadata when a target is configured.
+
+### Known limitations (carry to PR)
+- Account-level targets (`project_id IS NULL`) are not auto-distributed; only project-scoped
+  active targets are loaded (matches AC wording).
+- Spotify/Apple direct-publish stays best-effort (design-choice option 1: fix mapping +
+  document); no new Podcasters/Connect API integration.
+
+---
+
 ## Ops changes already made this session
 - README server IP removed (commit `bf9e606`).
 - gitleaks pre-commit secret scanner added.

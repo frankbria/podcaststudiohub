@@ -28,7 +28,7 @@ so issue order == work order.
 ## Phase 2 — Restore the core product (generation pipeline)
 - [ ] **P2.1 #204** 🔴 `generate_podcast()` called with invalid kwargs → **every generation fails**. *Unblocks the rest of Phase 2.* Add an autospec/signature-asserting test; pin `podcastfy==0.4.1`.
 - [ ] **P2.2 #213** `/regenerate` passes wrong positional args → guaranteed 500, leaves episode degraded
-- [ ] **P2.3 #217** Episode `tts_model`/`conversation_config` never forwarded → always OpenAI TTS
+- [x] **P2.3 #217** Episode `tts_model`/`conversation_config` never forwarded → always OpenAI TTS ✅ done (generation.py eager-loads tts_config/template, normalises gemini_multi→geminimulti, forwards to task)
 - [ ] **P2.4 #214** No guard against re-submitting generation for an in-progress episode (race)
 - [ ] **P2.5 #210** PDF/file input non-functional — no upload endpoint; extraction ignores S3 key *(needs StorageService + #204)*
 - [ ] **P2.6 #211** Distribution subsystem unreachable + would publish blank episodes *(needs #204 producing real episodes + metadata)*
@@ -79,60 +79,65 @@ so issue order == work order.
 
 ---
 
-## Active work — Issue #204 (P2.1): generation calls podcastfy with invalid kwargs
+## Active work — Issue #217 (P2.3): TTS model / conversation_config never forwarded
 
 **Plan source:** comment (CodeRabbit coding plan), adapted to the codebase.
 
-**Problem:** the Celery task calls podcastfy 0.4.1 `generate_podcast()` with `file=` and
-`youtube_urls=` kwargs that don't exist in the installed signature → **every** generation
-fails with `TypeError`. Existing tests mock `generate_podcast` with a plain `MagicMock`
-(no autospec) and actually **assert** the buggy kwargs, so they were false-green.
+**Problem:** the generation router never passes the episode's `tts_model` or
+`conversation_config`, so the Celery task default (`tts_model="openai"`) is always used.
+User/episode TTS selection is silently ignored and every generation requires
+`OPENAI_API_KEY` regardless of the chosen provider.
 
-Real podcastfy 0.4.1 signature (no `file`, no `youtube_urls`):
-`(urls, url_file, transcript_file, tts_model, transcript_only, config, conversation_config, image_paths, is_local, text, llm_model_name, api_key_label, topic, longform)`
+**Verified:** `Episode.tts_config`/`Episode.template`/`Episode.project` +
+`Project.default_tts_config`/`Project.default_template` relationships all exist; the
+Celery task already accepts `tts_model`/`conversation_config` and forwards them to
+podcastfy 0.4.1 `generate_podcast()`. `create_episode` does **not** persist
+`tts_config_id`/`template_id` — those are only settable via the update path
+(`EpisodeUpdate`), so tests configure episodes/projects via PUT.
 
-### Step 1 — Fix the Celery task call (core bug)
-- [ ] `apps/api/src/tasks/podcast_generation.py` — drop `file=file_paths` and
-      `youtube_urls=youtube_urls` from the `generate_podcast(...)` call; keep only valid
-      kwargs (`urls`, `text`, `image_paths`, `tts_model`, `conversation_config`,
-      `longform`, `topic`). Remove `file_paths`/`youtube_urls` from the task signature.
+### Step 1 — Eager-load config relationships in the generate query
+- [x] `apps/api/src/routers/generation.py` — import `joinedload` (`sqlalchemy.orm`) and
+      `Project` (`..models.project`); add `.options(...)` to the `select(Episode)` query in
+      `generate_podcast`: `joinedload(Episode.tts_config)`, `joinedload(Episode.template)`,
+      `joinedload(Episode.project).joinedload(Project.default_tts_config)`,
+      `joinedload(Episode.project).joinedload(Project.default_template)`.
+      (Relationships are lazy by default → would raise in the async context.)
 
-### Step 2 — Router: drop file_paths assembly, enforce extraction for files
-- [ ] `apps/api/src/routers/generation.py` — remove `file_paths` assembly + the
-      `file_paths=` delay arg; add validation that returns HTTP 400 if any **file**-type
-      source has `extraction_status != "complete"` (URL/YouTube/text keep their valid
-      `source_data` fallback).
+### Step 2 — Resolve effective config + forward to the task
+- [x] `apps/api/src/routers/generation.py` — after fetching the episode resolve
+      `effective_tts = episode.tts_config or episode.project.default_tts_config` and
+      `effective_template = episode.template or episode.project.default_template`.
+      `tts_model = effective_tts.provider if effective_tts else None`. Build
+      `conversation_config` (None if neither): start from `effective_template.config`,
+      add a `text_to_speech` key from `_podcastfy_text_to_speech()` (translates flat
+      voice_1/voice_2 fields + model → podcastfy's nested `text_to_speech.<provider>`
+      schema). `gemini_multi` normalised to `geminimulti`. Pass `tts_model`/
+      `conversation_config` into `generate_podcast_task.delay(...)` only when non-None
+      (preserve task defaults for unconfigured episodes).
 
-### Step 3 — Delete dead PodcastService
-- [ ] Delete `apps/api/src/services/podcast_service.py` (same bug, unused).
-- [ ] Delete `apps/api/tests/unit/test_podcast_service.py`.
-
-### Step 4 — Pin podcastfy
-- [ ] `apps/api/pyproject.toml`: `podcastfy>=0.4.1` → `==0.4.1`; refresh `uv.lock`
-      (already resolves to 0.4.1 — spec tightening only).
-
-### Step 5 — Tests (drift guard + fix the false-green ones)
-- [ ] Add a signature-drift guard binding the task's exact kwargs against the **real**
-      `podcastfy.client.generate_podcast` via `inspect.signature(...).bind(...)`.
-- [ ] Rewrite the 3 tests that encode the bug
-      (`test_task_passes_file_paths_to_generate_podcast`,
-      `test_task_accepts_file_paths_parameter`,
-      `test_task_no_type_error_with_router_parameter_names`); use `autospec` so bad kwargs raise.
+### Step 3 — Tests (in existing `apps/api/tests/test_generation_router.py`)
+- [x] `test_generate_forwards_episode_tts_provider` — episode TTS = ElevenLabs →
+      task receives `tts_model="elevenlabs"`.
+- [x] `test_generate_falls_back_to_project_default_tts` — no episode config, project
+      `default_tts_config` = Gemini → task receives `tts_model="gemini"`.
+- [x] `test_generate_forwards_conversation_config` — episode template set → task
+      receives `conversation_config` with the template's config + a `text_to_speech` key.
+- [x] `test_generate_without_config_uses_task_default` — no config → `tts_model` /
+      `conversation_config` NOT passed (task default `openai` preserved).
 
 ### Acceptance criteria
-- [ ] Inputs map to real signature: YouTube → `urls=`; file/PDF pre-extracted → `text=`. `file=`/`youtube_urls=`/`output_dir=`/`file_paths=` removed.
-- [ ] A test asserts call kwargs against `inspect.signature(generate_podcast)` (or autospec).
-- [ ] `podcastfy` pinned to `==0.4.1`.
-- [ ] Dead `PodcastService` + its test deleted.
-- [ ] Full api test suite green; lint clean.
+- [x] Resolve episode/project TTS config and pass `tts_model` (+ `conversation_config`)
+      into `generate_podcast_task.delay(...)`.
+- [x] Test asserting a non-OpenAI selection is honored.
+- [x] Full api test suite green; lint clean.
 
 ### Deviations from CodeRabbit's plan
-1. **Existing tests encode the bug** — three tests actively assert `file=file_paths` /
-   accept `file_paths`; they must be rewritten/inverted, not merely tweaked (this is the
-   false-green root cause).
-2. **Validation scope**: reject only **file**-type sources lacking extraction; URL/YouTube/text
-   keep their legitimate `source_data` fallback (podcastfy fetches URLs and accepts raw text).
-3. **Lock file** already pins 0.4.1 → no resolution change.
+1. **Tests in existing `test_generation_router.py`** (not a new `test_generation.py`) —
+   avoids a duplicate test module and matches the established pattern.
+2. **Integration tests via the real `client` fixture + PUT endpoints** (not AsyncMock
+   unit tests) — `create_episode` ignores the config FKs, so they are only set via update;
+   this exercises real code paths.
+3. **Added a 4th test** (no-config default preserved) to lock in backward compatibility.
 
 ---
 

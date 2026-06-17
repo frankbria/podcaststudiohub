@@ -9,10 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 from ..config import settings
 from ..database import get_db
 from ..models.episode import Episode
+from ..models.project import Project
 from ..models.content_source import ContentSource
 from ..models.user import User
 from ..dependencies import get_current_user
@@ -21,6 +23,44 @@ from ..tasks.podcast_generation import generate_podcast_task
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generation", tags=["Generation"])
+
+# podcastfy 0.4.1's TTSProviderFactory registers providers as
+# {openai, elevenlabs, edge, gemini, geminimulti}. The app stores the
+# multi-speaker provider as "gemini_multi" (underscore), which podcastfy would
+# reject as unsupported — normalize it before forwarding (issue #217).
+_PODCASTFY_TTS_PROVIDER = {"gemini_multi": "geminimulti"}
+
+
+def _podcastfy_tts_model(provider: str) -> str:
+    """Map a stored TTS provider name to podcastfy's expected provider key."""
+    return _PODCASTFY_TTS_PROVIDER.get(provider, provider)
+
+
+def _podcastfy_text_to_speech(provider: str, config: dict) -> dict:
+    """Translate a stored TTS config into podcastfy's ``text_to_speech`` schema.
+
+    The app persists a flat per-provider dict (``model`` plus ``voice_1``/
+    ``voice_2`` or ``voice_1_id``/``voice_2_id``), but podcastfy 0.4.1 reads
+    ``text_to_speech.<provider>.default_voices.{question,answer}`` and
+    ``text_to_speech.<provider>.model``. Without this mapping the user's voice/
+    model selection lands on keys podcastfy never reads and is silently ignored.
+    """
+    pf_provider = _podcastfy_tts_model(provider)
+    question = config.get("voice_1") or config.get("voice_1_id")
+    answer = config.get("voice_2") or config.get("voice_2_id")
+
+    provider_block: dict = {}
+    voices = {}
+    if question:
+        voices["question"] = question
+    if answer:
+        voices["answer"] = answer
+    if voices:
+        provider_block["default_voices"] = voices
+    if config.get("model"):
+        provider_block["model"] = config["model"]
+
+    return {"default_tts_model": pf_provider, pf_provider: provider_block}
 
 
 @router.post("/episodes/{episode_id}/generate", status_code=status.HTTP_202_ACCEPTED)
@@ -42,14 +82,22 @@ async def generate_podcast(
 
     Returns HTTP 202 Accepted with task ID for progress tracking
     """
-    # Get episode
+    # Get episode, eager-loading the TTS/template config relationships so they
+    # can be resolved below without triggering lazy loads in the async context.
     result = await db.execute(
-        select(Episode).where(
+        select(Episode)
+        .where(
             Episode.id == episode_id,
             Episode.tenant_id == current_user.tenant_id,
         )
+        .options(
+            joinedload(Episode.tts_config),
+            joinedload(Episode.template),
+            joinedload(Episode.project).joinedload(Project.default_tts_config),
+            joinedload(Episode.project).joinedload(Project.default_template),
+        )
     )
-    episode = result.scalar_one_or_none()
+    episode = result.unique().scalar_one_or_none()
 
     if not episode:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Episode not found")
@@ -126,6 +174,37 @@ async def generate_podcast(
     use_composition = enable_composition and settings.ENABLE_AUDIO_COMPOSITION
     use_distribution = enable_distribution and settings.ENABLE_PLATFORM_DISTRIBUTION
 
+    # Resolve the effective TTS config and conversation template: prefer the
+    # episode-level override, then fall back to the project default. Without this
+    # the task always used its default tts_model ('openai'), silently ignoring the
+    # user's selection (issue #217).
+    project = episode.project
+    effective_tts = episode.tts_config or (project.default_tts_config if project else None)
+    effective_template = episode.template or (project.default_template if project else None)
+
+    tts_model = _podcastfy_tts_model(effective_tts.provider) if effective_tts else None
+
+    conversation_config = None
+    if effective_template or effective_tts:
+        conversation_config = {}
+        # config columns are JSONB; they are dict-validated on write (Pydantic),
+        # but guard against a non-dict value from the store so a corrupt row
+        # degrades to "use defaults" instead of raising at dispatch time.
+        if effective_template and isinstance(effective_template.config, dict):
+            conversation_config.update(effective_template.config)
+        if effective_tts and isinstance(effective_tts.config, dict):
+            conversation_config["text_to_speech"] = _podcastfy_text_to_speech(
+                effective_tts.provider, effective_tts.config
+            )
+
+    # Only pass resolved config kwargs; omit them so the task keeps its defaults
+    # (tts_model='openai', conversation_config=None) for unconfigured episodes.
+    extra_kwargs = {}
+    if tts_model is not None:
+        extra_kwargs["tts_model"] = tts_model
+    if conversation_config is not None:
+        extra_kwargs["conversation_config"] = conversation_config
+
     # Start Celery task
     task = generate_podcast_task.delay(
         episode_id=str(episode_id),
@@ -133,6 +212,7 @@ async def generate_podcast(
         text_content="\n\n".join(text_content) if text_content else None,
         enable_composition=use_composition,
         enable_distribution=use_distribution,
+        **extra_kwargs,
     )
 
     # Update episode status

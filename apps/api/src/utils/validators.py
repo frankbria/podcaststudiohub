@@ -2,8 +2,54 @@
 Input validation utilities
 """
 import re
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
+
+
+# PDF upload constraints (mirrors the 50 MB ceiling used for audio snippets).
+MAX_PDF_SIZE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+# Content types accepted for a PDF upload. ``application/octet-stream`` is
+# allowed because some browsers/clients send it for binary uploads even when the
+# file is a valid PDF; the ``.pdf`` extension check below is the primary guard.
+ALLOWED_PDF_CONTENT_TYPES = frozenset(
+    {"application/pdf", "application/x-pdf", "application/octet-stream"}
+)
+
+
+def validate_pdf_format(filename: str, content_type: Optional[str] = None) -> str:
+    """
+    Validate that an uploaded file is a PDF.
+
+    Checks the filename extension is ``.pdf`` (case-insensitive) and, when a
+    content type is supplied, that it is an accepted PDF MIME type. Lenient on a
+    generic ``application/octet-stream`` content type as long as the extension is
+    ``.pdf`` (mirrors the audio-snippet validator's tolerance for generic types).
+
+    Args:
+        filename: Original filename of the uploaded file.
+        content_type: MIME type reported by the upload (optional).
+
+    Returns:
+        The normalized extension ``"pdf"``.
+
+    Raises:
+        ValueError: If the extension is not ``.pdf`` or the content type is a
+            recognized non-PDF type.
+    """
+    ext = Path(filename or "").suffix.lstrip(".").lower()
+    if ext != "pdf":
+        raise ValueError(
+            f"Unsupported file format '.{ext}'. Only PDF files (.pdf) are allowed."
+        )
+
+    if content_type and content_type.lower() not in ALLOWED_PDF_CONTENT_TYPES:
+        raise ValueError(
+            f"Invalid content type '{content_type}'. Expected 'application/pdf'."
+        )
+
+    return ext
 
 
 def validate_email(email: str) -> bool:

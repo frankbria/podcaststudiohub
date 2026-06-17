@@ -13,6 +13,7 @@ Tests cover:
 - Tenant isolation (skipped with justification)
 """
 
+import io
 import pytest
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1126,3 +1127,181 @@ async def test_validation_error_response_format(client, episode_and_auth):
     assert "detail" in body
     assert isinstance(body["detail"], str)
     assert len(body["detail"]) > 10  # Non-trivial message
+
+
+# ============================================================================
+# PDF UPLOAD ENDPOINT TESTS (#210)
+# ============================================================================
+
+def _pdf_upload_files(filename: str = "document.pdf", content_type: str = "application/pdf",
+                      size_bytes: int = 2048):
+    """Build a multipart 'files' payload for the PDF upload endpoint."""
+    # Minimal PDF-ish bytes padded to the requested size.
+    payload = b"%PDF-1.4\n" + b"0" * max(0, size_bytes - 9)
+    return {"file": (filename, io.BytesIO(payload), content_type)}
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_success(client, episode_and_auth):
+    """Uploading a valid PDF stores it and creates a 'pdf' content source."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ) as mock_s3, patch(
+        "src.tasks.content_extraction.extract_content_task"
+    ) as mock_task:
+        mock_s3.return_value = "https://bucket.s3.amazonaws.com/content/key.pdf"
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(),
+            data={"description": "A test document", "auto_extract": "true"},
+        )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["source_type"] == "pdf"
+    assert data["extraction_status"] == "pending"
+    # Record carries the S3 key + original filename + mime type
+    assert data["source_data"]["filename"] == "document.pdf"
+    assert data["source_data"]["mime_type"] == "application/pdf"
+    assert data["source_data"]["s3_key"].startswith("content/")
+    assert data["source_data"]["s3_key"].endswith("_document.pdf")
+    # S3 upload was invoked with the same key recorded on the source
+    mock_s3.assert_awaited_once()
+    assert mock_s3.call_args[0][1] == data["source_data"]["s3_key"]
+    # auto_extract=True dispatches the extraction task
+    mock_task.delay.assert_called_once()
+    assert mock_task.delay.call_args.kwargs["source_type"] == "pdf"
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_no_auto_extract(client, episode_and_auth):
+    """auto_extract=false uploads without dispatching extraction."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ) as mock_s3, patch(
+        "src.tasks.content_extraction.extract_content_task"
+    ) as mock_task:
+        mock_s3.return_value = None  # dev mode (no S3)
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(),
+            data={"auto_extract": "false"},
+        )
+
+    assert response.status_code == 201
+    mock_task.delay.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_rejects_wrong_extension(client, episode_and_auth):
+    """A non-.pdf filename is rejected with 422."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(filename="notes.txt", content_type="text/plain"),
+        )
+
+    assert response.status_code == 422
+    assert ".pdf" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_rejects_wrong_content_type(client, episode_and_auth):
+    """A .pdf filename with a clearly non-PDF content type is rejected with 422."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(filename="document.pdf", content_type="image/png"),
+        )
+
+    assert response.status_code == 422
+    assert "content type" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_rejects_non_pdf_bytes(client, episode_and_auth):
+    """A .pdf/application/pdf upload whose bytes are not a PDF is rejected with 422."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files={"file": ("document.pdf", io.BytesIO(b"not a real pdf"), "application/pdf")},
+        )
+
+    assert response.status_code == 422
+    assert "pdf" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_rejects_oversize(client, episode_and_auth):
+    """A PDF larger than the 50MB limit is rejected with 413."""
+    episode_id, headers = episode_and_auth
+
+    from src.utils.validators import MAX_PDF_SIZE_BYTES
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ):
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(size_bytes=MAX_PDF_SIZE_BYTES + 1024),
+        )
+
+    assert response.status_code == 413
+    assert "too large" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_storage_not_configured(client, episode_and_auth):
+    """When S3 is not configured, the upload is rejected with 503 (not a dead record)."""
+    episode_id, headers = episode_and_auth
+
+    from src.config import settings as app_settings
+
+    with patch.object(app_settings, "AWS_S3_BUCKET", None):
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(),
+        )
+
+    assert response.status_code == 503
+    assert "storage" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_episode_not_found(client, authenticated_headers):
+    """Uploading to a non-existent episode returns 404."""
+    missing_episode = uuid4()
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ):
+        response = await client.post(
+            f"/episodes/{missing_episode}/content/upload",
+            headers=authenticated_headers,
+            files=_pdf_upload_files(),
+        )
+
+    assert response.status_code == 404

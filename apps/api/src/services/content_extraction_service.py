@@ -13,6 +13,8 @@ maintain async compatibility with the FastAPI application.
 
 import asyncio
 import logging
+import os
+import tempfile
 from typing import Optional
 from urllib.parse import urljoin
 from uuid import UUID
@@ -25,10 +27,12 @@ from requests.exceptions import RequestException, Timeout, HTTPError
 from podcastfy.content_parser.website_extractor import WebsiteExtractor
 from podcastfy.content_parser.pdf_extractor import PDFExtractor
 
+from ..config import settings
 from ..models import ContentSource
 from ..schemas.content import ContentSourceUpdate
 from ..utils.ssrf import SSRFValidationError, validate_public_url
 from .content_service import get_content_source_by_id, update_content_source
+from .storage_service import StorageService
 
 
 logger = logging.getLogger(__name__)
@@ -230,9 +234,9 @@ class ContentExtractionService:
 		"""
 		Extract content from a PDF source.
 
-		Retrieves content source, validates it's a PDF type, locates the PDF file
-		(local filesystem or S3), extracts content using Podcastfy's PDFExtractor,
-		and updates the database with results or error details.
+		Retrieves content source, validates it's a PDF type, downloads the PDF from
+		S3 (via StorageService) to a temp file, extracts content using Podcastfy's
+		PDFExtractor, and updates the database with results or error details.
 
 		Args:
 			db: Database session
@@ -266,19 +270,34 @@ class ContentExtractionService:
 			await self._update_extraction_failed(db, content_source, error_msg)
 			return ExtractionResult(success=False, error_message=error_msg)
 
-		# Construct file path (local filesystem for now)
-		# TODO: Add S3 support in future iteration
-		file_path = f"data/uploads/{filename}"
+		# The PDF lives in S3 under s3_key (written by the upload endpoint). Without
+		# a configured bucket there is nothing to download from, so fail clearly
+		# rather than reading a non-existent local path.
+		bucket = getattr(settings, "AWS_S3_BUCKET", None)
+		if not bucket:
+			error_msg = "File storage not configured; cannot retrieve PDF for extraction"
+			logger.error(f"Content source {content_source_id}: {error_msg}")
+			await self._update_extraction_failed(db, content_source, error_msg)
+			return ExtractionResult(success=False, error_message=error_msg)
 
 		# Update status to 'extracting'
 		await self._update_extraction_status(db, content_source, 'extracting')
 
+		# Download the PDF from S3 to a temp file, extract, then always clean up.
+		storage = StorageService(bucket_name=bucket, region_name=settings.AWS_REGION)
+		temp_path: Optional[str] = None
 		try:
-			# Extract content using Podcastfy (async wrapper)
-			logger.info(f"Extracting content from PDF: {file_path}")
+			with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+				temp_path = tmp.name
+
+			logger.info(f"Downloading PDF {filename} from S3 key {s3_key}")
+			await storage.download_file(s3_key, temp_path)
+
+			# Extract content using Podcastfy (sync extractor in a worker thread)
+			logger.info(f"Extracting content from PDF: {filename}")
 			extracted_text = await asyncio.to_thread(
 				self.pdf_extractor.extract_content,
-				file_path
+				temp_path
 			)
 
 			# Update with success
@@ -290,17 +309,25 @@ class ContentExtractionService:
 			return ExtractionResult(success=True, content=extracted_text)
 
 		except FileNotFoundError:
-			error_msg = f"PDF file not found: {file_path}"
+			error_msg = f"PDF file not found in storage (s3_key: {s3_key})"
 			logger.error(f"File error extracting {filename}: {error_msg}")
 			await self._update_extraction_failed(db, content_source, error_msg)
 			return ExtractionResult(success=False, error_message=error_msg)
 
 		except Exception as e:
-			# Handle PDF extraction errors (corrupted file, extraction failure)
+			# Handle download failures and PDF extraction errors (corrupted file, etc.)
 			error_msg = f"Error extracting PDF content: {str(e)}"
 			logger.exception(f"Error extracting {filename}: {error_msg}")
 			await self._update_extraction_failed(db, content_source, error_msg)
 			return ExtractionResult(success=False, error_message=error_msg)
+
+		finally:
+			# Always remove the downloaded temp file, even on failure.
+			if temp_path and os.path.exists(temp_path):
+				try:
+					os.unlink(temp_path)
+				except OSError:
+					logger.warning(f"Failed to remove temp PDF file: {temp_path}")
 
 	async def extract_from_text(
 		self,

@@ -133,8 +133,12 @@ async def test_regenerate_does_not_degrade_episode_on_failure():
     episode.generation_progress = {"stage": "complete", "progress": 100}
 
     # First db.execute -> episode lookup; second -> content sources (none).
+    # The generate query eager-loads relationships, so it reads the episode via
+    # ``.unique().scalar_one_or_none()`` (issue #217). A 'complete' status keeps the
+    # episode restartable so it passes the in-progress guard (#214) and reaches the
+    # no-content 400 this test asserts on.
     episode_result = MagicMock()
-    episode_result.scalar_one_or_none.return_value = episode
+    episode_result.unique.return_value.scalar_one_or_none.return_value = episode
     content_result = MagicMock()
     content_result.scalars.return_value.all.return_value = []
 

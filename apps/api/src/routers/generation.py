@@ -30,6 +30,13 @@ router = APIRouter(prefix="/generation", tags=["Generation"])
 # reject as unsupported — normalize it before forwarding (issue #217).
 _PODCASTFY_TTS_PROVIDER = {"gemini_multi": "geminimulti"}
 
+# Statuses from which a (re)generation may be started. Anything else means a run
+# is already in flight (queued/extracting/generating/uploading/composing/
+# distributing/…); starting a second run would race to write s3_url/s3_key/
+# generation_status and overwrite the in-progress celery_task_id in
+# generation_progress, so SSE would only track the newer task (issue #214).
+_RESTARTABLE_STATUSES = frozenset({"draft", "complete", "failed"})
+
 
 def _podcastfy_tts_model(provider: str) -> str:
     """Map a stored TTS provider name to podcastfy's expected provider key."""
@@ -101,6 +108,19 @@ async def generate_podcast(
 
     if not episode:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Episode not found")
+
+    # Reject if a run is already in flight: only draft/complete/failed episodes are
+    # restartable. Checked before any content assembly or dispatch so a duplicate
+    # submission cannot race the in-progress task (issue #214).
+    if episode.generation_status not in _RESTARTABLE_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Generation already in progress for this episode "
+                f"(status: {episode.generation_status}); wait for it to finish or fail "
+                "before submitting again."
+            ),
+        )
 
     # Get content sources
     content_result = await db.execute(

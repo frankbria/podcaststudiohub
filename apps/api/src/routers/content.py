@@ -9,10 +9,10 @@ Note: Content sources are nested under episodes at /episodes/{episode_id}/conten
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, status, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from ..database import get_db
 from ..middleware.auth import get_current_user
@@ -25,6 +25,7 @@ from ..schemas.content import (
 )
 from ..services.content_service import (
     add_content_source,
+    upload_pdf_content,
     get_content_sources,
     get_content_source_by_id,
     update_content_source,
@@ -125,6 +126,70 @@ async def create_content_source(
             )
         except Exception as e:
             # Broker unavailable — log but don't fail creation
+            logger.warning(
+                f"Could not queue extraction task for {content_source.id}: {e}"
+            )
+
+    return content_source
+
+
+@router.post(
+    "/episodes/{episode_id}/content/upload",
+    response_model=ContentSourceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_pdf_content_source(
+    episode_id: UUID,
+    file: UploadFile = File(..., description="PDF file (application/pdf, max 50MB)"),
+    description: Optional[str] = Form(None, max_length=500, description="Optional description"),
+    auto_extract: bool = Form(True, description="Trigger extraction immediately after upload"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Upload a PDF file as a content source for an episode.
+
+    Accepts multipart/form-data with a PDF file plus optional metadata. Stores
+    the file in S3, creates a 'pdf' content source recording its ``s3_key`` and
+    ``filename``, and (when ``auto_extract`` is true) queues a background
+    extraction task so the content is ready for generation.
+
+    Args:
+        episode_id: UUID of the parent episode.
+        file: Uploaded PDF file.
+        description: Optional description.
+        auto_extract: Whether to automatically trigger extraction (default True).
+        current_user: Authenticated user (from JWT token).
+        db: Database session.
+
+    Returns:
+        Created content source with all fields.
+
+    Raises:
+        HTTPException: 404 if episode not found, 413 if file too large,
+            422 if the file is not a valid PDF.
+    """
+    content_source = await upload_pdf_content(
+        db=db,
+        tenant_id=current_user.tenant_id,
+        episode_id=episode_id,
+        file=file,
+        description=description,
+    )
+
+    # Auto-trigger extraction if requested (mirrors create_content_source)
+    if auto_extract:
+        try:
+            from ..tasks.content_extraction import extract_content_task
+            extract_content_task.delay(
+                content_source_id=str(content_source.id),
+                source_type=content_source.source_type,
+            )
+            logger.info(
+                f"Triggered extraction task for uploaded PDF content source {content_source.id}"
+            )
+        except Exception as e:
+            # Broker unavailable — log but don't fail the upload
             logger.warning(
                 f"Could not queue extraction task for {content_source.id}: {e}"
             )

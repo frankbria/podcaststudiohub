@@ -1,5 +1,6 @@
 """Storage service for S3 operations"""
 
+import asyncio
 from typing import Optional
 import boto3
 from botocore.exceptions import ClientError
@@ -67,7 +68,10 @@ class StorageService:
             extra_args["ACL"] = "public-read"
 
         try:
-            self.s3_client.upload_file(
+            # boto3 is synchronous; run it off the event loop so concurrent
+            # requests/tasks are not blocked during the upload.
+            await asyncio.to_thread(
+                self.s3_client.upload_file,
                 Filename=file_path,
                 Bucket=self.bucket_name,
                 Key=s3_key,
@@ -93,7 +97,10 @@ class StorageService:
             Local file path
         """
         try:
-            self.s3_client.download_file(
+            # boto3 is synchronous; run it off the event loop so concurrent
+            # requests/tasks are not blocked during the download.
+            await asyncio.to_thread(
+                self.s3_client.download_file,
                 Bucket=self.bucket_name,
                 Key=s3_key,
                 Filename=local_path,

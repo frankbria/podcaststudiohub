@@ -129,6 +129,58 @@ generate endpoint sets it to `"queued"` on dispatch. `regenerate_podcast` delega
 
 ---
 
+## Active work — Issue #210 (P2.5): PDF/file input non-functional
+
+**Plan source:** comment (CodeRabbit coding plan), adapted to the codebase.
+**Branch:** `fix/210-pdf-upload-s3-extraction`
+
+**Problem:** The `pdf` source type requires `s3_key`+`filename`, but (1) there is no upload
+endpoint to store a PDF and create the record, and (2) `extract_from_pdf` ignores `s3_key`
+and reads a hard-coded `data/uploads/{filename}` local path that nothing writes → every PDF
+extraction fails with FileNotFoundError.
+
+**Verified in codebase:** content router has no prefix (routes `/episodes/{id}/content`,
+`/content/{id}`); settings use `AWS_S3_BUCKET`/`AWS_REGION`; `StorageService.download_file`
+exists but is unused; `audio_snippet_service` is the canonical multipart→S3→record pattern
+(module-level `_upload_to_s3` helper, mocked in tests); `validators.py` already has
+`sanitize_filename`. **`generation.py` was already refactored by #214/#217** to reject
+unextracted file/pdf sources (HTTP 400) and feed the engine `extracted_content` — it no
+longer passes raw `s3_key` to the engine.
+
+### Steps
+- [ ] **1. PDF validation util** (`src/utils/validators.py`): `validate_pdf_format(filename,
+      content_type)`; `MAX_PDF_SIZE_BYTES = 50MB`.
+- [ ] **2. PDF upload service** (`src/services/content_service.py`): `upload_pdf_content(...)`
+      + module helper `_upload_pdf_to_s3` (None in dev when `AWS_S3_BUCKET` unset). S3 key
+      `content/{tenant_id}/{episode_id}/{uuid}_{sanitized}`.
+- [ ] **3. Upload endpoint** (`src/routers/content.py`): `POST /episodes/{episode_id}/content/upload`
+      (multipart `file`, `description`, `auto_extract=True`); dispatch extract task when `auto_extract`.
+- [ ] **4. Fix PDF extraction (CORE)** (`src/services/content_extraction_service.py`): remove TODO +
+      `data/uploads/`; download `s3_key` via `StorageService.download_file` to a temp `.pdf`; extract;
+      `os.unlink` in `finally`; clear error when storage unconfigured/download fails.
+- [ ] **5. StorageService async-safe** (`src/services/storage_service.py`): wrap boto3
+      `download_file`/`upload_file` in `asyncio.to_thread`.
+- [ ] **6. Tests**: `test_content.py` (upload success/wrong-ext/wrong-type/oversize/source_data);
+      `test_content_extraction.py` (mock `download_file`, assert s3_key + temp cleanup, replace old
+      `data/uploads/` assertion); new `test_pdf_pipeline_integration.py` (upload → extract → generate,
+      `pending→extracting→complete`).
+
+### Acceptance criteria
+- [ ] Multipart upload endpoint stores PDFs to S3 and records `s3_key`/`filename`.
+- [ ] Extraction downloads from S3 via `StorageService.download_file`; TODO removed.
+- [ ] `s3_key` resolved to text before the engine (via extraction → `extracted_content`).
+- [ ] Integration test: upload → extract → generate.
+
+### Deviations from CodeRabbit plan
+1. **Phase 2 Task 2 (generation router file_paths) is obsolete** — already handled by #214/#217;
+   the AC "resolve s3_key before the engine" is met via the extraction path. Re-adding raw-path
+   passing would regress that design (podcastfy 0.4.1 has no file-path kwarg), so `generation.py`
+   is left unchanged.
+2. Settings keys are `AWS_S3_BUCKET`/`AWS_REGION` (not `S3_BUCKET_NAME`).
+3. Reuse existing `sanitize_filename`; no new shared S3→temp helper needed (generation untouched).
+
+---
+
 ## Ops changes already made this session
 - README server IP removed (commit `bf9e606`).
 - gitleaks pre-commit secret scanner added.

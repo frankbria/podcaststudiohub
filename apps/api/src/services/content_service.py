@@ -5,14 +5,22 @@ Provides CRUD operations for content sources with episode validation, pagination
 and extraction status management. RLS ensures tenant isolation.
 """
 
+import os
+import tempfile
+import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from uuid import UUID
 from typing import Optional
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 
 from ..models import ContentSource, Episode
 from ..schemas.content import ContentSourceCreate, ContentSourceUpdate
+from ..utils.validators import (
+    MAX_PDF_SIZE_BYTES,
+    sanitize_filename,
+    validate_pdf_format,
+)
 
 
 async def add_content_source(
@@ -55,6 +63,144 @@ async def add_content_source(
         extraction_status="pending",  # Initial status
         extracted_content=None,
         error_message=None
+    )
+    db.add(content_source)
+    await db.commit()
+    return content_source
+
+
+async def _upload_pdf_to_s3(file_path: str, s3_key: str) -> Optional[str]:
+    """
+    Upload a PDF to S3 and return its URL.
+
+    Returns None when S3 is not configured (development mode), mirroring the
+    audio-snippet upload helper. Kept at module scope so tests can patch it.
+
+    Args:
+        file_path: Local temp file path to upload.
+        s3_key: Destination S3 object key.
+
+    Returns:
+        S3 URL string, or None if S3 is not configured.
+    """
+    from ..config import settings
+    from ..services.storage_service import StorageService
+
+    bucket = getattr(settings, "AWS_S3_BUCKET", None)
+    if not bucket:
+        # S3 not configured — development mode, skip upload.
+        return None
+
+    storage = StorageService(bucket_name=bucket, region_name=settings.AWS_REGION)
+    return await storage.upload_file(
+        file_path=file_path,
+        s3_key=s3_key,
+        content_type="application/pdf",
+        public=False,
+    )
+
+
+async def upload_pdf_content(
+    db: AsyncSession,
+    tenant_id: UUID,
+    episode_id: UUID,
+    file: UploadFile,
+    description: Optional[str] = None,
+) -> ContentSource:
+    """
+    Upload a PDF file to S3 and create a 'pdf' content source for an episode.
+
+    Validates the episode exists, the file is a PDF, and the size is within
+    limits, then stores the file in S3 under
+    ``content/{tenant_id}/{episode_id}/{uuid}_{filename}`` and records a
+    ContentSource with ``source_data={s3_key, filename, mime_type}`` and an
+    initial ``extraction_status='pending'``.
+
+    Args:
+        db: Database session.
+        tenant_id: Tenant ID for isolation.
+        episode_id: Episode the PDF belongs to.
+        file: Uploaded PDF file.
+        description: Optional description (currently unused metadata).
+
+    Returns:
+        Created ContentSource instance.
+
+    Raises:
+        HTTPException: 404 if episode not found, 413 if too large,
+            422 if invalid format / storage failure.
+    """
+    # Verify episode exists (RLS ensures it's in the correct tenant)
+    episode = await db.get(Episode, episode_id)
+    if episode is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Episode not found",
+        )
+
+    # Validate PDF format before reading the whole file
+    filename = file.filename or ""
+    try:
+        validate_pdf_format(filename, file.content_type)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+
+    # Read contents and enforce size limits
+    file_bytes = await file.read()
+    file_size = len(file_bytes)
+    if file_size == 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Uploaded PDF is empty",
+        )
+    if file_size > MAX_PDF_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"File too large ({file_size} bytes). "
+                f"Maximum allowed size is {MAX_PDF_SIZE_BYTES // (1024 * 1024)} MB"
+            ),
+        )
+
+    # Build a tenant/episode-scoped S3 key with a sanitized filename
+    safe_name = sanitize_filename(filename) or "document.pdf"
+    s3_key = f"content/{tenant_id}/{episode_id}/{uuid.uuid4()}_{safe_name}"
+
+    # Write to a temp file and upload to S3, cleaning up afterwards
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(file_bytes)
+            temp_path = tmp.name
+
+        await _upload_pdf_to_s3(temp_path, s3_key)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to store PDF: {str(e)}",
+        )
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+    content_source = ContentSource(
+        episode_id=episode_id,
+        tenant_id=tenant_id,
+        source_type="pdf",
+        source_data={
+            "s3_key": s3_key,
+            "filename": filename,
+            "mime_type": "application/pdf",
+        },
+        extraction_status="pending",
+        extracted_content=None,
+        error_message=None,
     )
     db.add(content_source)
     await db.commit()

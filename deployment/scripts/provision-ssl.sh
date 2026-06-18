@@ -46,8 +46,8 @@ mkdir -p "${WEBROOT}"
 # The full repo config references not-yet-existing cert files, so nginx would
 # refuse to start. Use a minimal HTTP-only config that only serves the
 # acme-challenge webroot long enough to issue the certificate.
-if [ ! -d "${CERT_DIR}" ]; then
-	log "No cert yet for ${DOMAIN} — installing bootstrap HTTP-only config to serve the ACME challenge."
+if [ ! -f "${CERT_DIR}/fullchain.pem" ] || [ ! -f "${CERT_DIR}/privkey.pem" ]; then
+	log "No usable cert for ${DOMAIN} — installing bootstrap HTTP-only config to serve the ACME challenge."
 	rm -f /etc/nginx/sites-enabled/default
 	cat > "${NGINX_SITE}" <<HTTP
 upstream podcastfy_api { server 127.0.0.1:8001; }
@@ -78,6 +78,11 @@ log "Installing repo nginx config (TLS + security headers) -> ${NGINX_SITE}"
 mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
 mkdir -p /opt/podcaststudiohub/logs
 cp -a "${SITE_CONF}" "${NGINX_SITE}"
+# Honour the DOMAIN override: substitute the hardcoded host in the installed
+# copy so server_name + cert paths match the certificate that was issued.
+if [ "${DOMAIN}" != "dev.podcaststudiohub.me" ]; then
+	sed -i "s/dev\.podcaststudiohub\.me/${DOMAIN}/g" "${NGINX_SITE}"
+fi
 ln -sf "${NGINX_SITE}" "${NGINX_ENABLED}"
 rm -f /etc/nginx/sites-enabled/default
 

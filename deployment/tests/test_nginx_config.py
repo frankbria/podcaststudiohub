@@ -102,6 +102,28 @@ def test_frame_options_denies_frame(server_blocks: list[str]):
 	assert "deny" in m.group(1).lower() or "sameorigin" in m.group(1).lower()
 
 
+def test_csp_allows_s3_audio(server_blocks: list[str]):
+	"""Episode audio streams / downloads from S3 (apps/web episode page +
+	DownloadButton). CSP must not block it — both media-src (<audio>) and
+	connect-src (fetch download) must allow an S3 origin."""
+	https_block = _block_matching(server_blocks, "listen 443 ssl")
+	m = re.search(r"Content-Security-Policy\s+\"([^\"]+)\"", https_block, re.I)
+	assert m, "Content-Security-Policy header missing"
+	csp = m.group(1)
+
+	def directive(src: str) -> str:
+		match = re.search(rf"{src}\s+([^;]+)", csp)
+		return match.group(1) if match else ""
+
+	# An S3 host must be permitted for both media playback and fetch downloads.
+	assert any(".s3." in tok for tok in directive("media-src").split()), (
+		"media-src must allow the S3 audio host (episode playback)"
+	)
+	assert any(".s3." in tok for tok in directive("connect-src").split()), (
+		"connect-src must allow the S3 audio host (download fetch)"
+	)
+
+
 # ── AC1: Let's Encrypt cert paths + renewal webroot ─────────────────────────
 
 

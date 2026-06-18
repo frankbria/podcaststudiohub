@@ -46,8 +46,27 @@ mkdir -p "${WEBROOT}"
 # The full repo config references not-yet-existing cert files, so nginx would
 # refuse to start. Use a minimal HTTP-only config that only serves the
 # acme-challenge webroot long enough to issue the certificate.
-if [ ! -f "${CERT_DIR}/fullchain.pem" ] || [ ! -f "${CERT_DIR}/privkey.pem" ]; then
+if [ ! -f "${CERT_DIR}/fullchain.pem" ] || [ ! -f "${CERT_DIR}/privkey.pem" ] || \
+	! openssl x509 -checkend 2592000 -noout -in "${CERT_DIR}/fullchain.pem" >/dev/null 2>&1; then
 	log "No usable cert for ${DOMAIN} — installing bootstrap HTTP-only config to serve the ACME challenge."
+
+	# Back up any existing site config so a certbot failure restores it (via
+	# the ERR trap below) rather than leaving the HTTP-only bootstrap active.
+	backup_path=""
+	if [ -f "${NGINX_SITE}" ]; then
+		backup_path="$(mktemp)"
+		cp -a "${NGINX_SITE}" "${backup_path}"
+	fi
+	restore_on_error() {
+		if [ -n "${backup_path:-}" ] && [ -f "${backup_path}" ]; then
+			log "certbot failed — restoring previous nginx config."
+			cp -a "${backup_path}" "${NGINX_SITE}"
+			nginx -t && systemctl reload nginx || true
+			rm -f "${backup_path}"
+		fi
+	}
+	trap restore_on_error ERR
+
 	rm -f /etc/nginx/sites-enabled/default
 	cat > "${NGINX_SITE}" <<HTTP
 upstream podcastfy_api { server 127.0.0.1:8001; }
@@ -69,6 +88,9 @@ HTTP
 		--email "${EMAIL}" \
 		--agree-tos --no-eff-email \
 		--non-interactive
+
+	trap - ERR
+	[ -n "${backup_path:-}" ] && [ -f "${backup_path}" ] && rm -f "${backup_path}"
 else
 	log "Certificate already exists at ${CERT_DIR} — skipping issuance."
 fi

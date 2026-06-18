@@ -38,6 +38,10 @@ def test_http_listens_on_80_and_redirects_to_https(server_blocks: list[str]):
 	assert "return 301 https://" in block.lower(), (
 		"port-80 server block must 301-redirect to HTTPS, not serve content"
 	)
+	# Must redirect to a canonical host, NOT $host (Host-header open-redirect).
+	assert "$host" not in block, (
+		"redirect must use a canonical host, not the attacker-controllable $host"
+	)
 
 
 def test_http_block_does_not_proxy_to_backend(server_blocks: list[str]):
@@ -58,14 +62,14 @@ def test_https_listens_on_443_ssl(server_blocks: list[str]):
 
 
 def test_tls_protocols_modern_only(nginx_conf_raw: str):
-	assert "ssl_protocols" in nginx_conf_raw
-	m = re.search(r"ssl_protocols\s+([^;]+);", nginx_conf_raw)
-	assert m, "ssl_protocols directive missing"
-	tokens = m.group(1).split()
-	assert "TLSv1.2" in tokens and "TLSv1.3" in tokens
-	# No legacy protocols enabled (token-exact so TLSv1.2 is not matched by TLSv1).
-	for forbidden in ("SSLv2", "SSLv3", "TLSv1", "TLSv1.1"):
-		assert forbidden not in tokens, f"legacy protocol {forbidden!r} must not be enabled"
+	matches = re.findall(r"ssl_protocols\s+([^;]+);", nginx_conf_raw, flags=re.I)
+	assert matches, "ssl_protocols directive missing"
+	# Check EVERY ssl_protocols directive — a later block must not re-enable legacy TLS.
+	for raw in matches:
+		tokens = raw.split()
+		assert "TLSv1.2" in tokens and "TLSv1.3" in tokens
+		for forbidden in ("SSLv2", "SSLv3", "TLSv1", "TLSv1.1"):
+			assert forbidden not in tokens, f"legacy protocol {forbidden!r} must not be enabled"
 
 
 # ── AC2: Security headers ──────────────────────────────────────────────────
@@ -134,10 +138,15 @@ def test_uses_letsencrypt_cert_paths(nginx_conf_raw: str):
 
 
 def test_acme_challenge_webroot_for_renewal(server_blocks: list[str]):
-	# Renewal needs a webroot-served challenge path reachable over HTTP.
-	text = " ".join(server_blocks).lower()
-	assert "acme-challenge" in text, (
-		".well-known/acme-challenge location required for cert renewal"
+	# Renewal needs a webroot-served challenge path reachable over HTTP (port 80),
+	# not just HTTPS — otherwise HTTP-01 renewal breaks.
+	http_block = _block_matching(server_blocks, "listen 80")
+	http_lower = http_block.lower()
+	assert "/.well-known/acme-challenge/" in http_lower, (
+		".well-known/acme-challenge location required on port 80 for HTTP-01 renewal"
+	)
+	assert "root /var/www/html" in http_lower, (
+		"ACME challenge on port 80 must use the expected webroot"
 	)
 
 

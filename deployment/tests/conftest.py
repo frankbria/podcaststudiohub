@@ -55,10 +55,12 @@ def nginx_conf_raw() -> str:
 
 @pytest.fixture(scope="module")
 def server_blocks(nginx_conf_raw: str) -> list[str]:
+	"""Server-block bodies extracted from the de-commented nginx config text."""
 	return _extract_server_blocks(nginx_conf_raw)
 
 
 def _docker_available() -> bool:
+	"""Return True if the Docker daemon is reachable (else the nginx -t fixture skips)."""
 	if not shutil.which("docker"):
 		return False
 	try:

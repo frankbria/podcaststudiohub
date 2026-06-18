@@ -307,7 +307,46 @@ Nginx reverse proxy configuration is in `deployment/nginx/podcastfy.conf`.
 - `https://dev.podcaststudiohub.me/api` → `localhost:8001` (API)
 - `https://dev.podcaststudiohub.me` → `localhost:3003` (Frontend)
 
-**To update Nginx config:**
+The config terminates TLS 1.2/1.3 only and sends every request through a
+301 HTTP→HTTPS redirect, plus HSTS / CSP / X-Frame-Options /
+X-Content-Type-Options / Referrer-Policy. Port 80 never reaches the app.
+
+## SSL / TLS (Let's Encrypt)
+
+Certificates are obtained and renewed with `deployment/scripts/provision-ssl.sh`.
+Run it once on the VPS (idempotent — safe to re-run):
+
+```bash
+# Prerequisites: DNS for the domain points at the server, port 80 open.
+scp -r deployment root@47.88.89.175:/opt/podcaststudiohub/deployment
+ssh root@47.88.89.175
+cd /opt/podcaststudiohub && DOMAIN=dev.podcaststudiohub.me \
+  bash deployment/scripts/provision-ssl.sh
+```
+
+The script:
+1. Installs certbot and issues a cert for `$DOMAIN` via the HTTP-01 webroot
+   challenge (`/var/www/html/.well-known/acme-challenge/`).
+2. Installs the repo's `podcastfy.conf` to `/etc/nginx/sites-available/podcastfy`
+   and enables it (the cert paths point at `/etc/letsencrypt/live/<domain>/`).
+3. Enables `certbot.timer` and a renewal deploy-hook that reloads nginx, so
+   renewed certs are picked up automatically.
+4. Runs `certbot renew --dry-run` to verify the renewal pipeline.
+
+**Verify HTTPS is live** (acceptance criteria for the TLS rollout):
+```bash
+# HTTP must 301-redirect to HTTPS
+curl -sIL http://dev.podcaststudiohub.me | head -n 5
+
+# All security headers present
+curl -sI https://dev.podcaststudiohub.me | grep -iE \
+  'strict-transport-security|content-security-policy|x-frame-options|x-content-type-options|referrer-policy'
+
+# Only TLS 1.2 / 1.3 offered
+nmap --script ssl-enum-ciphers -p 443 dev.podcaststudiohub.me
+```
+
+**To update the Nginx config** (after editing `deployment/nginx/podcastfy.conf`):
 ```bash
 scp deployment/nginx/podcastfy.conf root@47.88.89.175:/etc/nginx/sites-available/podcastfy
 ssh root@47.88.89.175 "nginx -t && systemctl reload nginx"

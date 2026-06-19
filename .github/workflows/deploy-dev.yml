@@ -183,14 +183,14 @@ jobs:
               pm2 delete podcaststudiohub-api
             fi
 
-            echo "Starting API service on port ${API_PORT:-8000}..."
+            echo "Starting API service on port ${API_PORT:-8001}..."
             EMAIL_ENABLED=false \
             REQUIRE_EMAIL_VERIFICATION=false \
             RATE_LIMIT_ENABLED=false \
             pm2 start uv \
               --name podcaststudiohub-api \
               --cwd $SERVER_PATH/api \
-              -- run uvicorn src.main:app --host 0.0.0.0 --port ${API_PORT:-8000}
+              -- run uvicorn src.main:app --host 127.0.0.1 --port ${API_PORT:-8001}
 
             pm2 save
 
@@ -248,12 +248,12 @@ jobs:
           # Restart frontend service (delete and recreate to ensure fresh start)
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
             cd $SERVER_PATH/frontend
-            
+
             if pm2 describe podcaststudiohub-frontend > /dev/null 2>&1; then
               echo "Stopping existing frontend service..."
               pm2 delete podcaststudiohub-frontend
             fi
-            
+
             echo "Starting frontend service on port ${FRONTEND_PORT:-3000}..."
             PORT=${FRONTEND_PORT:-3000} \
             NEXT_PUBLIC_API_URL='$API_URL' \
@@ -263,9 +263,9 @@ jobs:
               --name podcaststudiohub-frontend \
               --cwd $SERVER_PATH/frontend \
               -- start
-            
+
             pm2 save
-            
+
             echo "Frontend deployment complete"
           EOF
 
@@ -277,7 +277,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
             cd $SERVER_PATH/api
-            
+
             if pm2 describe podcaststudiohub-celery > /dev/null 2>&1; then
               echo "Stopping existing Celery service..."
               pm2 delete podcaststudiohub-celery

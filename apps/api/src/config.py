@@ -14,7 +14,9 @@ class Settings(BaseSettings):
     APP_NAME: str = "Podcastfy API"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
-    API_HOST: str = "0.0.0.0"
+    # Bind loopback only: nginx reverse-proxies to 127.0.0.1 in prod and local
+    # dev reaches it over localhost. Never default to 0.0.0.0 (issue #209).
+    API_HOST: str = "127.0.0.1"
     API_PORT: int = 8000
 
     # Database

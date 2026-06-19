@@ -4,6 +4,30 @@
 
 This application deploys to **47.88.89.175** at `/opt/podcaststudiohub/` using **PM2** for process management.
 
+## Host Hardening (non-root + firewall) — issue #209
+
+Services run under a **dedicated non-root service account** (`podcastfy`), the API
+binds **127.0.0.1 only** (nginx reverse-proxies to it), and a host firewall blocks
+direct external access. Provision this once on the VPS:
+
+```bash
+ssh root@47.88.89.175
+cd /opt/podcaststudiohub && bash deployment/scripts/harden-host.sh
+```
+
+`harden-host.sh` (idempotent):
+1. Creates the `podcastfy` system account and an `~/.ssh` dir for the deploy key.
+2. Stops any root-owned PM2 services (releasing ports 8001/3003) and installs a
+   boot-time PM2 resurrect unit for the `podcastfy` account so services survive reboots.
+3. Chowns `/opt/podcaststudiohub` to that account.
+4. Configures `ufw`: default-deny inbound, allow only OpenSSH / 80 / 443.
+
+After running it, **add the deploy public key** to
+`/home/podcastfy/.ssh/authorized_keys` and **set the GitHub `SERVER_USER` deploy
+secret to `podcastfy`** so PM2 processes start under the non-root account on the
+next deploy. The API binds loopback (`API_HOST=127.0.0.1`, port `8001` matching the
+nginx upstream) and runs with `DEBUG=False` (uvicorn auto-reload stays off in prod).
+
 ## Deployment Methods
 
 ### 1. Automated Deployment (Recommended)
@@ -77,7 +101,7 @@ find . -type f -name '*.pyc' -delete 2>/dev/null || true
 # Restart API
 pm2 delete podcaststudiohub-api 2>/dev/null || true
 pm2 start uv --name podcaststudiohub-api --cwd /opt/podcaststudiohub/api \
-  -- run uvicorn src.main:app --host 0.0.0.0 --port 8001
+  -- run uvicorn src.main:app --host 127.0.0.1 --port 8001
 pm2 save
 EOF
 ```
@@ -215,7 +239,8 @@ Configure in **Settings** → **Environments** → **development**:
 
 **Secrets:**
 - `SSH_PRIVATE_KEY`: SSH key for deployment
-- `SERVER_USER`: `root`
+- `SERVER_USER`: `podcastfy` (the dedicated non-root service account created by
+  `harden-host.sh` — see **Host Hardening** above; do **not** deploy as root)
 - `NEXTAUTH_SECRET`: Generated with `openssl rand -base64 32`
 
 ### Server Environment Files
@@ -398,7 +423,7 @@ pm2 save --force
 
 # Restart API
 pm2 start uv --name podcaststudiohub-api --cwd /opt/podcaststudiohub/api \
-  -- run uvicorn src.main:app --host 0.0.0.0 --port 8001
+  -- run uvicorn src.main:app --host 127.0.0.1 --port 8001
 
 # Restart Frontend
 cd /opt/podcaststudiohub/frontend

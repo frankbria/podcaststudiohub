@@ -11,11 +11,13 @@ Security hardening of GitHub Actions workflows. Plan source: issue body (accepta
   Move to `env:` and reference `"$TEST_SUITE"` (keep the surrounding `*` globs unquoted).
 
 ### 2. Pin third-party actions to full commit SHAs
-- `openjournals/openjournals-draft-action@master` → `@85a18372e48f551d8af9ddb7a747de685fbbb01c` (draft-pdf.yml)
-- `peter-evans/create-pull-request@v5` → `@4e1beaa7521e8b457b572c090b25bd3db56bf1c5` (draft-pdf.yml)
-- `anthropics/claude-code-action@v1` → `@51705da45eecce209d4700538bf8377d5b5fc695` (rm-loop.yml, claude.yml, rm-review.yml — 3 sites)
+- `anthropics/claude-code-action@v1` → `@51705da45eecce209d4700538bf8377d5b5fc695` across 6 workflows
+  (rm-loop, rm-review, rm-docs, rm-refine, rm-research, claude).
 - Each pin gets a `# vX.Y` comment so Dependabot can track it.
 - First-party `actions/*` (checkout, setup-node, etc.) left on tags — not flagged, Dependabot covers them.
+- `draft-pdf.yml` (the other flagged pins: `openjournals-draft-action@master`,
+  `create-pull-request@v5`) was **deleted** instead — dead leftover from the
+  upstream JOSS-paper fork (no `paper/` dir; failing on main since Nov 2025).
 
 ### 3. Add Dependabot for github-actions
 - New `.github/dependabot.yml` with the `github-actions` ecosystem (weekly).

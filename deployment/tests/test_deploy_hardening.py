@@ -49,11 +49,15 @@ def test_config_default_host_is_loopback():
 def test_workflow_deploy_port_matches_nginx_upstream():
 	port = _nginx_upstream_port()
 	text = WORKFLOW.read_text()
-	# The uvicorn launch must fall back to the nginx upstream port, not 8000.
-	assert f"--port ${{API_PORT:-{port}}}" in text, (
+	# The deploy port must fall back to the nginx upstream port, not 8000.
+	assert f"${{API_PORT:-{port}}}" in text, (
 		f"deploy port fallback must match nginx upstream ({port})"
 	)
 	assert "${API_PORT:-8000}" not in text, "stale 8000 port fallback drifts from nginx upstream"
+	# A stray API_PORT override must be rejected, not silently reintroduce the drift.
+	assert f'!= "{port}"' in text and "exit 1" in text, (
+		"deploy must hard-fail if the effective API port != nginx upstream"
+	)
 
 
 # ── AC3: DEBUG / reload off in prod ────────────────────────────────────────

@@ -54,7 +54,8 @@ if command -v pm2 >/dev/null 2>&1; then
 	# ...and install one for the service account instead, so its API/frontend/
 	# worker come back after a reboot (the deploy's `pm2 save` writes the dump
 	# this unit resurrects). Without this, services stay down until a redeploy.
-	pm2 startup systemd -u "$SERVICE_USER" --hp "/home/$SERVICE_USER" >/dev/null 2>&1 || true
+	# NOT suppressed: a failed startup unit silently breaks reboot persistence.
+	pm2 startup systemd -u "$SERVICE_USER" --hp "/home/$SERVICE_USER"
 fi
 
 # ── 3. App tree ownership ──────────────────────────────────────────────────
@@ -73,6 +74,9 @@ if ! command -v ufw >/dev/null 2>&1; then
 fi
 
 echo "Configuring firewall (default-deny inbound, allow SSH + HTTP/S)..."
+# Reset first so any pre-existing allow rule (e.g. a directly-exposed 8000/8001
+# from before this hardening) is cleared — otherwise it survives and stays open.
+ufw --force reset
 # Allow SSH FIRST and by port (22/tcp), not the "OpenSSH" app profile: the
 # profile only exists if openssh-server registered it, and a missing profile
 # under `set -e` would abort after default-deny — locking us out of the box.

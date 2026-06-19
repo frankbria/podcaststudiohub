@@ -1,97 +1,43 @@
-# Issue #208 — fix(infra): nginx serves authenticated SaaS over plain HTTP
+# Issue #224 — Harden agentic/CI workflows
 
-**Source**: self-authored (issue had no implementation plan)
-**Severity**: P1 / blocker / area-security + area-deployment
-**Branch**: `fix/208-nginx-tls-security-headers`
+Security hardening of GitHub Actions workflows. Plan source: issue body (acceptance criteria).
 
-## Problem
-`deployment/nginx/podcastfy.conf` ships with `listen 80;` only; the 443/SSL
-block, the HTTP→HTTPS redirect, and every security header are commented out.
-Yet `deployment/README.md` deploys under `https://dev.podcaststudiohub.me`.
-Result: NextAuth session cookies / JWT bearer tokens traverse cleartext.
+## Steps
 
-## Acceptance Criteria (from issue)
-- [ ] AC1 — Obtain certs (Let's Encrypt), enable 443 server block + 301 redirect.
-- [ ] AC2 — Add HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy;
-      `ssl_protocols TLSv1.2 TLSv1.3` only.
-- [ ] AC3 — Verify deployed domain actually serves over HTTPS.
+### 1. Stop interpolating untrusted input into `run:` shells
+- **rm-loop.yml** (line ~146): issue `title` is interpolated into a `run:` shell → shell injection.
+  Move `title` (and the dispatch input `force_issue`) into step-level `env:` and reference `"$TITLE"` / `"$FORCE_ISSUE"`.
+- **playwright-tests.yml** (line ~88): `github.event.inputs.test_suite` (choice input, arbitrary via API) interpolated into a `run:` glob.
+  Move to `env:` and reference `"$TEST_SUITE"` (keep the surrounding `*` globs unquoted).
 
-## Adapted Plan (numbered steps)
+### 2. Pin third-party actions to full commit SHAs
+- `anthropics/claude-code-action@v1` → `@51705da45eecce209d4700538bf8377d5b5fc695` across 6 workflows
+  (rm-loop, rm-review, rm-docs, rm-refine, rm-research, claude).
+- Each pin gets a `# vX.Y` comment so Dependabot can track it.
+- First-party `actions/*` (checkout, setup-node, etc.) left on tags — not flagged, Dependabot covers them.
+- `draft-pdf.yml` (the other flagged pins: `openjournals-draft-action@master`,
+  `create-pull-request@v5`) was **deleted** instead — dead leftover from the
+  upstream JOSS-paper fork (no `paper/` dir; failing on main since Nov 2025).
 
-### Step 1 — Test first (RED): `deployment/tests/test_nginx_config.py`
-New pytest module that parses `deployment/nginx/podcastfy.conf` and asserts:
-- A port-80 `server` block issues `return 301 https://$host$request_uri;`
-- A `listen 443 ssl` server block exists
-- `ssl_protocols TLSv1.2 TLSv1.3;` present, and no `TLSv1`/`TLSv1.1`/`SSLv3`
-- All 5 headers: `Strict-Transport-Security`, `Content-Security-Policy`,
-  `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`
-- HSTS carries `max-age` (≥15552000) and `preload`
-- Cert paths reference `/etc/letsencrypt/live/`
-- Fixture `nginx_syntax_ok`: runs `nginx -t` inside the official `nginx:stable`
-  Docker image (skipped if Docker unavailable) for real syntax validation
+### 3. Add Dependabot for github-actions
+- New `.github/dependabot.yml` with the `github-actions` ecosystem (weekly).
 
-Files: `deployment/tests/test_nginx_config.py`, `deployment/tests/conftest.py`
+### 4. Protect the deploy secret (deploy-dev.yml)
+- `chmod 600` the `.env.production` file after writing `NEXTAUTH_SECRET` into it.
+- Remove `NEXTAUTH_SECRET` from the PM2 command line (argv → visible via `ps`); Next.js reads it from `.env.production` at runtime.
 
-### Step 2 — Rewrite `deployment/nginx/podcastfy.conf` (GREEN)
-- `upstream podcastfy_api` (unchanged)
-- Server `listen 80` → `return 301 https://$host$request_uri;`
-- Server `listen 443 ssl http2;` with:
-  - `server_name dev.podcaststudiohub.me;`
-  - `ssl_certificate /etc/letsencrypt/live/dev.podcaststudiohub.me/fullchain.pem;`
-    + `ssl_certificate_key .../privkey.pem;`
-  - `ssl_protocols TLSv1.2 TLSv1.3;`, `ssl_ciphers` (strong), `ssl_session_*`,
-    `ssl_prefer_server_ciphers on;`
-  - Security headers via `add_header ... always` (HSTS w/ preload, CSP,
-    X-Frame-Options DENY, X-Content-Type-Options nosniff, Referrer-Policy
-    strict-origin-when-cross-origin)
-  - `.well-known/acme-challenge` webroot location (cert renewal)
-  - Preserve existing `/`, `/api/`, `/health`, `/static/`, hidden-file block,
-    `client_max_body_size`
-- Tabs for indentation (matches repo style)
+### 5. (Judgment call) Human approval before auto-merge to main
+- rm-review.yml `auto-merge` job currently merges every tier once CI + verification pass.
+- Add `environment: auto-merge-approval` to that job so a required-reviewer rule can gate it.
+- Takes effect only once reviewers are configured on that environment in repo settings (no-op otherwise).
 
-### Step 3 — `deployment/scripts/provision-ssl.sh` (Let's Encrypt, idempotent)
-Mirrors `scripts/repo-maintainer/setup-demo-vps.sh` conventions
-(`#!/usr/bin/env bash`, `set -euo pipefail`, tabs, skip-if-present):
-- Install certbot + `python3-certbot-nginx`
-- Place + enable the nginx site (`sites-available`/`sites-enabled`)
-- `certbot certonly --webroot -w /var/www/html -d $DOMAIN`
-  (or `--nginx` fallback) — non-interactive, `--agree-tos`, `--no-eff-email`
-- `certbot renew --dry-run` smoke check
-- Enable the systemd `certbot.timer` for auto-renewal
-- `nginx -t && systemctl reload nginx`
-- `$DOMAIN` defaults to `dev.podcaststudiohub.me`, overridable via env
+## Acceptance criteria
+- [ ] Untrusted issue title / dispatch inputs passed via `env:`, referenced as `"$VAR"`; no `${{ }}` interpolation into `run:`.
+- [ ] Third-party actions pinned to full SHAs (no `@master`); Dependabot enabled for github-actions.
+- [ ] Deploy secret written to a chmod-600 env file; not passed on argv.
+- [ ] Auto-merge to main can require human approval (environment gate).
 
-### Step 4 — CI job in `.github/workflows/test.yml`
-Add `test-deployment` job (ubuntu, no services needed):
-- `pip install pytest`
-- `python -m pytest deployment/tests/`
-- Real syntax check: `docker run --rm -v $PWD/deployment/nginx:/etc/nginx/conf.d:ro
-  -v $PWD/deployment/tests/nginx-main.conf:/etc/nginx/nginx.conf:ro nginx:stable
-  nginx -t` (the test's Docker fixture mirrors this)
-- Wire into `quality-gate` `needs:` so a config regression blocks the PR
-
-### Step 5 — Docs sync: `deployment/README.md`
-- New "## SSL / TLS (Let's Encrypt)" section pointing at `provision-ssl.sh`
-- Replace bare `scp` nginx note with the script-driven one-time setup
-- Add HTTPS verification commands (`curl -sIL`, header check, `nmap --script
-  ssl-enum-ciphers`)
-
-## Test Strategy
-| Criterion | Test |
-|---|---|
-| AC1 (443 + 301) | `test_http_redirects_to_https`, `test_https_server_block_exists` |
-| AC2 (headers + TLS) | `test_security_headers_present`, `test_hsts_directive`, `test_tls_protocols` |
-| AC2 (syntax) | `nginx_syntax_ok` Docker fixture |
-| AC3 (verify HTTPS) | `provision-ssl.sh` + README verification commands |
-
-## Deviations / Assumptions (self-authored)
-- No plan existed on the issue; this plan is authored from the codebase.
-- `server_name` + cert path hardcoded to `dev.podcaststudiohub.me` (matches the
-  documented single deployment); overridable in the script via `$DOMAIN`.
-- CSP uses `'unsafe-inline'` for `style-src` (Next.js runtime styles) and
-  `script-src 'self' 'unsafe-inline'` to remain functional; nonce-hardening is
-  documented as a Known Limitation in the PR (full nonce support is a follow-up).
-- nginx config is NOT auto-deployed by `deploy-dev.yml` today (it's a manual
-  scp); this PR keeps that boundary but adds CI validation so regressions are
-  caught. Operational cert obtain/verify (AC1/AC3 execution) happens on the
-  server via the new script — the PR ships the code + docs to do it.
+## Verification
+- `actionlint` on changed workflows (syntax + shellcheck of `run:` blocks).
+- grep assertion: no untrusted `${{ }}` left inside `run:` blocks of the touched workflows.
+- No test framework exists for workflow YAML — verification is actionlint + targeted grep + demo gate.

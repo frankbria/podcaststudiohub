@@ -76,11 +76,12 @@ jobs:
         id: select
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE_ISSUE: ${{ inputs.force_issue }}
         run: |
-          if [[ -n "${{ inputs.force_issue }}" ]]; then
-            RESULT=$(bash ${{ env.SCRIPTS_PATH }}/select-next-issue.sh "${{ inputs.force_issue }}")
+          if [[ -n "$FORCE_ISSUE" ]]; then
+            RESULT=$(bash "$SCRIPTS_PATH/select-next-issue.sh" "$FORCE_ISSUE")
           else
-            RESULT=$(bash ${{ env.SCRIPTS_PATH }}/select-next-issue.sh)
+            RESULT=$(bash "$SCRIPTS_PATH/select-next-issue.sh")
           fi
           echo "result=$RESULT"
           ISSUE=$(echo "$RESULT" | jq -r '.issue_number // empty')
@@ -125,14 +126,15 @@ jobs:
 
       - name: Read implementation prompt
         id: prompt
+        env:
+          MODE: ${{ needs.circuit-breaker.outputs.mode }}
+          TIER: ${{ needs.select-issue.outputs.tier }}
+          # Untrusted (user-controlled issue title) — read from env, never interpolated into the shell.
+          TITLE: ${{ needs.select-issue.outputs.title }}
         run: |
-          MODE="${{ needs.circuit-breaker.outputs.mode }}"
-          TIER="${{ needs.select-issue.outputs.tier }}"
-          ISSUE="${{ needs.select-issue.outputs.issue_number }}"
-
           # Resolve mode-specific limits
-          MAX_LINES=$(yq -r ".limits.${MODE}.max_lines_per_pr // 500" ${{ env.CONFIG_PATH }} 2>/dev/null || echo 500)
-          MAX_FILES=$(yq -r ".limits.${MODE}.max_files_per_pr // 15" ${{ env.CONFIG_PATH }} 2>/dev/null || echo 15)
+          MAX_LINES=$(yq -r ".limits.${MODE}.max_lines_per_pr // 500" "$CONFIG_PATH" 2>/dev/null || echo 500)
+          MAX_FILES=$(yq -r ".limits.${MODE}.max_files_per_pr // 15" "$CONFIG_PATH" 2>/dev/null || echo 15)
 
           # Determine PR type based on tier
           case "$TIER" in
@@ -143,16 +145,16 @@ jobs:
           esac
 
           # Create slug from issue title
-          SLUG=$(echo "${{ needs.select-issue.outputs.title }}" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | head -c 40 | sed 's/-$//')
+          SLUG=$(echo "$TITLE" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | head -c 40 | sed 's/-$//')
 
-          echo "max_lines=$MAX_LINES" >> $GITHUB_OUTPUT
-          echo "max_files=$MAX_FILES" >> $GITHUB_OUTPUT
-          echo "pr_type=$PR_TYPE" >> $GITHUB_OUTPUT
-          echo "slug=$SLUG" >> $GITHUB_OUTPUT
+          echo "max_lines=$MAX_LINES" >> "$GITHUB_OUTPUT"
+          echo "max_files=$MAX_FILES" >> "$GITHUB_OUTPUT"
+          echo "pr_type=$PR_TYPE" >> "$GITHUB_OUTPUT"
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
 
       - name: Run Claude Code Implementation
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@51705da45eecce209d4700538bf8377d5b5fc695 # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "claude[bot],github-actions[bot]"

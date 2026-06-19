@@ -119,7 +119,7 @@ jobs:
 
       - name: Fix review feedback with Claude Code
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@51705da45eecce209d4700538bf8377d5b5fc695 # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "claude[bot],github-actions[bot],coderabbitai[bot]"
@@ -572,6 +572,11 @@ jobs:
     needs: [select-pr, fix-reviews, verify]
     if: needs.verify.outputs.verification_passed == 'true'
     runs-on: ubuntu-latest
+    # Gates the merge-to-main behind a GitHub Environment. Configure required
+    # reviewers on the "auto-merge-approval" environment (repo Settings →
+    # Environments) to require human approval before this job runs. With no
+    # protection rules configured it is a no-op and the job proceeds as before.
+    environment: auto-merge-approval
     permissions:
       contents: write
       pull-requests: write

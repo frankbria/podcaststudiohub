@@ -7,6 +7,9 @@ Requires a running PostgreSQL instance with migrations applied.
 import pytest
 from uuid import uuid4
 
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -274,7 +277,7 @@ async def test_invalid_invitation_token_returns_404(client):
 
 
 @pytest.mark.asyncio
-async def test_accept_invitation_wrong_email_rejected(client):
+async def test_accept_invitation_wrong_email_rejected(client: AsyncClient) -> None:
 	"""A user whose email differs from the invited email cannot accept (403)."""
 	owner_headers = await register_and_login(client)
 	invited_email = f"invited_{uuid4()}@example.com"
@@ -296,7 +299,7 @@ async def test_accept_invitation_wrong_email_rejected(client):
 
 
 @pytest.mark.asyncio
-async def test_accept_invitation_case_variant_account_rejected(client):
+async def test_accept_invitation_case_variant_account_rejected(client: AsyncClient) -> None:
 	"""A case-variant account cannot accept a token addressed to another email.
 
 	Account emails are case-sensitive (auth_service), so victim@ and VICTIM@ are
@@ -324,7 +327,7 @@ async def test_accept_invitation_case_variant_account_rejected(client):
 
 
 @pytest.mark.asyncio
-async def test_cannot_invite_as_owner(client):
+async def test_cannot_invite_as_owner(client: AsyncClient) -> None:
 	"""Ownership is not grantable via invitation (schema rejects role=owner)."""
 	owner_headers = await register_and_login(client)
 	create_resp = await client.post("/teams", headers=owner_headers, json={"name": "No Owner Invite"})
@@ -339,7 +342,10 @@ async def test_cannot_invite_as_owner(client):
 
 
 @pytest.mark.asyncio
-async def test_legacy_owner_invitation_rejected_on_accept(client, test_db):
+async def test_legacy_owner_invitation_rejected_on_accept(
+	client: AsyncClient,
+	test_db: AsyncSession,
+) -> None:
 	"""A pre-existing owner invitation (issued before role restriction) cannot
 	be accepted — the role guard is enforced at acceptance, not just creation."""
 	from datetime import datetime, timedelta
@@ -382,7 +388,7 @@ async def test_legacy_owner_invitation_rejected_on_accept(client, test_db):
 # One case per route. Parametrized (not looped in a single test) because the
 # test-db fixture rolls its savepoint back on the first permission-denied
 # response, which would erase the registered users for any later request.
-NON_MEMBER_ROUTES = [
+NON_MEMBER_ROUTES: list[tuple[str, str, dict[str, str] | None]] = [
 	("get", "/teams/{team_id}", None),
 	("patch", "/teams/{team_id}", {"name": "Hijack"}),
 	("delete", "/teams/{team_id}", None),
@@ -396,7 +402,12 @@ NON_MEMBER_ROUTES = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method,url_tmpl,body", NON_MEMBER_ROUTES)
-async def test_non_member_blocked_on_team_route(client, method, url_tmpl, body):
+async def test_non_member_blocked_on_team_route(
+	client: AsyncClient,
+	method: str,
+	url_tmpl: str,
+	body: dict[str, str] | None,
+) -> None:
 	"""A non-member receives 403 on every membership-scoped team route (#218)."""
 	owner_headers = await register_and_login(client)
 	stranger_headers = await register_and_login(client)

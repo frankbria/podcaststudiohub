@@ -295,13 +295,17 @@ class TestFinalizeEpisodeGenerationTask:
         with (
             patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
             patch("src.tasks.podcast_generation.settings") as mock_settings,
-            patch("src.tasks.podcast_generation.upload_to_s3_task", return_value=mock_upload_result),
+            patch("src.tasks.podcast_generation.upload_to_s3_task", return_value=mock_upload_result) as mock_upload,
+            patch("src.tasks.podcast_generation.time.sleep") as mock_sleep,
         ):
             mock_settings.AWS_S3_BUCKET = "missing-bucket"
             result = self._invoke_finalize(episode_id, generation_result, mock_db)
 
         assert result["status"] == "failed"
         assert episode.generation_status == "failed"
+        # Inline upload now retries (issue #220): exhausts 3 attempts before failing.
+        assert mock_upload.call_count == 3
+        assert mock_sleep.call_count == 2
 
     def test_marks_failed_when_generation_failed(self):
         """If generate_podcast_task returned failure, episode is marked failed."""

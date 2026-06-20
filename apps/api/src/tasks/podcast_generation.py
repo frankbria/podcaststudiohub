@@ -3,6 +3,7 @@ Celery tasks for podcast generation
 Wraps the existing podcastfy CLI functionality
 """
 import os
+import time
 import uuid as uuid_module
 import logging
 from celery import Task, chain
@@ -27,6 +28,55 @@ def build_podcast_s3_key(user_id: str, episode_id: str) -> str:
     bucket-policy/IAM/lifecycle rules scope on (issue #215).
     """
     return f"podcasts/user-{user_id}/episode-{episode_id}.mp3"
+
+
+def _upload_to_s3_with_retries(
+    file_path: str,
+    s3_key: str,
+    bucket_name: str,
+    content_type: str = "audio/mpeg",
+    max_attempts: int = 3,
+) -> Dict[str, Any]:
+    """Upload to S3 with explicit retries + exponential backoff.
+
+    ``finalize_episode_generation_task`` calls ``upload_to_s3_task`` synchronously
+    (as a plain function, not via Celery), so the task's own ``self.retry`` is
+    bypassed — a transient S3 error would propagate raw on the first try
+    (issue #220). This wrapper restores retry behaviour for the inline path: it
+    retries on a raised exception OR a returned ``{"status": "failed"}`` result,
+    sleeping ``calculate_backoff()`` seconds between attempts. Returns the final
+    upload result dict (success or failed) without raising.
+    """
+    last_error = "S3 upload failed"
+    for attempt in range(max_attempts):
+        try:
+            result = upload_to_s3_task(
+                file_path=file_path,
+                s3_key=s3_key,
+                bucket_name=bucket_name,
+                content_type=content_type,
+            )
+            if result.get("status") == "success":
+                return result
+            last_error = result.get("error") or last_error
+            logger.warning(
+                f"S3 upload attempt {attempt + 1}/{max_attempts} failed: {last_error}"
+            )
+        except Exception as exc:
+            last_error = str(exc)
+            logger.warning(
+                f"S3 upload attempt {attempt + 1}/{max_attempts} raised: {exc}"
+            )
+        if attempt < max_attempts - 1:
+            time.sleep(calculate_backoff(attempt))
+
+    return {
+        "status": "failed",
+        "s3_key": None,
+        "s3_url": None,
+        "file_size_bytes": 0,
+        "error": last_error,
+    }
 
 
 @celery_app.task(bind=True, name="generate_podcast", time_limit=600, max_retries=3)
@@ -401,7 +451,7 @@ def finalize_episode_generation_task(
                 # Build S3 key using the canonical helper (issue #215)
                 s3_key = build_podcast_s3_key(str(episode.user_id), episode_id)
 
-                upload_result = upload_to_s3_task(
+                upload_result = _upload_to_s3_with_retries(
                     file_path=audio_file_path,
                     s3_key=s3_key,
                     bucket_name=settings.AWS_S3_BUCKET,

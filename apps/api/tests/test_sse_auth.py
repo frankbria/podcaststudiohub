@@ -8,7 +8,10 @@ header server-side (issue #212). The legacy ``?token=<jwt>`` query-parameter aut
 path has been removed because tokens in URLs leak into proxy/access logs, browser
 history, and Referer headers.
 """
+import json
 import pytest
+from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4, UUID as PyUUID
 from datetime import timedelta
 from sqlalchemy import update
@@ -182,6 +185,63 @@ async def test_progress_stream_tenant_isolation(client, episode_with_user):
         headers={"Authorization": f"Bearer {other_token}"}
     )
     assert response.status_code == 404
+
+
+# =============================================================================
+# Tests: SSE per-iteration session (issue #220)
+# =============================================================================
+
+class _FakeSession:
+    """Async-context-manager session whose .get() returns a preset episode.
+
+    Stands in for AsyncSessionLocal() so the SSE generator can be exercised
+    without touching the request-scoped DB session it must NOT reuse (#220).
+    """
+
+    instances = 0
+
+    def __init__(self, episode):
+        self._episode = episode
+
+    async def __aenter__(self):
+        type(self).instances += 1
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, model, pk):
+        return self._episode
+
+
+@pytest.mark.asyncio
+async def test_progress_stream_uses_fresh_session_per_poll(client, episode_with_user, test_db):
+    """The SSE generator polls a fresh AsyncSessionLocal() rather than reusing
+    the request-scoped session, preventing pool leaks on disconnect (#220)."""
+    episode_id, token, headers = episode_with_user
+
+    fake_episode = SimpleNamespace(
+        id=PyUUID(episode_id),
+        generation_status="complete",  # terminal → stream emits once and stops
+        generation_progress={"stage": "complete", "progress": 100},
+    )
+    _FakeSession.instances = 0
+
+    with patch(
+        "src.routers.generation.AsyncSessionLocal",
+        lambda: _FakeSession(fake_episode),
+    ):
+        response = await client.get(
+            f"/generation/episodes/{episode_id}/progress",
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    # A fresh session was opened by the generator (not the request session).
+    assert _FakeSession.instances >= 1
+    # The streamed event reflects the data fetched via that fresh session.
+    payload = json.loads(response.text.split("data: ", 1)[1].split("\n\n", 1)[0])
+    assert payload["status"] == "complete"
 
 
 @pytest.mark.asyncio

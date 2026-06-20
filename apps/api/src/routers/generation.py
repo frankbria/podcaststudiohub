@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from ..config import settings
-from ..database import get_db
+from ..database import get_db, AsyncSessionLocal
 from ..models.episode import Episode
 from ..models.project import Project
 from ..models.content_source import ContentSource
@@ -334,27 +334,43 @@ async def get_generation_progress_stream(
     if not episode:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Episode not found")
 
+    # Capture the id only: the request-scoped `db` session must not be reused
+    # inside the long-lived generator. Each poll opens its own short-lived
+    # session so a client disconnect can never leave a session checked out of
+    # the pool (issue #220).
+    stream_episode_id = episode.id
+
     async def event_generator():
         """Generate SSE events with progress updates"""
-        while True:
-            # Refresh episode to get latest progress
-            await db.refresh(episode)
+        try:
+            while True:
+                # Fresh short-lived session per poll — released by __aexit__.
+                async with AsyncSessionLocal() as session:
+                    current = await session.get(Episode, stream_episode_id)
 
-            progress_data = {
-                "episode_id": str(episode.id),
-                "status": episode.generation_status,
-                "progress": episode.generation_progress,
-            }
+                if current is None:
+                    break
 
-            # Send SSE event
-            yield f"data: {json.dumps(progress_data)}\n\n"
+                progress_data = {
+                    "episode_id": str(current.id),
+                    "status": current.generation_status,
+                    "progress": current.generation_progress,
+                }
 
-            # Check if generation is complete or failed
-            if episode.generation_status in ["complete", "failed"]:
-                break
+                # Send SSE event
+                yield f"data: {json.dumps(progress_data)}\n\n"
 
-            # Wait before next update (poll every 2 seconds)
-            await asyncio.sleep(2)
+                # Check if generation is complete or failed
+                if current.generation_status in ["complete", "failed"]:
+                    break
+
+                # Wait before next update (poll every 2 seconds)
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            # Raised when the client disconnects; per-iteration sessions are
+            # already released, so just log and let the cancellation propagate.
+            logger.info("SSE progress stream cancelled for episode %s", stream_episode_id)
+            raise
 
     return StreamingResponse(
         event_generator(),

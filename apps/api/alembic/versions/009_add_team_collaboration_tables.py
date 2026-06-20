@@ -8,6 +8,12 @@ Creates three new tables to support team-based collaboration:
   - teams: team/organization records
   - team_members: user membership with role assignment
   - team_invitations: pending email invitations with token-based acceptance
+
+Security note: these tables are intentionally NOT row-level-security scoped.
+Unlike the tenant-scoped tables in migration 003, teams have no ``tenant_id``
+(a team is a shared, cross-user resource), so per-tenant RLS does not apply.
+Access is isolated at the application layer via RBAC — see team_service.py and
+rbac_service.assert_permission, which every team route calls.
 """
 from typing import Sequence, Union
 

@@ -174,5 +174,9 @@ async def accept_invitation(
 	current_user: User = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db),
 ):
-	"""Accept an invitation token and join the team."""
-	return await team_service.accept_invitation(db, token, current_user.id)
+	"""Accept an invitation token and join the team.
+
+	The invitation is bound to the invited email: a user whose email does not
+	match the invitation is rejected (403), so a forwarded token cannot be used.
+	"""
+	return await team_service.accept_invitation(db, token, current_user.id, current_user.email)

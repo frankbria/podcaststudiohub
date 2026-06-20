@@ -1,40 +1,28 @@
-# Issue #216 — Stripe webhook signature bypass (security, apps/api)
+# Issue #218 — Team authz: email-bound invitations + RLS backstop docs
 
-Plan source: self-authored (no plan comment). Branch: `fix/216-stripe-webhook-signature`
+**Title:** [P4.4] fix(api): invitation acceptance not bound to invited email; team tables lack RLS backstop
+**Plan source:** self-authored (issue body had acceptance criteria, no step plan)
 
-## Vulnerability
-`billing_service.process_webhook` falls back to `json.loads(payload)` and processes
-events **unsigned** when `webhook_secret`/`sig_header` are absent. Latent today only
-because `STRIPE_SECRET_KEY` isn't a Settings field (`extra="ignore"` drops it →
-`_stripe_enabled()` always False → early return). Becomes live the moment billing is
-enabled.
+## Findings (codebase audit)
+- `team_service.accept_invitation` (team_service.py:201) creates a `TeamMember` with `invitation.role` and **never checks** the accepting user's email against `invitation.email`. A forwarded/leaked token = anyone joins.
+- Every existing team route operating on a team **already** calls `rbac_service.assert_permission` — the mandatory helper already exists. Gap is regression-test coverage, not missing code.
+- Team tables (`teams`, `team_members`, `team_invitations`) have **no `tenant_id`** column → per-tenant RLS is inherently inapplicable; isolation relies on RBAC. Needs to be documented as intentional.
+- Invitation `role` schema currently allows `owner`; a forwardable owner-invite token is an escalation vector.
 
-## Fix 1 — Settings fields (`config.py`, spaces indent)
-- Add `STRIPE_SECRET_KEY: Optional[str] = None` and `STRIPE_WEBHOOK_SECRET: Optional[str] = None`.
-- Makes them real, validated Settings (no longer silently dropped). Satisfies AC1.
+## Steps
+1. **AC1 — Email-bind acceptance.** `accept_invitation(db, token, user_id, user_email)`: reject with **403** when `invitation.email.lower() != user_email.lower()`. Router passes `current_user.email`.
+2. **AC2 — Restrict invitation roles.** `InvitationCreate.role` pattern → `^(editor|viewer|analyst)$` (drop `owner`). Native Pydantic 422. Co-owner promotion stays on `update_member_role` (owner-only, non-forwardable).
+3. **AC3 — Membership guard + regression tests.** Helper already present on every route; add non-member→403 regression tests for the mutating/read routes. No redundant helper added (would be dead abstraction).
+4. **AC4 — Document RLS exclusion.** Security note in `team_service.py` module docstring + pointer comment in migration 009 explaining team tables are intentionally not RLS-scoped (no tenant_id; RBAC-enforced).
+5. **Tests (TDD):** wrong-email→403, case-insensitive match→201, owner-role invite→422, non-member→403 across routes.
 
-## Fix 2 — Enforce signature (`billing_service.process_webhook`, tabs indent)
-- Keep the `_stripe_enabled()` early-return (`ignored` when billing off) — existing
-  behavior/tests rely on it.
-- When enabled: **remove the `json.loads` unsigned fallback entirely.**
-  - `webhook_secret` or `sig_header` missing → raise `HTTPException(400)` (per AC2).
-  - else `construct_event(...)`; on `SignatureVerificationError` → 400 (already present).
-- Net: no code path ever parses an unsigned/unverified payload.
-
-## Fix 3 — Tests (`tests/unit/test_billing_unit.py` + `tests/test_billing.py`, tabs)
-- enabled + secret set + **missing** sig_header → 400 (AC3).
-- enabled + secret set + **invalid** signature (mock `construct_event` raises
-  `SignatureVerificationError`) → 400 (AC3).
-- enabled + secret set + valid signature → processed.
-- Settings exposes `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` (AC1).
-- Existing webhook tests (stripe disabled → 200 ignored) remain green.
-
-## Notes / decisions
-- AC says "Reject with 400 when secret/sig_header missing." A missing server-side
-  `webhook_secret` is arguably a 500 (misconfig), but I follow the AC literally → 400
-  for both missing cases. Logged distinctly for ops.
-- Scope is small (security hardening) → single agent, TDD.
-
-## Verification
-- `uv run pytest tests/test_billing.py tests/unit/test_billing_unit.py`
-- Cross-family review (CodeRabbit), demo (Phase 11), CI gate (Phase 12), PR → merge.
+## Acceptance criteria
+- [x] Email match required before membership; reject otherwise. (Implemented as
+      **exact** match, not case-folded — account emails are case-sensitive, so
+      case-insensitive matching would let a case-variant account accept a leaked
+      token. Follow-up issue: app-wide email canonicalization.)
+- [x] Invitation roles restricted (owner not grantable via invitation; enforced
+      at creation **and** acceptance for legacy tokens).
+- [x] Membership/permission helper on every team route + regression tests
+      (non-member → 403 across all routes; helper already present per-route).
+- [x] Team tables documented as intentionally not RLS-scoped.

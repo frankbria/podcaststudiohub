@@ -1,5 +1,13 @@
 """
 Team service: business logic for team CRUD, memberships, and invitations.
+
+Security note — team tables are intentionally NOT row-level-security (RLS)
+scoped. `teams`, `team_members`, and `team_invitations` have no `tenant_id`
+column: a team is a shared, cross-user resource rather than data owned by a
+single tenant, so the per-tenant RLS policies applied in migration 003 do not
+apply to them (see migration 009). Isolation for these tables is enforced at
+the application layer via RBAC — every team route asserts membership/permission
+through `rbac_service.assert_permission`. Any new team route MUST do the same.
 """
 
 import secrets
@@ -14,6 +22,13 @@ from ..models.team import Team
 from ..models.team_member import TeamMember
 from ..models.team_invitation import TeamInvitation
 from ..schemas.team import TeamCreate, TeamUpdate, InvitationCreate
+
+# Roles that may be granted through an invitation. `owner` is excluded: an
+# invitation token is forwardable, so granting ownership through it is a
+# privilege-escalation vector (ownership is granted via update_member_role).
+# Enforced at acceptance as well as creation so tokens issued before the role
+# restriction was deployed cannot still grant a disallowed role.
+INVITABLE_ROLES = frozenset({"editor", "viewer", "analyst"})
 
 
 # ---------------------------------------------------------------------------
@@ -202,14 +217,34 @@ async def accept_invitation(
 	db: AsyncSession,
 	token: str,
 	user_id: UUID,
+	user_email: str,
 ) -> TeamMember:
-	"""Accept an invitation token and create a TeamMember record."""
+	"""Accept an invitation token and create a TeamMember record.
+
+	The accepting user's email must match the invited email exactly, otherwise a
+	forwarded/leaked token would let any user join. The match is exact (not
+	case-folded) because account emails are stored and looked up case-sensitively
+	(see auth_service): `victim@x.com` and `Victim@x.com` can be distinct
+	accounts, so a case-insensitive match here would let a case-variant account
+	accept a token addressed to another. Membership is created with the
+	invitation's role.
+	"""
 	result = await db.execute(
 		select(TeamInvitation).where(TeamInvitation.token == token)
 	)
 	invitation = result.scalar_one_or_none()
 	if invitation is None:
 		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found")
+	if invitation.email != user_email:
+		raise HTTPException(
+			status_code=status.HTTP_403_FORBIDDEN,
+			detail="This invitation was sent to a different email address",
+		)
+	if invitation.role not in INVITABLE_ROLES:
+		raise HTTPException(
+			status_code=status.HTTP_403_FORBIDDEN,
+			detail="This invitation grants a role that can no longer be accepted",
+		)
 	if invitation.status != "pending":
 		raise HTTPException(
 			status_code=status.HTTP_400_BAD_REQUEST,

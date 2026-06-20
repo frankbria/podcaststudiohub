@@ -409,6 +409,7 @@ class TestBuildGenerationWorkflow:
 		with patch("src.tasks.podcast_generation.settings") as mock_settings:
 			mock_settings.AWS_S3_BUCKET = "test-bucket"
 			workflow = build_generation_workflow(
+				user_id="test-user-id",
 				episode_id=str(uuid.uuid4()),
 				audio_file_path="/tmp/podcast.mp3",
 			)
@@ -422,6 +423,7 @@ class TestBuildGenerationWorkflow:
 		with patch("src.tasks.podcast_generation.settings") as mock_settings:
 			mock_settings.AWS_S3_BUCKET = "my-bucket"
 			workflow = build_generation_workflow(
+				user_id="test-user-id",
 				episode_id=str(uuid.uuid4()),
 				audio_file_path="/tmp/audio.mp3",
 			)
@@ -437,6 +439,7 @@ class TestBuildGenerationWorkflow:
 		with patch("src.tasks.podcast_generation.settings") as mock_settings:
 			mock_settings.AWS_S3_BUCKET = "bucket"
 			workflow = build_generation_workflow(
+				user_id="test-user-id",
 				episode_id=str(uuid.uuid4()),
 				audio_file_path="/tmp/a.mp3",
 				enable_composition=True,
@@ -453,6 +456,7 @@ class TestBuildGenerationWorkflow:
 		with patch("src.tasks.podcast_generation.settings") as mock_settings:
 			mock_settings.AWS_S3_BUCKET = "bucket"
 			workflow = build_generation_workflow(
+				user_id="test-user-id",
 				episode_id=str(uuid.uuid4()),
 				audio_file_path="/tmp/a.mp3",
 				enable_composition=False,
@@ -473,6 +477,7 @@ class TestBuildGenerationWorkflow:
 		with patch("src.tasks.podcast_generation.settings") as mock_settings:
 			mock_settings.AWS_S3_BUCKET = "bucket"
 			workflow = build_generation_workflow(
+				user_id="test-user-id",
 				episode_id=str(uuid.uuid4()),
 				audio_file_path="/tmp/a.mp3",
 				enable_distribution=True,
@@ -489,6 +494,7 @@ class TestBuildGenerationWorkflow:
 		with patch("src.tasks.podcast_generation.settings") as mock_settings:
 			mock_settings.AWS_S3_BUCKET = "default-bucket"
 			workflow = build_generation_workflow(
+				user_id="test-user-id",
 				episode_id=str(uuid.uuid4()),
 				audio_file_path="/tmp/a.mp3",
 				s3_bucket="override-bucket",
@@ -507,6 +513,7 @@ class TestBuildGenerationWorkflow:
 		with patch("src.tasks.podcast_generation.settings") as mock_settings:
 			mock_settings.AWS_S3_BUCKET = "bucket"
 			workflow = build_generation_workflow(
+				user_id="test-user-id",
 				episode_id=episode_id,
 				audio_file_path="/tmp/a.mp3",
 			)

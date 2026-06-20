@@ -229,3 +229,27 @@ def test_task_returns_failed_result_on_exception():
 	assert result["status"] == "failed"
 	assert "Podcastfy crashed" in result["error"]
 	assert result["audio_file_path"] is None
+
+
+class TestBuildPodcastS3Key:
+	"""Canonical S3 key helper (issue #215)."""
+
+	def test_format(self):
+		from src.tasks.podcast_generation import build_podcast_s3_key
+
+		user_id = "abc-123"
+		episode_id = "ep-456"
+		assert (
+			build_podcast_s3_key(user_id, episode_id)
+			== "podcasts/user-abc-123/episode-ep-456.mp3"
+		)
+
+	def test_uuid_inputs(self):
+		from src.tasks.podcast_generation import build_podcast_s3_key
+
+		user_id = str(uuid4())
+		episode_id = str(uuid4())
+		key = build_podcast_s3_key(user_id, episode_id)
+		assert key == f"podcasts/user-{user_id}/episode-{episode_id}.mp3"
+		assert key.startswith("podcasts/user-")
+		assert key.endswith(".mp3")

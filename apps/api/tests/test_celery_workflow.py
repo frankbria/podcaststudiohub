@@ -303,6 +303,7 @@ class TestWorkflowChainStructure:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "test-bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=str(uuid.uuid4()),
                 audio_file_path="/tmp/podcast.mp3",
             )
@@ -320,6 +321,7 @@ class TestWorkflowChainStructure:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=str(uuid.uuid4()),
                 audio_file_path="/tmp/audio.mp3",
                 enable_composition=True,
@@ -336,6 +338,7 @@ class TestWorkflowChainStructure:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=str(uuid.uuid4()),
                 audio_file_path="/tmp/audio.mp3",
                 enable_composition=False,
@@ -357,6 +360,7 @@ class TestWorkflowChainStructure:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=str(uuid.uuid4()),
                 audio_file_path="/tmp/audio.mp3",
                 enable_distribution=True,
@@ -384,6 +388,7 @@ class TestWorkflowChainStructure:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=str(uuid.uuid4()),
                 audio_file_path="/tmp/audio.mp3",
                 enable_composition=True,
@@ -410,6 +415,7 @@ class TestWorkflowChainStructure:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=episode_id,
                 audio_file_path="/tmp/original.mp3",
                 enable_composition=True,
@@ -435,6 +441,7 @@ class TestWorkflowChainStructure:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=str(uuid.uuid4()),
                 audio_file_path="/tmp/audio.mp3",
                 enable_distribution=True,
@@ -445,21 +452,50 @@ class TestWorkflowChainStructure:
         assert "distribute_to_platform" not in task_names
 
     def test_s3_key_contains_episode_id(self):
-        """Generated S3 key includes episode_id for uniqueness."""
+        """Generated S3 key is namespaced under the user tenant prefix and
+        includes the episode_id for uniqueness (issue #215)."""
         from src.tasks.podcast_generation import build_generation_workflow
 
         episode_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
 
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "bucket"
             workflow = build_generation_workflow(
+                user_id=user_id,
                 episode_id=episode_id,
                 audio_file_path="/tmp/audio.mp3",
             )
 
         upload_task = workflow.tasks[0]
         s3_key = upload_task.kwargs.get("s3_key", "")
+        assert s3_key.startswith(f"podcasts/user-{user_id}/")
         assert episode_id in s3_key
+
+    def test_workflow_key_matches_canonical_helper(self):
+        """Acceptance criterion (issue #215): the workflow-chain upload path
+        produces the same key as the canonical helper used by the finalize
+        path, so both paths agree on the tenant-namespaced layout."""
+        from src.tasks.podcast_generation import (
+            build_generation_workflow,
+            build_podcast_s3_key,
+        )
+
+        episode_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
+
+        with patch("src.tasks.podcast_generation.settings") as mock_settings:
+            mock_settings.AWS_S3_BUCKET = "bucket"
+            workflow = build_generation_workflow(
+                user_id=user_id,
+                episode_id=episode_id,
+                audio_file_path="/tmp/audio.mp3",
+            )
+
+        upload_task = workflow.tasks[0]
+        assert upload_task.kwargs.get("s3_key") == build_podcast_s3_key(
+            user_id, episode_id
+        )
 
     def test_explicit_s3_bucket_overrides_settings(self):
         """Explicit s3_bucket parameter takes precedence over settings.AWS_S3_BUCKET."""
@@ -468,6 +504,7 @@ class TestWorkflowChainStructure:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "default-bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=str(uuid.uuid4()),
                 audio_file_path="/tmp/audio.mp3",
                 s3_bucket="override-bucket",
@@ -629,6 +666,7 @@ class TestMultiplePlatformDistribution:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=str(uuid.uuid4()),
                 audio_file_path="/tmp/audio.mp3",
                 enable_distribution=True,
@@ -650,6 +688,7 @@ class TestMultiplePlatformDistribution:
         with patch("src.tasks.podcast_generation.settings") as mock_settings:
             mock_settings.AWS_S3_BUCKET = "bucket"
             workflow = build_generation_workflow(
+                user_id="test-user-id",
                 episode_id=episode_id,
                 audio_file_path="/tmp/audio.mp3",
                 enable_distribution=True,

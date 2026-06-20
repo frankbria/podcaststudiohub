@@ -19,6 +19,16 @@ from src.tasks.retry_utils import calculate_backoff
 logger = logging.getLogger(__name__)
 
 
+def build_podcast_s3_key(user_id: str, episode_id: str) -> str:
+    """Canonical S3 key for a generated episode's audio.
+
+    Single source of truth for the key layout so every upload path namespaces
+    the object under the user's tenant prefix (``podcasts/user-*/``), which
+    bucket-policy/IAM/lifecycle rules scope on (issue #215).
+    """
+    return f"podcasts/user-{user_id}/episode-{episode_id}.mp3"
+
+
 @celery_app.task(bind=True, name="generate_podcast", time_limit=600, max_retries=3)
 def generate_podcast_task(
     self: Task,
@@ -182,10 +192,14 @@ def generate_podcast_task(
             # without this any episode generated with composition or distribution
             # would lose file_path/transcript_path/duration_seconds/file_size_bytes
             # that the default finalize path records (issue #211).
+            # ponytail: "" only survives if the episode vanished mid-flight (an
+            # already-failed state); normally it's the real tenant id below.
+            user_id = ""
             try:
                 with SyncSessionLocal() as db:
                     episode = db.get(Episode, uuid_module.UUID(episode_id))
                     if episode is not None:
+                        user_id = str(episode.user_id)
                         episode.file_path = audio_file_path
                         episode.transcript_path = generation_result.get("transcript_path")
                         episode.duration_seconds = duration_seconds
@@ -211,6 +225,7 @@ def generate_podcast_task(
                 build_generation_workflow(
                     episode_id=episode_id,
                     audio_file_path=audio_file_path,
+                    user_id=user_id,
                     s3_bucket=settings.AWS_S3_BUCKET,
                     enable_composition=enable_composition,
                     composition_timeline=composition_timeline,
@@ -373,8 +388,8 @@ def finalize_episode_generation_task(
                 }
                 db.commit()
 
-                # Build S3 key using consistent naming convention
-                s3_key = f"podcasts/user-{episode.user_id}/episode-{episode_id}.mp3"
+                # Build S3 key using the canonical helper (issue #215)
+                s3_key = build_podcast_s3_key(str(episode.user_id), episode_id)
 
                 upload_result = upload_to_s3_task(
                     file_path=audio_file_path,
@@ -456,6 +471,7 @@ def finalize_episode_generation_task(
 def build_generation_workflow(
 	episode_id: str,
 	audio_file_path: str,
+	user_id: str,
 	s3_bucket: Optional[str] = None,
 	enable_composition: bool = False,
 	composition_timeline: Optional[List[Dict[str, Any]]] = None,
@@ -471,6 +487,7 @@ def build_generation_workflow(
 	Args:
 		episode_id: UUID string of the episode.
 		audio_file_path: Local path to the generated audio file.
+		user_id: UUID string of the owning user, for the canonical S3 key prefix.
 		s3_bucket: S3 bucket name for upload.  Defaults to settings.AWS_S3_BUCKET.
 		enable_composition: Whether to include the audio-composition step.
 		composition_timeline: Timeline segments for merge_audio_snippets_task.
@@ -492,7 +509,7 @@ def build_generation_workflow(
 	from src.tasks.platform_distribution import distribute_to_platform_task
 
 	bucket = s3_bucket or settings.AWS_S3_BUCKET or ""
-	s3_key = f"podcasts/episode-{episode_id}.mp3"
+	s3_key = build_podcast_s3_key(user_id, episode_id)
 
 	# Chain stages use immutable signatures (.si). In a Celery chain a mutable
 	# .s() signature has the *previous* task's return value prepended as the first

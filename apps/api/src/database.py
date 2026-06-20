@@ -125,7 +125,7 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-def get_streaming_session_factory():
+def get_streaming_session_factory() -> async_sessionmaker[AsyncSession]:
     """Session factory for work that outlives the request scope (e.g. SSE).
 
     Returns ``AsyncSessionLocal`` so callers can open a fresh, short-lived

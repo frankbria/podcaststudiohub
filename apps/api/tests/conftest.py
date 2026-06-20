@@ -105,10 +105,15 @@ async def client(test_db):
     # (b) never opens connections on the module-global engine, which would leak
     # asyncpg pools across pytest's per-test event loops (issue #220).
     class _TestSessionCM:
-        async def __aenter__(self):
+        async def __aenter__(self) -> AsyncSession:
             return test_db
 
-        async def __aexit__(self, *exc):
+        async def __aexit__(
+            self,
+            exc_type: "type[BaseException] | None",
+            exc_val: "BaseException | None",
+            exc_tb: object,
+        ) -> bool:
             return False
 
     app.dependency_overrides[get_streaming_session_factory] = lambda: (lambda: _TestSessionCM())

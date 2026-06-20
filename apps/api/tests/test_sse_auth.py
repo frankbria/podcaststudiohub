@@ -93,6 +93,12 @@ async def test_progress_stream_with_header_token(client, episode_with_user, test
     )
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")
+    # The per-poll fresh session must re-apply tenant context; otherwise FORCE
+    # ROW LEVEL SECURITY (podcastfy_app role) hides the episode and the stream
+    # emits nothing. Assert the streamed event carries the episode's status (#220).
+    payload = json.loads(response.text.split("data: ", 1)[1].split("\n\n", 1)[0])
+    assert payload["episode_id"] == episode_id
+    assert payload["status"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -209,6 +215,10 @@ class _FakeSession:
 
     async def __aexit__(self, *exc):
         return False
+
+    async def execute(self, *args, **kwargs):
+        # Absorb the SET LOCAL app.tenant_id call the generator issues.
+        return None
 
     async def get(self, model, pk):
         return self._episode

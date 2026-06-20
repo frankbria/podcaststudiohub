@@ -263,6 +263,7 @@ class TestUploadToS3WithRetries:
 	explicit wrapper instead of propagating on the first try."""
 
 	def test_returns_success_first_try(self) -> None:
+		"""A first-try success returns immediately without retrying or sleeping."""
 		from src.tasks import podcast_generation as pg
 
 		ok = {"status": "success", "s3_url": "u", "s3_key": "k", "error": None}
@@ -274,6 +275,7 @@ class TestUploadToS3WithRetries:
 		slept.assert_not_called()
 
 	def test_retries_failed_status_then_succeeds(self) -> None:
+		"""A returned status!=success is retried; a later success is returned."""
 		from src.tasks import podcast_generation as pg
 
 		fail = {"status": "failed", "error": "throttled"}
@@ -286,6 +288,7 @@ class TestUploadToS3WithRetries:
 		assert slept.call_count == 1
 
 	def test_retries_on_exception_then_succeeds(self) -> None:
+		"""A raised transient error is retried; a later success is returned."""
 		from src.tasks import podcast_generation as pg
 
 		ok = {"status": "success", "s3_url": "u", "s3_key": "k", "error": None}
@@ -298,6 +301,7 @@ class TestUploadToS3WithRetries:
 		assert slept.call_count == 1
 
 	def test_returns_failed_after_exhausting_attempts(self) -> None:
+		"""Repeated failed-status results exhaust attempts and return failed."""
 		from src.tasks import podcast_generation as pg
 
 		fail = {"status": "failed", "error": "still throttled"}
@@ -310,12 +314,14 @@ class TestUploadToS3WithRetries:
 		assert slept.call_count == 2  # no sleep after the final attempt
 
 	def test_exhausts_attempts_on_repeated_exception(self) -> None:
+		"""Repeated raised errors exhaust attempts and return a failed dict."""
 		from src.tasks import podcast_generation as pg
 
 		with patch.object(
 			pg, "upload_to_s3_task", side_effect=ConnectionError("down")
-		) as up, patch.object(pg.time, "sleep"):
+		) as up, patch.object(pg.time, "sleep") as slept:
 			result = pg._upload_to_s3_with_retries("f", "k", "b", max_attempts=3)
 		assert result["status"] == "failed"
 		assert "down" in result["error"]
 		assert up.call_count == 3
+		assert slept.call_count == 2  # backoff between attempts, none after the last

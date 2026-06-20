@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from ..config import settings
-from ..database import get_db, get_streaming_session_factory
+from ..database import get_db, get_streaming_session_factory, set_tenant_context
 from ..models.episode import Episode
 from ..models.project import Project
 from ..models.content_source import ContentSource
@@ -335,11 +335,12 @@ async def get_generation_progress_stream(
     if not episode:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Episode not found")
 
-    # Capture the id only: the request-scoped `db` session must not be reused
-    # inside the long-lived generator. Each poll opens its own short-lived
-    # session so a client disconnect can never leave a session checked out of
-    # the pool (issue #220).
+    # Capture id + tenant only: the request-scoped `db` session must not be
+    # reused inside the long-lived generator. Each poll opens its own
+    # short-lived session so a client disconnect can never leave a session
+    # checked out of the pool (issue #220).
     stream_episode_id = episode.id
+    stream_tenant_id = str(current_user.tenant_id)
 
     async def event_generator():
         """Generate SSE events with progress updates"""
@@ -347,6 +348,10 @@ async def get_generation_progress_stream(
             while True:
                 # Fresh short-lived session per poll — released by __aexit__.
                 async with session_factory() as session:
+                    # Re-apply tenant context: unlike the request session, a
+                    # fresh session has no app.tenant_id set, so FORCE ROW LEVEL
+                    # SECURITY would hide the episode without this (issue #220).
+                    await set_tenant_context(session, stream_tenant_id)
                     current = await session.get(Episode, stream_episode_id)
 
                 if current is None:

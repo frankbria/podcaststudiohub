@@ -207,19 +207,33 @@ async def process_webhook(
 
 	_stripe_module.api_key = _get_stripe_key()  # type: ignore[union-attr]
 
-	if webhook_secret and sig_header:
-		try:
-			event = _stripe_module.Webhook.construct_event(  # type: ignore[union-attr]
-				payload, sig_header, webhook_secret
-			)
-		except _stripe_module.error.SignatureVerificationError:  # type: ignore[union-attr]
-			raise HTTPException(
-				status_code=status.HTTP_400_BAD_REQUEST,
-				detail="Invalid webhook signature",
-			)
-	else:
-		import json
-		event = json.loads(payload)
+	# Signature verification is mandatory when billing is enabled. There is no
+	# unsigned/unverified fallback: a missing secret or signature header is
+	# rejected outright rather than parsed, closing the bypass in issue #216.
+	if not webhook_secret:
+		logger.error(
+			"Stripe billing is enabled but STRIPE_WEBHOOK_SECRET is not configured; "
+			"rejecting webhook instead of processing it unverified"
+		)
+		raise HTTPException(
+			status_code=status.HTTP_400_BAD_REQUEST,
+			detail="Webhook secret not configured",
+		)
+	if not sig_header:
+		raise HTTPException(
+			status_code=status.HTTP_400_BAD_REQUEST,
+			detail="Missing webhook signature",
+		)
+
+	try:
+		event = _stripe_module.Webhook.construct_event(  # type: ignore[union-attr]
+			payload, sig_header, webhook_secret
+		)
+	except _stripe_module.error.SignatureVerificationError:  # type: ignore[union-attr]
+		raise HTTPException(
+			status_code=status.HTTP_400_BAD_REQUEST,
+			detail="Invalid webhook signature",
+		)
 
 	event_type = event.get("type", "")
 	data = event.get("data", {}).get("object", {})

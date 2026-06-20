@@ -5,6 +5,8 @@ Integration tests for the /billing endpoints.
 import pytest
 from uuid import uuid4
 
+from httpx import AsyncClient
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -329,3 +331,34 @@ async def test_pricing_config_pro_tier():
 	from src.utils.pricing import get_tier_limit
 	assert get_tier_limit("pro", "episodes_per_month") == 100
 	assert get_tier_limit("pro", "storage_gb") == 50
+
+
+@pytest.mark.asyncio
+async def test_stripe_webhook_rejects_missing_signature_when_enabled(
+	client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
+	"""Issue #216: with billing enabled + secret configured, a request without a
+	Stripe-Signature header is rejected with 400 — never parsed unsigned."""
+	import types
+	import src.services.billing_service as bs
+	from src.config import settings
+
+	# Enable billing with a fake stripe module (the real one isn't installed).
+	fake = types.SimpleNamespace(
+		api_key=None,
+		Webhook=types.SimpleNamespace(construct_event=lambda *a, **k: {}),
+		error=types.SimpleNamespace(SignatureVerificationError=type("E", (Exception,), {})),
+	)
+	monkeypatch.setattr(bs, "_STRIPE_AVAILABLE", True)
+	monkeypatch.setattr(bs, "_stripe_module", fake)
+	monkeypatch.setattr(bs, "_get_stripe_key", lambda: "sk_test_fake")
+	monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_test", raising=False)
+
+	import json
+	payload = json.dumps({"type": "customer.subscription.updated", "data": {"object": {}}}).encode()
+	response = await client.post(
+		"/billing/webhooks/stripe",
+		content=payload,
+		headers={"Content-Type": "application/json"},  # no stripe-signature header
+	)
+	assert response.status_code == 400

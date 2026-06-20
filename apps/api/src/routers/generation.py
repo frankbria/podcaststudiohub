@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
@@ -309,7 +309,7 @@ async def get_generation_progress_stream(
     episode_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-    session_factory=Depends(get_streaming_session_factory),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_streaming_session_factory),
 ):
     """
     Server-Sent Events (SSE) endpoint for real-time generation progress

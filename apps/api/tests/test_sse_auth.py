@@ -206,21 +206,21 @@ class _FakeSession:
 
     opened = 0
 
-    def __init__(self, episode):
+    def __init__(self, episode: SimpleNamespace) -> None:
         self._episode = episode
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "_FakeSession":
         type(self).opened += 1
         return self
 
-    async def __aexit__(self, *exc):
+    async def __aexit__(self, *exc: object) -> bool:
         return False
 
-    async def execute(self, *args, **kwargs):
+    async def execute(self, *args: object, **kwargs: object) -> None:
         # Absorb the SET LOCAL app.tenant_id call the generator issues.
         return None
 
-    async def get(self, model, pk):
+    async def get(self, model: object, pk: object) -> SimpleNamespace:
         return self._episode
 
 

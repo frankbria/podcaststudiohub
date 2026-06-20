@@ -5,6 +5,8 @@ Integration tests for the /billing endpoints.
 import pytest
 from uuid import uuid4
 
+from httpx import AsyncClient
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -332,7 +334,9 @@ async def test_pricing_config_pro_tier():
 
 
 @pytest.mark.asyncio
-async def test_stripe_webhook_rejects_missing_signature_when_enabled(client, monkeypatch):
+async def test_stripe_webhook_rejects_missing_signature_when_enabled(
+	client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+):
 	"""Issue #216: with billing enabled + secret configured, a request without a
 	Stripe-Signature header is rejected with 400 — never parsed unsigned."""
 	import types

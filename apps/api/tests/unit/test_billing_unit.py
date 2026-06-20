@@ -4,6 +4,7 @@ These tests do not require a database connection.
 """
 
 import types
+from typing import Any, Callable
 from unittest.mock import MagicMock
 
 import pytest
@@ -191,7 +192,9 @@ class TestBillingSchemas:
 # ---------------------------------------------------------------------------
 
 
-def _enable_stripe(monkeypatch, construct_event):
+def _enable_stripe(
+	monkeypatch: pytest.MonkeyPatch, construct_event: Callable[..., object]
+) -> "tuple[Any, type[Exception]]":
 	"""Enable Stripe in billing_service with a fake stripe module.
 
 	Returns (module, SignatureVerificationError) so callers can raise the same
@@ -215,7 +218,7 @@ class TestProcessWebhookSignature:
 	"""When Stripe is enabled, unsigned/unverified payloads must be rejected."""
 
 	@pytest.mark.asyncio
-	async def test_missing_signature_header_rejected(self, monkeypatch):
+	async def test_missing_signature_header_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""Enabled + secret configured + no Stripe-Signature header -> 400."""
 		bs, _ = _enable_stripe(monkeypatch, MagicMock())
 		with pytest.raises(HTTPException) as exc:
@@ -223,7 +226,7 @@ class TestProcessWebhookSignature:
 		assert exc.value.status_code == 400
 
 	@pytest.mark.asyncio
-	async def test_missing_secret_rejected(self, monkeypatch):
+	async def test_missing_secret_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""Enabled but no webhook secret configured -> 400; never parse unsigned."""
 		bs, _ = _enable_stripe(monkeypatch, MagicMock())
 		with pytest.raises(HTTPException) as exc:
@@ -231,7 +234,7 @@ class TestProcessWebhookSignature:
 		assert exc.value.status_code == 400
 
 	@pytest.mark.asyncio
-	async def test_invalid_signature_rejected(self, monkeypatch):
+	async def test_invalid_signature_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""Configured secret + invalid signature -> 400."""
 		bs, SigError = _enable_stripe(monkeypatch, MagicMock())
 		bs._stripe_module.Webhook.construct_event = MagicMock(
@@ -242,16 +245,19 @@ class TestProcessWebhookSignature:
 		assert exc.value.status_code == 400
 
 	@pytest.mark.asyncio
-	async def test_valid_signature_processed(self, monkeypatch):
+	async def test_valid_signature_processed(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""Configured secret + valid signature -> event processed (verified path)."""
 		event = {"type": "invoice.paid", "data": {"object": {}}}
-		bs, _ = _enable_stripe(monkeypatch, MagicMock(return_value=event))
+		construct_event = MagicMock(return_value=event)
+		bs, _ = _enable_stripe(monkeypatch, construct_event)
 		result = await bs.process_webhook(MagicMock(), b"{}", "sig", "whsec_test")
 		assert result["status"] == "processed"
 		assert result["event_type"] == "invoice.paid"
+		# The verified path was taken: signature was actually checked.
+		construct_event.assert_called_once_with(b"{}", "sig", "whsec_test")
 
 	@pytest.mark.asyncio
-	async def test_disabled_stripe_ignored(self, monkeypatch):
+	async def test_disabled_stripe_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
 		"""Stripe disabled -> ignored, no parsing (existing behavior preserved)."""
 		import src.services.billing_service as bs
 		monkeypatch.setattr(bs, "_get_stripe_key", lambda: None)
@@ -262,7 +268,7 @@ class TestProcessWebhookSignature:
 class TestStripeSettings:
 	"""Issue #216 AC1: secret + webhook secret must be real Settings fields."""
 
-	def test_settings_expose_stripe_fields(self):
+	def test_settings_expose_stripe_fields(self) -> None:
 		from src.config import settings
 		assert hasattr(settings, "STRIPE_SECRET_KEY")
 		assert hasattr(settings, "STRIPE_WEBHOOK_SECRET")

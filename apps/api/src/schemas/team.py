@@ -83,10 +83,15 @@ class TeamMemberUpdate(BaseModel):
 
 
 class InvitationCreate(BaseModel):
-	"""Schema for sending an invitation."""
+	"""Schema for sending an invitation.
+
+	`owner` is intentionally not invitable: an invitation token can be forwarded
+	or leaked, so granting ownership through it is a privilege-escalation vector.
+	Ownership is granted directly via the owner-only update-member-role route.
+	"""
 
 	email: EmailStr
-	role: str = Field("editor", pattern="^(owner|editor|viewer|analyst)$")
+	role: str = Field("editor", pattern="^(editor|viewer|analyst)$")
 
 
 class InvitationResponse(BaseModel):

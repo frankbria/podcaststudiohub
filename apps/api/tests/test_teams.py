@@ -273,6 +273,145 @@ async def test_invalid_invitation_token_returns_404(client):
 	assert response.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_accept_invitation_wrong_email_rejected(client):
+	"""A user whose email differs from the invited email cannot accept (403)."""
+	owner_headers = await register_and_login(client)
+	invited_email = f"invited_{uuid4()}@example.com"
+	# A different user (different email) tries to accept the token.
+	stranger_headers = await register_and_login(client)
+
+	create_resp = await client.post("/teams", headers=owner_headers, json={"name": "Bound Invite"})
+	team_id = create_resp.json()["id"]
+
+	inv_resp = await client.post(
+		f"/teams/{team_id}/invitations",
+		headers=owner_headers,
+		json={"email": invited_email, "role": "viewer"},
+	)
+	token = inv_resp.json()["token"]
+
+	resp = await client.post(f"/teams/invitations/{token}/accept", headers=stranger_headers)
+	assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_accept_invitation_case_variant_account_rejected(client):
+	"""A case-variant account cannot accept a token addressed to another email.
+
+	Account emails are case-sensitive (auth_service), so victim@ and VICTIM@ are
+	distinct accounts. The email binding must reject the variant (403), otherwise
+	an attacker could register a case-variant and accept a leaked token.
+	"""
+	owner_headers = await register_and_login(client)
+	local = f"casevariant_{uuid4().hex}"
+	invited_email = f"{local}@example.com"
+	# Attacker registers the upper-cased variant — a different account.
+	attacker_headers = await register_and_login(client, invited_email.upper())
+
+	create_resp = await client.post("/teams", headers=owner_headers, json={"name": "Case Invite"})
+	team_id = create_resp.json()["id"]
+
+	inv_resp = await client.post(
+		f"/teams/{team_id}/invitations",
+		headers=owner_headers,
+		json={"email": invited_email, "role": "viewer"},
+	)
+	token = inv_resp.json()["token"]
+
+	resp = await client.post(f"/teams/invitations/{token}/accept", headers=attacker_headers)
+	assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_cannot_invite_as_owner(client):
+	"""Ownership is not grantable via invitation (schema rejects role=owner)."""
+	owner_headers = await register_and_login(client)
+	create_resp = await client.post("/teams", headers=owner_headers, json={"name": "No Owner Invite"})
+	team_id = create_resp.json()["id"]
+
+	resp = await client.post(
+		f"/teams/{team_id}/invitations",
+		headers=owner_headers,
+		json={"email": f"co_{uuid4()}@example.com", "role": "owner"},
+	)
+	assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_legacy_owner_invitation_rejected_on_accept(client, test_db):
+	"""A pre-existing owner invitation (issued before role restriction) cannot
+	be accepted — the role guard is enforced at acceptance, not just creation."""
+	from datetime import datetime, timedelta
+	import secrets
+	from uuid import UUID
+	from src.models.team_invitation import TeamInvitation
+
+	owner_headers = await register_and_login(client)
+	invitee_email = f"legacy_{uuid4()}@example.com"
+	invitee_headers = await register_and_login(client, invitee_email)
+
+	create_resp = await client.post("/teams", headers=owner_headers, json={"name": "Legacy Owner"})
+	team_id = create_resp.json()["id"]
+	members = await client.get(f"/teams/{team_id}/members", headers=owner_headers)
+	inviter_id = members.json()[0]["user_id"]
+
+	# Insert directly to bypass schema validation, simulating a token created
+	# before `owner` was removed from invitable roles.
+	token = secrets.token_urlsafe(32)
+	test_db.add(TeamInvitation(
+		team_id=UUID(team_id),
+		inviter_id=UUID(inviter_id),
+		email=invitee_email,
+		role="owner",
+		token=token,
+		status="pending",
+		expires_at=datetime.utcnow() + timedelta(days=7),
+	))
+	await test_db.flush()
+
+	resp = await client.post(f"/teams/invitations/{token}/accept", headers=invitee_headers)
+	assert resp.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# Non-member access is rejected on every team route (regression for #218)
+# ---------------------------------------------------------------------------
+
+
+# One case per route. Parametrized (not looped in a single test) because the
+# test-db fixture rolls its savepoint back on the first permission-denied
+# response, which would erase the registered users for any later request.
+NON_MEMBER_ROUTES = [
+	("get", "/teams/{team_id}", None),
+	("patch", "/teams/{team_id}", {"name": "Hijack"}),
+	("delete", "/teams/{team_id}", None),
+	("get", "/teams/{team_id}/members", None),
+	("patch", "/teams/{team_id}/members/{other_user}", {"role": "editor"}),
+	("delete", "/teams/{team_id}/members/{other_user}", None),
+	("post", "/teams/{team_id}/invitations", {"email": "outsider@example.com", "role": "viewer"}),
+	("get", "/teams/{team_id}/invitations", None),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,url_tmpl,body", NON_MEMBER_ROUTES)
+async def test_non_member_blocked_on_team_route(client, method, url_tmpl, body):
+	"""A non-member receives 403 on every membership-scoped team route (#218)."""
+	owner_headers = await register_and_login(client)
+	stranger_headers = await register_and_login(client)
+
+	create_resp = await client.post("/teams", headers=owner_headers, json={"name": "Locked Down"})
+	team_id = create_resp.json()["id"]
+
+	url = url_tmpl.format(team_id=team_id, other_user=uuid4())
+	kwargs = {"headers": stranger_headers}
+	if body is not None:
+		kwargs["json"] = body
+	resp = await getattr(client, method)(url, **kwargs)
+	assert resp.status_code == 403, f"{method.upper()} {url} -> {resp.status_code}"
+
+
 # ---------------------------------------------------------------------------
 # Member management
 # ---------------------------------------------------------------------------

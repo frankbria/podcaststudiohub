@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from ..config import settings
-from ..database import get_db, AsyncSessionLocal
+from ..database import get_db, get_streaming_session_factory
 from ..models.episode import Episode
 from ..models.project import Project
 from ..models.content_source import ContentSource
@@ -309,6 +309,7 @@ async def get_generation_progress_stream(
     episode_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    session_factory=Depends(get_streaming_session_factory),
 ):
     """
     Server-Sent Events (SSE) endpoint for real-time generation progress
@@ -345,7 +346,7 @@ async def get_generation_progress_stream(
         try:
             while True:
                 # Fresh short-lived session per poll — released by __aexit__.
-                async with AsyncSessionLocal() as session:
+                async with session_factory() as session:
                     current = await session.get(Episode, stream_episode_id)
 
                 if current is None:

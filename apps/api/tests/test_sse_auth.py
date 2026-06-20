@@ -11,7 +11,6 @@ history, and Referer headers.
 import json
 import pytest
 from types import SimpleNamespace
-from unittest.mock import patch
 from uuid import uuid4, UUID as PyUUID
 from datetime import timedelta
 from sqlalchemy import update
@@ -194,17 +193,18 @@ async def test_progress_stream_tenant_isolation(client, episode_with_user):
 class _FakeSession:
     """Async-context-manager session whose .get() returns a preset episode.
 
-    Stands in for AsyncSessionLocal() so the SSE generator can be exercised
-    without touching the request-scoped DB session it must NOT reuse (#220).
+    Stands in for a per-poll streaming session so the SSE generator can be
+    exercised without touching the request-scoped session it must NOT reuse,
+    and without opening real connections (issue #220).
     """
 
-    instances = 0
+    opened = 0
 
     def __init__(self, episode):
         self._episode = episode
 
     async def __aenter__(self):
-        type(self).instances += 1
+        type(self).opened += 1
         return self
 
     async def __aexit__(self, *exc):
@@ -215,9 +215,13 @@ class _FakeSession:
 
 
 @pytest.mark.asyncio
-async def test_progress_stream_uses_fresh_session_per_poll(client, episode_with_user, test_db):
-    """The SSE generator polls a fresh AsyncSessionLocal() rather than reusing
-    the request-scoped session, preventing pool leaks on disconnect (#220)."""
+async def test_progress_stream_uses_fresh_session_per_poll(client, episode_with_user):
+    """The SSE generator opens a fresh streaming session per poll (via the
+    injectable factory) instead of reusing the request-scoped session,
+    preventing pool leaks on disconnect (#220)."""
+    from src.main import app
+    from src.database import get_streaming_session_factory
+
     episode_id, token, headers = episode_with_user
 
     fake_episode = SimpleNamespace(
@@ -225,20 +229,22 @@ async def test_progress_stream_uses_fresh_session_per_poll(client, episode_with_
         generation_status="complete",  # terminal → stream emits once and stops
         generation_progress={"stage": "complete", "progress": 100},
     )
-    _FakeSession.instances = 0
+    _FakeSession.opened = 0
 
-    with patch(
-        "src.routers.generation.AsyncSessionLocal",
-        lambda: _FakeSession(fake_episode),
-    ):
-        response = await client.get(
-            f"/generation/episodes/{episode_id}/progress",
-            headers=headers,
-        )
+    # Override the streaming factory for this test; the per-test override added
+    # in conftest is replaced here and cleared by the client fixture teardown.
+    app.dependency_overrides[get_streaming_session_factory] = (
+        lambda: (lambda: _FakeSession(fake_episode))
+    )
+
+    response = await client.get(
+        f"/generation/episodes/{episode_id}/progress",
+        headers=headers,
+    )
 
     assert response.status_code == 200
-    # A fresh session was opened by the generator (not the request session).
-    assert _FakeSession.instances >= 1
+    # A fresh streaming session was opened by the generator (not the request one).
+    assert _FakeSession.opened >= 1
     # The streamed event reflects the data fetched via that fresh session.
     payload = json.loads(response.text.split("data: ", 1)[1].split("\n\n", 1)[0])
     assert payload["status"] == "complete"

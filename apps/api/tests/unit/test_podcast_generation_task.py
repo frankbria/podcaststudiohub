@@ -234,7 +234,8 @@ def test_task_returns_failed_result_on_exception():
 class TestBuildPodcastS3Key:
 	"""Canonical S3 key helper (issue #215)."""
 
-	def test_format(self):
+	def test_format(self) -> None:
+		"""The helper renders the exact canonical key for plain string inputs."""
 		from src.tasks.podcast_generation import build_podcast_s3_key
 
 		user_id = "abc-123"
@@ -244,7 +245,8 @@ class TestBuildPodcastS3Key:
 			== "podcasts/user-abc-123/episode-ep-456.mp3"
 		)
 
-	def test_uuid_inputs(self):
+	def test_uuid_inputs(self) -> None:
+		"""UUID-string inputs produce a tenant-prefixed, .mp3-suffixed key."""
 		from src.tasks.podcast_generation import build_podcast_s3_key
 
 		user_id = str(uuid4())

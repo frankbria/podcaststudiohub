@@ -44,6 +44,22 @@ def _invoke_task(task, **kwargs):
         return task.run(**kwargs)
 
 
+def _mock_session_with_episode(user_id: str = "11111111-1111-1111-1111-111111111111") -> MagicMock:
+    """Mock a SyncSessionLocal context manager yielding an episode with user_id.
+
+    generate_podcast_task resolves episode.user_id for the tenant-scoped S3 key
+    and fails closed when it cannot (issue #215), so workflow-dispatch tests must
+    seed an episode rather than relying on the empty test DB.
+    """
+    episode = MagicMock()
+    episode.user_id = user_id
+    session = MagicMock()
+    session.get.return_value = episode
+    session.__enter__ = MagicMock(return_value=session)
+    session.__exit__ = MagicMock(return_value=False)
+    return session
+
+
 def _make_generation_result(audio_file_path: str = "/tmp/episode.mp3") -> dict:
     return {
         "status": "success",
@@ -88,6 +104,7 @@ class TestFullWorkflowChain:
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
             patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=_mock_session_with_episode()),
         ):
             mock_audio_cls.from_file.return_value = mock_audio_segment
 
@@ -136,6 +153,7 @@ class TestFullWorkflowChain:
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
             patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=_mock_session_with_episode()),
         ):
             mock_audio_cls.from_file.return_value = mock_audio_segment
 
@@ -550,6 +568,7 @@ class TestConditionalComposition:
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
             patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=_mock_session_with_episode()),
         ):
             mock_audio_cls.from_file.return_value = mock_audio_segment
 
@@ -590,6 +609,7 @@ class TestErrorHandling:
             patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
             patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=_mock_session_with_episode()),
             patch.object(
                 generate_podcast_task,
                 "retry",
@@ -633,6 +653,7 @@ class TestErrorHandling:
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain),
             patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=_mock_session_with_episode()),
         ):
             mock_audio_cls.from_file.return_value = mock_audio_segment
 
@@ -645,6 +666,51 @@ class TestErrorHandling:
             )
 
         assert result["status"] == "success"
+
+    def test_workflow_dispatch_skipped_when_user_id_unresolved(self):
+        """Fail closed: if the episode/user_id cannot be resolved, the upload
+        chain is never dispatched, so nothing is written outside the
+        podcasts/user-*/ tenant prefix (issue #215)."""
+        import sys
+        import types
+
+        episode_id = str(uuid.uuid4())
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=60_000)
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(return_value="/tmp/audio.mp3")
+
+        # Lookup returns no episode → user_id stays unresolved.
+        mock_session = MagicMock()
+        mock_session.get.return_value = None
+        mock_session.__enter__ = MagicMock(return_value=mock_session)
+        mock_session.__exit__ = MagicMock(return_value=False)
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+            patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_session),
+        ):
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_composition=True,
+            )
+
+        # Generation itself still succeeded; only the unsafe dispatch was skipped.
+        assert result["status"] == "success"
+        mock_builder.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

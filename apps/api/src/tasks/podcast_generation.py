@@ -192,13 +192,11 @@ def generate_podcast_task(
             # without this any episode generated with composition or distribution
             # would lose file_path/transcript_path/duration_seconds/file_size_bytes
             # that the default finalize path records (issue #211).
-            # ponytail: "" only survives if the episode vanished mid-flight (an
-            # already-failed state); normally it's the real tenant id below.
-            user_id = ""
+            user_id: Optional[str] = None
             try:
                 with SyncSessionLocal() as db:
                     episode = db.get(Episode, uuid_module.UUID(episode_id))
-                    if episode is not None:
+                    if episode is not None and episode.user_id is not None:
                         user_id = str(episode.user_id)
                         episode.file_path = audio_file_path
                         episode.transcript_path = generation_result.get("transcript_path")
@@ -211,6 +209,18 @@ def generate_podcast_task(
                     "workflow dispatch: %s",
                     episode_id, persist_err,
                 )
+
+            # Fail closed: without a resolved user_id the upload chain would write
+            # a non-tenant-scoped key (podcasts/user-/episode-…), the exact layout
+            # bug this path is meant to prevent (issue #215). Skip dispatch rather
+            # than orphan an object outside podcasts/user-*/.
+            if not user_id:
+                logger.critical(
+                    "Episode %s: workflow dispatch skipped — user_id could not be "
+                    "resolved, refusing to upload outside the tenant prefix",
+                    episode_id,
+                )
+                return generation_result
 
             # Trigger the full workflow: S3 upload → [composition] → [distribution]
             # Isolated try/except so a broker hiccup cannot mark a successful

@@ -8,7 +8,9 @@ header server-side (issue #212). The legacy ``?token=<jwt>`` query-parameter aut
 path has been removed because tokens in URLs leak into proxy/access logs, browser
 history, and Referer headers.
 """
+import json
 import pytest
+from types import SimpleNamespace
 from uuid import uuid4, UUID as PyUUID
 from datetime import timedelta
 from sqlalchemy import update
@@ -91,6 +93,12 @@ async def test_progress_stream_with_header_token(client, episode_with_user, test
     )
     assert response.status_code == 200
     assert "text/event-stream" in response.headers.get("content-type", "")
+    # The per-poll fresh session must re-apply tenant context; otherwise FORCE
+    # ROW LEVEL SECURITY (podcastfy_app role) hides the episode and the stream
+    # emits nothing. Assert the streamed event carries the episode's status (#220).
+    payload = json.loads(response.text.split("data: ", 1)[1].split("\n\n", 1)[0])
+    assert payload["episode_id"] == episode_id
+    assert payload["status"] == "complete"
 
 
 @pytest.mark.asyncio
@@ -182,6 +190,74 @@ async def test_progress_stream_tenant_isolation(client, episode_with_user):
         headers={"Authorization": f"Bearer {other_token}"}
     )
     assert response.status_code == 404
+
+
+# =============================================================================
+# Tests: SSE per-iteration session (issue #220)
+# =============================================================================
+
+class _FakeSession:
+    """Async-context-manager session whose .get() returns a preset episode.
+
+    Stands in for a per-poll streaming session so the SSE generator can be
+    exercised without touching the request-scoped session it must NOT reuse,
+    and without opening real connections (issue #220).
+    """
+
+    opened = 0
+
+    def __init__(self, episode: SimpleNamespace) -> None:
+        self._episode = episode
+
+    async def __aenter__(self) -> "_FakeSession":
+        type(self).opened += 1
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def execute(self, *args: object, **kwargs: object) -> None:
+        # Absorb the SET LOCAL app.tenant_id call the generator issues.
+        return None
+
+    async def get(self, model: object, pk: object) -> SimpleNamespace:
+        return self._episode
+
+
+@pytest.mark.asyncio
+async def test_progress_stream_uses_fresh_session_per_poll(client, episode_with_user):
+    """The SSE generator opens a fresh streaming session per poll (via the
+    injectable factory) instead of reusing the request-scoped session,
+    preventing pool leaks on disconnect (#220)."""
+    from src.main import app
+    from src.database import get_streaming_session_factory
+
+    episode_id, token, headers = episode_with_user
+
+    fake_episode = SimpleNamespace(
+        id=PyUUID(episode_id),
+        generation_status="complete",  # terminal → stream emits once and stops
+        generation_progress={"stage": "complete", "progress": 100},
+    )
+    _FakeSession.opened = 0
+
+    # Override the streaming factory for this test; the per-test override added
+    # in conftest is replaced here and cleared by the client fixture teardown.
+    app.dependency_overrides[get_streaming_session_factory] = (
+        lambda: (lambda: _FakeSession(fake_episode))
+    )
+
+    response = await client.get(
+        f"/generation/episodes/{episode_id}/progress",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    # A fresh streaming session was opened by the generator (not the request one).
+    assert _FakeSession.opened >= 1
+    # The streamed event reflects the data fetched via that fresh session.
+    payload = json.loads(response.text.split("data: ", 1)[1].split("\n\n", 1)[0])
+    assert payload["status"] == "complete"
 
 
 @pytest.mark.asyncio

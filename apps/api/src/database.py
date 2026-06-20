@@ -125,6 +125,19 @@ async def get_db(request: Request) -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+def get_streaming_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Session factory for work that outlives the request scope (e.g. SSE).
+
+    Returns ``AsyncSessionLocal`` so callers can open a fresh, short-lived
+    session per iteration instead of holding the request-scoped session for the
+    life of a long stream (issue #220). Exposed as a FastAPI dependency so tests
+    can override it to bind to the test engine — otherwise the SSE generator
+    would open connections on the module-global engine, leaking asyncpg pools
+    across pytest's per-test event loops.
+    """
+    return AsyncSessionLocal
+
+
 async def set_tenant_context(db: AsyncSession, tenant_id: str) -> None:
     """
     Manually set the tenant_id in PostgreSQL session for Row-Level Security.

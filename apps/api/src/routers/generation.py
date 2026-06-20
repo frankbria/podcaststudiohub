@@ -7,12 +7,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy import select
 from sqlalchemy.orm import joinedload
 
 from ..config import settings
-from ..database import get_db
+from ..database import get_db, get_streaming_session_factory, set_tenant_context
 from ..models.episode import Episode
 from ..models.project import Project
 from ..models.content_source import ContentSource
@@ -309,6 +309,7 @@ async def get_generation_progress_stream(
     episode_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_streaming_session_factory),
 ):
     """
     Server-Sent Events (SSE) endpoint for real-time generation progress
@@ -334,27 +335,48 @@ async def get_generation_progress_stream(
     if not episode:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Episode not found")
 
+    # Capture id + tenant only: the request-scoped `db` session must not be
+    # reused inside the long-lived generator. Each poll opens its own
+    # short-lived session so a client disconnect can never leave a session
+    # checked out of the pool (issue #220).
+    stream_episode_id = episode.id
+    stream_tenant_id = str(current_user.tenant_id)
+
     async def event_generator():
         """Generate SSE events with progress updates"""
-        while True:
-            # Refresh episode to get latest progress
-            await db.refresh(episode)
+        try:
+            while True:
+                # Fresh short-lived session per poll — released by __aexit__.
+                async with session_factory() as session:
+                    # Re-apply tenant context: unlike the request session, a
+                    # fresh session has no app.tenant_id set, so FORCE ROW LEVEL
+                    # SECURITY would hide the episode without this (issue #220).
+                    await set_tenant_context(session, stream_tenant_id)
+                    current = await session.get(Episode, stream_episode_id)
 
-            progress_data = {
-                "episode_id": str(episode.id),
-                "status": episode.generation_status,
-                "progress": episode.generation_progress,
-            }
+                if current is None:
+                    break
 
-            # Send SSE event
-            yield f"data: {json.dumps(progress_data)}\n\n"
+                progress_data = {
+                    "episode_id": str(current.id),
+                    "status": current.generation_status,
+                    "progress": current.generation_progress,
+                }
 
-            # Check if generation is complete or failed
-            if episode.generation_status in ["complete", "failed"]:
-                break
+                # Send SSE event
+                yield f"data: {json.dumps(progress_data)}\n\n"
 
-            # Wait before next update (poll every 2 seconds)
-            await asyncio.sleep(2)
+                # Check if generation is complete or failed
+                if current.generation_status in ["complete", "failed"]:
+                    break
+
+                # Wait before next update (poll every 2 seconds)
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            # Raised when the client disconnects; per-iteration sessions are
+            # already released, so just log and let the cancellation propagate.
+            logger.info("SSE progress stream cancelled for episode %s", stream_episode_id)
+            raise
 
     return StreamingResponse(
         event_generator(),

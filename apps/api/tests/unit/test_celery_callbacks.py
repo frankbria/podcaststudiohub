@@ -76,7 +76,9 @@ class TestOnUploadComplete:
 
 		assert episode.s3_url == result["s3_url"]
 		assert episode.s3_key == result["s3_key"]
-		assert episode.generation_status == "uploading"
+		# Upload is already done; callback must NOT regress status back to
+		# "uploading" (issue #220). It leaves status untouched for the chain.
+		assert episode.generation_status == "generating"
 		mock_session.commit.assert_called_once()
 
 	def test_skips_update_when_upload_failed(self):

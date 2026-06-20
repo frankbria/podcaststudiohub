@@ -14,7 +14,7 @@ from sqlalchemy.pool import NullPool
 os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
 
 from src.main import app
-from src.database import get_db
+from src.database import get_db, get_streaming_session_factory
 
 
 # Test database URL (use PostgreSQL test database)
@@ -99,6 +99,24 @@ async def client(test_db):
             raise
 
     app.dependency_overrides[get_db] = override_get_db
+
+    # The SSE generator opens a session per poll via get_streaming_session_factory.
+    # Bind it to the test session so it (a) sees the test's uncommitted data and
+    # (b) never opens connections on the module-global engine, which would leak
+    # asyncpg pools across pytest's per-test event loops (issue #220).
+    class _TestSessionCM:
+        async def __aenter__(self) -> AsyncSession:
+            return test_db
+
+        async def __aexit__(
+            self,
+            exc_type: "type[BaseException] | None",
+            exc_val: "BaseException | None",
+            exc_tb: object,
+        ) -> bool:
+            return False
+
+    app.dependency_overrides[get_streaming_session_factory] = lambda: (lambda: _TestSessionCM())
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

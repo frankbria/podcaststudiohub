@@ -89,10 +89,12 @@ def on_upload_complete(self: Task, result: Dict[str, Any], episode_id: str) -> N
 
 	updated = _update_episode(
 		episode_id,
+		# Do NOT set generation_status here: upload has already completed, so
+		# "uploading" would briefly regress the status. The workflow chain's
+		# next task (or on_workflow_complete) owns status progression (issue #220).
 		updates={
 			"s3_url": result.get("s3_url"),
 			"s3_key": result.get("s3_key"),
-			"generation_status": "uploading",
 		},
 		progress_updates={
 			"upload": "complete",

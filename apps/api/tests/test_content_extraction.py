@@ -181,13 +181,25 @@ async def test_extract_from_url_blocks_ssrf(
 		assert final_call[0][2].extraction_status == 'failed'
 
 
+def _mock_pinned_session(*responses):
+	"""A fake pinned_session() context manager whose .get yields ``responses``."""
+	session = Mock()
+	session.__enter__ = Mock(return_value=session)
+	session.__exit__ = Mock(return_value=False)
+	session.get.side_effect = list(responses)
+	return session
+
+
 def test_fetch_and_extract_safely_blocks_redirect_to_internal(extraction_service):
 	"""SSRF: a redirect whose target is internal must be blocked mid-fetch (issue #206)."""
 	redirect = Mock()
 	redirect.status_code = 302
 	redirect.headers = {"location": "http://169.254.169.254/latest/meta-data/"}
 
-	with patch("src.services.content_extraction_service.requests.get", return_value=redirect):
+	with patch(
+		"src.services.content_extraction_service.pinned_session",
+		return_value=_mock_pinned_session(redirect),
+	):
 		with pytest.raises(SSRFValidationError):
 			extraction_service._fetch_and_extract_safely("https://93.184.216.34/start")
 
@@ -202,10 +214,31 @@ def test_fetch_and_extract_safely_follows_safe_redirect(extraction_service):
 	ok.text = "<html><body><p>Hello world content</p></body></html>"
 	ok.raise_for_status = Mock()
 
-	with patch("src.services.content_extraction_service.requests.get", side_effect=[redirect, ok]):
+	with patch(
+		"src.services.content_extraction_service.pinned_session",
+		return_value=_mock_pinned_session(redirect, ok),
+	):
 		result = extraction_service._fetch_and_extract_safely("https://93.184.216.34/start")
 
 	assert "Hello world content" in result
+
+
+def test_fetch_and_extract_safely_pins_validated_ip(extraction_service):
+	"""The fetch must connect via a session pinned to the guard-validated IP (#234)."""
+	ok = Mock()
+	ok.status_code = 200
+	ok.text = "<html><body><p>pinned content</p></body></html>"
+	ok.raise_for_status = Mock()
+
+	with patch(
+		"src.services.content_extraction_service.pinned_session",
+		return_value=_mock_pinned_session(ok),
+	) as mock_pinned:
+		result = extraction_service._fetch_and_extract_safely("https://93.184.216.34/start")
+
+	assert "pinned content" in result
+	# pinned_session was given the validated IP literal (here the host itself).
+	mock_pinned.assert_called_once_with("https://93.184.216.34/start", "93.184.216.34")
 
 
 @pytest.mark.asyncio

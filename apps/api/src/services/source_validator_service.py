@@ -6,11 +6,12 @@ keys before content sources are persisted. Implements GAP-015.
 """
 
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from ..utils.pinned_fetch import pin_httpx
 from ..utils.ssrf import SSRFValidationError, validate_public_url
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,7 @@ class SourceValidatorService:
 
 	def _validate_url_not_internal(
 		self, url: str, *, block_on_resolution_failure: bool = False
-	) -> None:
+	) -> List[str]:
 		"""
 		Reject URLs that resolve to internal/non-public addresses (SSRF guard).
 
@@ -85,12 +86,16 @@ class SourceValidatorService:
 				hops about to be requested) so an unresolvable host is rejected
 				rather than allowed through to the outbound request.
 
+		Returns:
+			The list of resolved public IPs (used to pin the outbound connection
+			so it cannot re-resolve to an internal address — DNS rebinding, #234).
+
 		Raises:
 			URLValidationError: If the URL targets a private/loopback/link-local/
 				reserved address or a non-standard port (issue #206).
 		"""
 		try:
-			validate_public_url(
+			return validate_public_url(
 				url,
 				allowed_ports={80, 443},
 				block_on_resolution_failure=block_on_resolution_failure,
@@ -125,8 +130,29 @@ class SourceValidatorService:
 				timeout=self.URL_FETCH_TIMEOUT,
 				follow_redirects=False,
 			) as client:
+				first_hop = True
 				for _ in range(self.MAX_REDIRECT_HOPS + 1):
-					response = await client.head(current_url)
+					# Validate every hop against the SSRF guard. The first hop is
+					# lenient on resolution failure (matching create-time
+					# validation, so not-yet-provisioned hosts are allowed and the
+					# HEAD fails naturally); redirect hops stay strict so a public
+					# page cannot bounce into an unresolvable/internal target.
+					# When the host resolves, pin the HEAD to the validated IP so
+					# the client cannot re-resolve to an internal address
+					# (DNS rebinding, #234).
+					resolved = self._validate_url_not_internal(
+						current_url, block_on_resolution_failure=not first_hop
+					)
+					first_hop = False
+					if resolved:
+						pinned_url, headers, extensions = pin_httpx(
+							current_url, resolved[0]
+						)
+						response = await client.head(
+							pinned_url, headers=headers, extensions=extensions
+						)
+					else:
+						response = await client.head(current_url)
 
 					if response.status_code in self._REDIRECT_STATUS:
 						location = response.headers.get("location")
@@ -135,11 +161,6 @@ class SourceValidatorService:
 								"URL returned a redirect without a destination."
 							)
 						current_url = urljoin(current_url, location)
-						# Re-validate every redirect hop against the SSRF guard.
-						# This is a fetch path, so block unresolvable hops too.
-						self._validate_url_not_internal(
-							current_url, block_on_resolution_failure=True
-						)
 						continue
 
 					if not (200 <= response.status_code < 300):

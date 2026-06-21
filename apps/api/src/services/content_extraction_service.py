@@ -30,6 +30,7 @@ from podcastfy.content_parser.pdf_extractor import PDFExtractor
 from ..config import settings
 from ..models import ContentSource
 from ..schemas.content import ContentSourceUpdate
+from ..utils.pinned_fetch import pinned_session
 from ..utils.ssrf import SSRFValidationError, validate_public_url
 from .content_service import get_content_source_by_id, update_content_source
 from .storage_service import StorageService
@@ -104,17 +105,20 @@ class ContentExtractionService:
 		current_url = extractor.normalize_url(url)
 
 		for _ in range(_MAX_REDIRECT_HOPS + 1):
-			validate_public_url(
+			resolved = validate_public_url(
 				current_url,
 				allowed_ports={80, 443},
 				block_on_resolution_failure=True,
 			)
-			response = requests.get(
-				current_url,
-				headers=headers,
-				timeout=extractor.timeout,
-				allow_redirects=False,
-			)
+			# Pin the connection to the validated IP so the client cannot
+			# re-resolve the host to an internal address (DNS rebinding, #234).
+			with pinned_session(current_url, resolved[0]) as session:
+				response = session.get(
+					current_url,
+					headers=headers,
+					timeout=extractor.timeout,
+					allow_redirects=False,
+				)
 			if response.status_code in _REDIRECT_STATUS:
 				location = response.headers.get("location")
 				if not location:

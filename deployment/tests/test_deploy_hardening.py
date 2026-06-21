@@ -15,14 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-dev.yml"
 CONFIG = REPO_ROOT / "apps" / "api" / "src" / "config.py"
-NGINX_CONF = REPO_ROOT / "deployment" / "nginx" / "podcastfy.conf"
 HARDEN_SCRIPT = REPO_ROOT / "deployment" / "scripts" / "harden-host.sh"
-
-
-def _nginx_upstream_port() -> str:
-	m = re.search(r"upstream\s+podcastfy_api\s*\{[^}]*?127\.0\.0\.1:(\d+)", NGINX_CONF.read_text())
-	assert m, "could not find the FastAPI upstream port in the nginx config"
-	return m.group(1)
 
 
 # ── AC2: API binds loopback, not 0.0.0.0 ───────────────────────────────────
@@ -46,17 +39,21 @@ def test_config_default_host_is_loopback():
 # ── AC2: deploy port matches the nginx upstream ────────────────────────────
 
 
-def test_workflow_deploy_port_matches_nginx_upstream():
-	port = _nginx_upstream_port()
+def test_workflow_requires_explicit_numeric_api_port():
+	# The deploy host is multi-tenant, so the API port is per-environment (the
+	# environment's API_PORT variable, which must match that environment's nginx
+	# upstream) rather than a single repo-wide constant. The workflow must NOT
+	# hardcode an equality check against one port, and must reject an unset or
+	# non-numeric API_PORT so a missing/typo'd value fails fast.
 	text = WORKFLOW.read_text()
-	# The deploy port must fall back to the nginx upstream port, not 8000.
-	assert f"${{API_PORT:-{port}}}" in text, (
-		f"deploy port fallback must match nginx upstream ({port})"
+	# No silent default and no hardcoded single-port equality (the old 8000/8001 drift guard).
+	assert "${API_PORT:-" not in text, "API_PORT must be explicit, not a silent default"
+	assert '!= "8001"' not in text and '!= "8000"' not in text, (
+		"deploy must not hardcode a single API port; it is per-environment"
 	)
-	assert "${API_PORT:-8000}" not in text, "stale 8000 port fallback drifts from nginx upstream"
-	# A stray API_PORT override must be rejected, not silently reintroduce the drift.
-	assert f'!= "{port}"' in text and "exit 1" in text, (
-		"deploy must hard-fail if the effective API port != nginx upstream"
+	# Unset / non-numeric API_PORT must hard-fail before the service is torn down.
+	assert "*[!0-9]*" in text and "exit 1" in text, (
+		"deploy must reject an unset or non-numeric API_PORT"
 	)
 
 

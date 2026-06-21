@@ -34,7 +34,8 @@ export default function SignupPage() {
         return
       }
 
-      // Registration successful, redirect to login
+      // Registration successful, reset loading then redirect to login
+      setLoading(false)
       router.push("/login?registered=true")
       return
     } catch {

@@ -35,7 +35,6 @@ interface Episode {
   generation_status: string
   generation_progress: GenerationProgress
   s3_url: string | null
-  file_path: string | null
   project_id: string
   tts_config_id: string | null
   episode_number: number

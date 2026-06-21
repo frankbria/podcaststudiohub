@@ -195,11 +195,11 @@ async def test_register_success(client: AsyncClient):
     assert "user" in data
 
     # Verify token properties
+    from src.config import settings as _settings
     assert data["token_type"] == "bearer"
-    assert data["expires_in"] == 86400
+    assert data["expires_in"] == _settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
 
     # Verify user data
-    from src.config import settings as _settings
     user = data["user"]
     assert user["email"] == "newuser@example.com"
     assert user["full_name"] == "New User"
@@ -387,6 +387,9 @@ async def test_login_success(client: AsyncClient, test_db: AsyncSession):
     assert "token_type" in data
     assert "expires_in" in data
     assert "user" in data
+
+    from src.config import settings as _settings
+    assert data["expires_in"] == _settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60
 
     # Verify user data matches registered user
     user = data["user"]

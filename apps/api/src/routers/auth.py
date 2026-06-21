@@ -95,7 +95,7 @@ async def register(
         return TokenResponse(
             access_token=access_token,
             token_type="bearer",
-            expires_in=86400,  # 24 hours in seconds
+            expires_in=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
             user=UserResponse.model_validate(user)
         )
 
@@ -159,7 +159,7 @@ async def login(
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",
-        expires_in=86400,  # 24 hours in seconds
+        expires_in=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=UserResponse.model_validate(user)
     )
 

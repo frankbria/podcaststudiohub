@@ -100,6 +100,76 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Coverage reports uploaded as artifacts." >> $GITHUB_STEP_SUMMARY
 
+  # The main backend job runs migrations as the Postgres superuser, so a
+  # migration needing privileges the *real* migration user lacks passes CI but
+  # breaks deploy. (This took dev down: 003's CREATE ROLE failed under the
+  # non-CREATEROLE server role, leaving the schema 9 versions behind.) This job
+  # mirrors the server's least-privilege model so that class of failure fails
+  # the PR instead.
+  migrate-as-non-superuser:
+    name: Migrations run under dev privilege model
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: |
+          python -m pip install --upgrade pip
+          pip install uv
+
+      - name: Install dependencies
+        working-directory: apps/api
+        run: uv sync
+
+      - name: Provision dev-parity roles and database
+        env:
+          PGPASSWORD: postgres
+        run: |
+          # Mirror the dev server: a non-superuser, non-CREATEROLE role owns the
+          # database and runs migrations; the podcastfy_app role is provisioned
+          # out-of-band (as a DBA would). Migrations must NOT require any privilege
+          # beyond what this owner role has. Throwaway CI credentials reuse the
+          # ubiquitous postgres/postgres service password (no real secret here).
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE podcastfy_user LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+          CREATE DATABASE podcastfy OWNER podcastfy_user;
+          CREATE ROLE podcastfy_app LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+          SQL
+
+      - name: Run migrations as the non-superuser owner
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql+asyncpg://podcastfy_user:postgres@localhost:5432/podcastfy
+        run: |
+          # config.py requires these at import; generate ephemeral values at
+          # runtime so no secret-looking literal sits in the workflow file.
+          # ENCRYPTION_KEY must be >=32 chars (config validator).
+          export ENCRYPTION_KEY="$(printf 'x%.0s' {1..32})"
+          export JWT_SECRET_KEY=ci
+          uv run alembic upgrade head
+
   test-frontend:
     name: Frontend Tests (Next.js/Jest)
     runs-on: ubuntu-latest

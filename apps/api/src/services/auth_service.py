@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import bcrypt
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException
 
@@ -237,7 +237,11 @@ async def get_user_by_email(session: AsyncSession, email: str) -> Optional["User
     Returns:
         User instance or None if not found
     """
-    result = await session.execute(select(User).where(User.email == email))
+    # Case-insensitive lookup: email is not identity-significant by case (#255).
+    # func.lower(...) also matches legacy mixed-case rows from before canonicalization.
+    result = await session.execute(
+        select(User).where(func.lower(User.email) == email.lower())
+    )
     return result.scalar_one_or_none()
 
 
@@ -269,6 +273,9 @@ async def create_user(
     try:
         # Generate unique tenant_id for new user (each user is their own tenant)
         tenant_id = uuid4()
+
+        # Canonicalize email to lowercase so case is never identity-significant (#255).
+        email = email.lower()
 
         # Create user with hashed password
         user = User(
@@ -319,9 +326,9 @@ async def authenticate_user(
     Returns:
         User model instance if valid credentials, None otherwise
     """
-    # Query user by email
+    # Query user by email (case-insensitive — case is not identity-significant, #255)
     result = await session.execute(
-        select(User).where(User.email == email)
+        select(User).where(func.lower(User.email) == email.lower())
     )
     user = result.scalar_one_or_none()
 

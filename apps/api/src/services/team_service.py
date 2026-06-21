@@ -221,13 +221,11 @@ async def accept_invitation(
 ) -> TeamMember:
 	"""Accept an invitation token and create a TeamMember record.
 
-	The accepting user's email must match the invited email exactly, otherwise a
-	forwarded/leaked token would let any user join. The match is exact (not
-	case-folded) because account emails are stored and looked up case-sensitively
-	(see auth_service): `victim@x.com` and `Victim@x.com` can be distinct
-	accounts, so a case-insensitive match here would let a case-variant account
-	accept a token addressed to another. Membership is created with the
-	invitation's role.
+	The accepting user's email must match the invited email, otherwise a
+	forwarded/leaked token would let any user join. The match is case-insensitive:
+	account emails are now canonicalized to lowercase at rest (#255), so case is
+	never identity-significant and a case-variant cannot be a distinct account.
+	Membership is created with the invitation's role.
 	"""
 	result = await db.execute(
 		select(TeamInvitation).where(TeamInvitation.token == token)
@@ -235,7 +233,7 @@ async def accept_invitation(
 	invitation = result.scalar_one_or_none()
 	if invitation is None:
 		raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found")
-	if invitation.email != user_email:
+	if invitation.email.lower() != user_email.lower():
 		raise HTTPException(
 			status_code=status.HTTP_403_FORBIDDEN,
 			detail="This invitation was sent to a different email address",

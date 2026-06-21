@@ -299,18 +299,18 @@ async def test_accept_invitation_wrong_email_rejected(client: AsyncClient) -> No
 
 
 @pytest.mark.asyncio
-async def test_accept_invitation_case_variant_account_rejected(client: AsyncClient) -> None:
-	"""A case-variant account cannot accept a token addressed to another email.
+async def test_accept_invitation_case_insensitive_match(client: AsyncClient) -> None:
+	"""Invitation acceptance matches case-insensitively once identity is canonical (#255).
 
-	Account emails are case-sensitive (auth_service), so victim@ and VICTIM@ are
-	distinct accounts. The email binding must reject the variant (403), otherwise
-	an attacker could register a case-variant and accept a leaked token.
+	Account emails are canonicalized to lowercase at registration, so a user who
+	registers a case-variant of the invited email IS the same canonical account
+	and must be able to accept the token.
 	"""
 	owner_headers = await register_and_login(client)
 	local = f"casevariant_{uuid4().hex}"
 	invited_email = f"{local}@example.com"
-	# Attacker registers the upper-cased variant — a different account.
-	attacker_headers = await register_and_login(client, invited_email.upper())
+	# The invitee registers using an upper-cased variant — same canonical account.
+	invitee_headers = await register_and_login(client, invited_email.upper())
 
 	create_resp = await client.post("/teams", headers=owner_headers, json={"name": "Case Invite"})
 	team_id = create_resp.json()["id"]
@@ -322,8 +322,8 @@ async def test_accept_invitation_case_variant_account_rejected(client: AsyncClie
 	)
 	token = inv_resp.json()["token"]
 
-	resp = await client.post(f"/teams/invitations/{token}/accept", headers=attacker_headers)
-	assert resp.status_code == 403
+	resp = await client.post(f"/teams/invitations/{token}/accept", headers=invitee_headers)
+	assert resp.status_code == 201, resp.text
 
 
 @pytest.mark.asyncio

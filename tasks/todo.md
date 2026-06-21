@@ -1,28 +1,35 @@
-# Issue #218 — Team authz: email-bound invitations + RLS backstop docs
+# Issue #255 — Canonicalize emails app-wide (case-insensitive identity)
 
-**Title:** [P4.4] fix(api): invitation acceptance not bound to invited email; team tables lack RLS backstop
-**Plan source:** self-authored (issue body had acceptance criteria, no step plan)
+Follow-up to #218/#254. Make email case never identity-significant.
 
-## Findings (codebase audit)
-- `team_service.accept_invitation` (team_service.py:201) creates a `TeamMember` with `invitation.role` and **never checks** the accepting user's email against `invitation.email`. A forwarded/leaked token = anyone joins.
-- Every existing team route operating on a team **already** calls `rbac_service.assert_permission` — the mandatory helper already exists. Gap is regression-test coverage, not missing code.
-- Team tables (`teams`, `team_members`, `team_invitations`) have **no `tenant_id`** column → per-tenant RLS is inherently inapplicable; isolation relies on RBAC. Needs to be documented as intentional.
-- Invitation `role` schema currently allows `owner`; a forwardable owner-invite token is an escalation vector.
+## Plan (adapted to apps/api)
 
-## Steps
-1. **AC1 — Email-bind acceptance.** `accept_invitation(db, token, user_id, user_email)`: reject with **403** when `invitation.email.lower() != user_email.lower()`. Router passes `current_user.email`.
-2. **AC2 — Restrict invitation roles.** `InvitationCreate.role` pattern → `^(editor|viewer|analyst)$` (drop `owner`). Native Pydantic 422. Co-owner promotion stays on `update_member_role` (owner-only, non-forwardable).
-3. **AC3 — Membership guard + regression tests.** Helper already present on every route; add non-member→403 regression tests for the mutating/read routes. No redundant helper added (would be dead abstraction).
-4. **AC4 — Document RLS exclusion.** Security note in `team_service.py` module docstring + pointer comment in migration 009 explaining team tables are intentionally not RLS-scoped (no tenant_id; RBAC-enforced).
-5. **Tests (TDD):** wrong-email→403, case-insensitive match→201, owner-role invite→422, non-member→403 across routes.
+### 1. Service layer — `src/services/auth_service.py`
+- `create_user`: lowercase `email` before constructing `User` (single normalization point).
+- `get_user_by_email`: match with `func.lower(User.email) == email.lower()`.
+- `authenticate_user`: same case-insensitive lookup.
+
+### 2. Invitation match — `src/services/team_service.py`
+- `accept_invitation`: relax exact match to case-insensitive
+  (`invitation.email.lower() != user_email.lower()`). Update the docstring
+  that documented the #218 case-sensitive workaround.
+
+### 3. Migration — `alembic/versions/012_canonicalize_user_emails.py` (down_revision `011`)
+- Detect case-variant duplicate `lower(email)` groups; **abort with a clear
+  error** if collisions exist (data loss is not auto-resolvable safely).
+- `UPDATE users SET email = lower(email)` for mixed-case rows.
+- Add functional unique index `uq_users_email_lower` on `lower(email)`.
+- downgrade: drop the index.
+
+### 4. Tests
+- `tests/test_auth.py`: email stored lowercase at register; duplicate
+  case-variant register rejected (400); login is case-insensitive.
+- `tests/test_teams.py`: repurpose `test_accept_invitation_case_variant_account_rejected`
+  — a case-variant registration is now the SAME canonical account, so accept
+  SUCCEEDS; add a case-insensitive invite-accept positive test. Keep
+  `test_accept_invitation_wrong_email_rejected` (genuinely different email → 403).
 
 ## Acceptance criteria
-- [x] Email match required before membership; reject otherwise. (Implemented as
-      **exact** match, not case-folded — account emails are case-sensitive, so
-      case-insensitive matching would let a case-variant account accept a leaked
-      token. Follow-up issue: app-wide email canonicalization.)
-- [x] Invitation roles restricted (owner not grantable via invitation; enforced
-      at creation **and** acceptance for legacy tokens).
-- [x] Membership/permission helper on every team route + regression tests
-      (non-member → 403 across all routes; helper already present per-route).
-- [x] Team tables documented as intentionally not RLS-scoped.
+- [ ] Emails canonical (lowercase) at rest; case-variant accounts cannot be created.
+- [ ] Login works case-insensitively for existing and new users.
+- [ ] Invitation acceptance matches case-insensitively once identity is canonical.

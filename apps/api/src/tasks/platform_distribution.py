@@ -379,8 +379,6 @@ def _distribute_to_apple(episode_id: str, config: Dict, metadata: Dict, task: Ta
 
 def _distribute_via_webhook(episode_id: str, config: Dict, metadata: Dict, task: Task) -> Dict:
     """Distribute via webhook (n8n, Zapier, etc.)"""
-    import requests
-
     task.update_state(
         state='PROGRESS',
         meta={
@@ -399,9 +397,10 @@ def _distribute_via_webhook(episode_id: str, config: Dict, metadata: Dict, task:
     # rebinding since the target was created/validated. Reject internal hosts
     # and non-standard ports; redirects are disabled below so a public host
     # cannot bounce the request into an internal address.
+    from ..utils.pinned_fetch import pinned_session
     from ..utils.ssrf import SSRFValidationError, validate_public_url
     try:
-        validate_public_url(
+        resolved = validate_public_url(
             webhook_url,
             allowed_schemes=("https",),
             allowed_ports={443},
@@ -419,15 +418,18 @@ def _distribute_via_webhook(episode_id: str, config: Dict, metadata: Dict, task:
         "event": "episode_published"
     }
 
-    # Send webhook with episode data (redirects disabled to prevent SSRF bounce)
-    if method == "POST":
-        response = requests.post(
-            webhook_url, json=payload, headers=headers, timeout=30, allow_redirects=False
-        )
-    else:
-        response = requests.get(
-            webhook_url, headers=headers, params=payload, timeout=30, allow_redirects=False
-        )
+    # Send webhook with episode data (redirects disabled to prevent SSRF bounce).
+    # Pin the connection to the validated IP so the client cannot re-resolve the
+    # host to an internal address between validation and connect (#234).
+    with pinned_session(webhook_url, resolved[0]) as session:
+        if method == "POST":
+            response = session.post(
+                webhook_url, json=payload, headers=headers, timeout=30, allow_redirects=False
+            )
+        else:
+            response = session.get(
+                webhook_url, headers=headers, params=payload, timeout=30, allow_redirects=False
+            )
 
     response.raise_for_status()
 

@@ -1027,8 +1027,17 @@ def test_distribute_via_webhook_disables_redirects_for_public():
 	resp = MagicMock()
 	resp.raise_for_status = MagicMock()
 
-	with patch("requests.post", return_value=resp) as mock_post:
+	# The dispatch connects through a session pinned to the validated IP.
+	session = MagicMock()
+	session.__enter__.return_value = session
+	session.__exit__.return_value = False
+	session.post.return_value = resp
+
+	with patch(
+		"src.utils.pinned_fetch.pinned_session", return_value=session
+	) as mock_pinned:
 		result = _distribute_via_webhook("ep-1", config, {"title": "x"}, task)
 
 	assert result["status"] == "success"
-	assert mock_post.call_args.kwargs.get("allow_redirects") is False
+	mock_pinned.assert_called_once_with("https://93.184.216.34/hook", "93.184.216.34")
+	assert session.post.call_args.kwargs.get("allow_redirects") is False

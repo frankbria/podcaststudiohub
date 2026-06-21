@@ -749,3 +749,47 @@ class TestRetryClassification:
 		from src.tasks.retry_utils import should_retry_exception
 
 		assert should_retry_exception(AppleAPIError("server error")) is True
+
+
+# ===========================================================================
+# Webhook distribution — IP pinning (issue #234)
+# ===========================================================================
+
+
+class TestWebhookIPPinning:
+	"""_distribute_via_webhook must connect via a session pinned to the
+	guard-validated IP so the host cannot re-resolve to an internal address."""
+
+	def _session_returning(self, response):
+		"""Build a mock pinned-session context manager returning ``response``."""
+		session = MagicMock()
+		session.__enter__.return_value = session
+		session.__exit__.return_value = False
+		session.post.return_value = response
+		session.get.return_value = response
+		return session
+
+	def test_webhook_post_uses_pinned_session(self):
+		from src.tasks import platform_distribution
+
+		ok = MagicMock()
+		ok.raise_for_status = MagicMock()
+		fake_session = self._session_returning(ok)
+		task = MagicMock()
+
+		# pinned_session is imported inside the function, so patch it at source.
+		# IP-literal host resolves to itself offline -> validated public IP.
+		with patch(
+			"src.utils.pinned_fetch.pinned_session", return_value=fake_session
+		) as mock_pinned:
+			result = platform_distribution._distribute_via_webhook(
+				episode_id="ep-1",
+				config={"url": "https://93.184.216.34/hook", "method": "POST"},
+				metadata={"title": "x"},
+				task=task,
+			)
+
+		# Pinned to the validated IP literal, and that session did the POST.
+		mock_pinned.assert_called_once_with("https://93.184.216.34/hook", "93.184.216.34")
+		fake_session.post.assert_called_once()
+		assert result["status"] == "success"

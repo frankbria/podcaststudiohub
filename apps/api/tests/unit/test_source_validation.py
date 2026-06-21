@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import os
+import socket
 
 # Set required env vars before any src import
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://x:x@localhost/x")
@@ -32,6 +33,31 @@ from src.services.source_validator_service import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _stub_public_dns():
+	"""
+	Resolve the ``*.example.com`` placeholder hosts to a fixed public IP.
+
+	Since #234 the SSRF guard's dispatch-time resolution is applied to the first
+	hop too (so the connection can be pinned to a validated IP), which means the
+	HTTP-behaviour tests below now resolve their host. Stubbing the placeholders
+	keeps those tests deterministic and network-free. IP-literal and ``localhost``
+	targets used by the SSRF-rejection tests fall through to real offline
+	resolution, so they are still correctly rejected.
+	"""
+	real = socket.getaddrinfo
+
+	def fake(host, port, *args, **kwargs):
+		if isinstance(host, str) and host.endswith("example.com"):
+			return [
+				(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 0))
+			]
+		return real(host, port, *args, **kwargs)
+
+	with patch("src.utils.ssrf.socket.getaddrinfo", side_effect=fake):
+		yield
+
 
 def make_validator() -> SourceValidatorService:
 	return SourceValidatorService()
@@ -180,6 +206,56 @@ async def test_check_url_accessibility_redirect_200():
 		mock_client_cls.return_value = mock_client
 
 		await validator._check_url_accessibility("https://example.com/redirect")
+
+
+@pytest.mark.asyncio
+async def test_check_url_accessibility_pins_validated_ip():
+	"""The HEAD targets the guard-validated IP with SNI bound to the host (#234)."""
+	validator = make_validator()
+	mock_response = MagicMock()
+	mock_response.status_code = 200
+
+	with patch("src.services.source_validator_service.httpx.AsyncClient") as mock_client_cls:
+		mock_client = AsyncMock()
+		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+		mock_client.__aexit__ = AsyncMock(return_value=None)
+		mock_client.head = AsyncMock(return_value=mock_response)
+		mock_client_cls.return_value = mock_client
+
+		await validator._check_url_accessibility("https://example.com/x")
+
+	call = mock_client.head.call_args
+	# Connect to the validated IP literal, but verify TLS/host against the name.
+	assert call.args[0] == "https://93.184.216.34/x"
+	assert call.kwargs["headers"]["Host"] == "example.com"
+	assert call.kwargs["extensions"]["sni_hostname"] == "example.com"
+
+
+@pytest.mark.asyncio
+async def test_check_url_accessibility_unresolvable_first_hop_is_lenient():
+	"""An unresolvable first hop falls through to an unpinned HEAD (matches
+	create-time leniency; there is no validated IP to pin to) — #234."""
+	validator = make_validator()
+	mock_response = MagicMock()
+	mock_response.status_code = 200
+
+	with patch(
+		"src.utils.ssrf.socket.getaddrinfo", side_effect=socket.gaierror("nxdomain")
+	), patch(
+		"src.services.source_validator_service.httpx.AsyncClient"
+	) as mock_client_cls:
+		mock_client = AsyncMock()
+		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+		mock_client.__aexit__ = AsyncMock(return_value=None)
+		mock_client.head = AsyncMock(return_value=mock_response)
+		mock_client_cls.return_value = mock_client
+
+		await validator._check_url_accessibility("https://not-yet-live.example/")
+		call = mock_client.head.call_args
+
+	# Unpinned: the original URL is used and no pin extensions are attached.
+	assert call.args[0] == "https://not-yet-live.example/"
+	assert "extensions" not in call.kwargs
 
 
 @pytest.mark.asyncio

@@ -231,6 +231,63 @@ async def test_register_duplicate_email(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_register_canonicalizes_email_to_lowercase(client: AsyncClient):
+    """Email is stored lowercase at rest so case is never identity-significant (#255)."""
+    response = await client.post("/auth/register", json={
+        "email": "MixedCase@Example.COM",
+        "password": "SecurePass123!",
+        "full_name": "Mixed Case",
+    })
+    assert response.status_code == 201, response.text
+    assert response.json()["user"]["email"] == "mixedcase@example.com"
+
+
+@pytest.mark.asyncio
+async def test_register_case_variant_duplicate_rejected(client: AsyncClient):
+    """A case-variant of an existing email cannot create a second account (#255)."""
+    user_data = {
+        "email": "canon@example.com",
+        "password": "SecurePass123!",
+        "full_name": "First User",
+    }
+    response1 = await client.post("/auth/register", json=user_data)
+    assert response1.status_code == 201
+
+    response2 = await client.post("/auth/register", json={**user_data, "email": "Canon@Example.com"})
+    assert response2.status_code == 400
+    assert "already registered" in response2.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_login_is_case_insensitive(client: AsyncClient, test_db: AsyncSession):
+    """A user can log in regardless of the email case they type (#255)."""
+    from sqlalchemy import update, text
+
+    reg_resp = await client.post("/auth/register", json={
+        "email": "logincase@example.com",
+        "password": "SecurePass123!",
+        "full_name": "Login Case",
+    })
+    assert reg_resp.status_code == 201, reg_resp.text
+    user_id = reg_resp.json()["user"]["id"]
+    tenant_id = reg_resp.json()["user"]["tenant_id"]
+
+    # Verify the user so login is allowed
+    await test_db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    await test_db.execute(
+        update(User).where(User.id == UUID(user_id)).values(is_verified=True)
+    )
+    await test_db.commit()
+
+    response = await client.post("/auth/login", json={
+        "email": "LOGINCASE@EXAMPLE.COM",
+        "password": "SecurePass123!",
+    })
+    assert response.status_code == 200, response.text
+    assert "access_token" in response.json()
+
+
+@pytest.mark.asyncio
 async def test_register_invalid_email(client: AsyncClient):
     """Test registration with invalid email format"""
     response = await client.post(

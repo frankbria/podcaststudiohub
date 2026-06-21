@@ -18,6 +18,7 @@ from ..schemas.tts_configuration import (
 	TTSConfigUpdate,
 	TTSConfigResponse,
 	TTSConfigListResponse,
+	_validate_provider_config,
 )
 from ..services.tts_configuration_service import (
 	create_tts_configuration,
@@ -165,6 +166,19 @@ async def update_tts_config_endpoint(
 			status_code=status.HTTP_404_NOT_FOUND,
 			detail="TTS configuration not found",
 		)
+
+	# A partial update sending only `config` (no `provider`) skips the schema's
+	# provider validator, which would let an empty-voice-ID ElevenLabs config
+	# through. Re-validate against the effective provider here (#221).
+	if update_data.config is not None:
+		effective_provider = update_data.provider or tts_config.provider
+		try:
+			_validate_provider_config(effective_provider, update_data.config)
+		except (ValueError, TypeError) as exc:
+			raise HTTPException(
+				status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+				detail=str(exc) or "Invalid TTS configuration",
+			)
 
 	updated_config = await update_tts_configuration(
 		db=db,

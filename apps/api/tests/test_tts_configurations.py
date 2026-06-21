@@ -537,6 +537,93 @@ async def test_validation_elevenlabs_missing_required_field(client, auth_headers
 
 
 @pytest.mark.asyncio
+async def test_validation_elevenlabs_empty_voice_1_id(client, auth_headers):
+	"""Test that ElevenLabs config with empty voice_1_id is rejected."""
+	payload = {
+		**ELEVENLABS_CONFIG,
+		"config": {**ELEVENLABS_CONFIG["config"], "voice_1_id": ""},
+	}
+	response = await client.post("/tts-configs", headers=auth_headers, json=payload)
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_validation_elevenlabs_empty_voice_2_id(client, auth_headers):
+	"""Test that ElevenLabs config with empty voice_2_id is rejected."""
+	payload = {
+		**ELEVENLABS_CONFIG,
+		"config": {**ELEVENLABS_CONFIG["config"], "voice_2_id": ""},
+	}
+	response = await client.post("/tts-configs", headers=auth_headers, json=payload)
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_validation_elevenlabs_both_voice_ids_empty(client, auth_headers):
+	"""Test that ElevenLabs config with both voice IDs empty is rejected."""
+	payload = {
+		**ELEVENLABS_CONFIG,
+		"config": {**ELEVENLABS_CONFIG["config"], "voice_1_id": "", "voice_2_id": ""},
+	}
+	response = await client.post("/tts-configs", headers=auth_headers, json=payload)
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_validation_elevenlabs_whitespace_voice_ids(client, auth_headers):
+	"""Test that ElevenLabs config with whitespace-only voice IDs is rejected."""
+	payload = {
+		**ELEVENLABS_CONFIG,
+		"config": {**ELEVENLABS_CONFIG["config"], "voice_1_id": "   ", "voice_2_id": "   "},
+	}
+	response = await client.post("/tts-configs", headers=auth_headers, json=payload)
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_validation_elevenlabs_null_voice_id(client, auth_headers):
+	"""Test that ElevenLabs config with a null voice_1_id is rejected."""
+	payload = {
+		**ELEVENLABS_CONFIG,
+		"config": {**ELEVENLABS_CONFIG["config"], "voice_1_id": None},
+	}
+	response = await client.post("/tts-configs", headers=auth_headers, json=payload)
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_elevenlabs_empty_voice_id_rejected(client, auth_headers):
+	"""Test that a partial update (config only) with empty voice IDs is rejected.
+
+	The schema's provider validator is skipped when `provider` is absent from the
+	update payload, so the router must re-validate against the existing provider.
+	"""
+	create_resp = await _create_config(client, auth_headers, ELEVENLABS_CONFIG)
+	config_id = create_resp.json()["id"]
+
+	response = await client.put(
+		f"/tts-configs/{config_id}",
+		headers=auth_headers,
+		json={"config": {**ELEVENLABS_CONFIG["config"], "voice_1_id": "", "voice_2_id": ""}},
+	)
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_update_malformed_config_value_rejected(client, auth_headers):
+	"""Test that a config-only update with a non-scalar numeric value yields 422, not 500."""
+	create_resp = await _create_config(client, auth_headers, ELEVENLABS_CONFIG)
+	config_id = create_resp.json()["id"]
+
+	response = await client.put(
+		f"/tts-configs/{config_id}",
+		headers=auth_headers,
+		json={"config": {**ELEVENLABS_CONFIG["config"], "stability": []}},
+	)
+	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_validation_elevenlabs_stability_out_of_range(client, auth_headers):
 	"""Test that ElevenLabs stability out of range is rejected."""
 	payload = {

@@ -56,6 +56,14 @@ def _validate_provider_config(provider: str, config: dict) -> dict:
 			raise ValueError(
 				f"Similarity boost must be between 0.0 and 1.0, got: {similarity_boost}"
 			)
+		# Key-presence alone isn't enough: empty/whitespace/null voice IDs produce
+		# a non-functional config. Require real, non-empty string values (#221).
+		for key in ("voice_1_id", "voice_2_id"):
+			value = config.get(key)
+			if not isinstance(value, str) or not value.strip():
+				raise ValueError(
+					"ElevenLabs config requires non-empty voice_1_id and voice_2_id"
+				)
 	return config
 
 

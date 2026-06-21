@@ -94,6 +94,8 @@ export default function EpisodePage() {
   const [selectedTtsConfigId, setSelectedTtsConfigId] = useState<string>("")
   const [newTtsProvider, setNewTtsProvider] = useState<string>("openai")
   const [newTtsName, setNewTtsName] = useState<string>("")
+  const [newTtsVoice1Id, setNewTtsVoice1Id] = useState<string>("")
+  const [newTtsVoice2Id, setNewTtsVoice2Id] = useState<string>("")
   const [savingTts, setSavingTts] = useState(false)
   const robustESRef = useRef<RobustEventSource | null>(null)
   const stopPollingRef = useRef<(() => void) | null>(null)
@@ -362,17 +364,30 @@ export default function EpisodePage() {
     }
   }
 
+  // ElevenLabs ships with empty voice-ID defaults, so a saved config is only
+  // usable once the user provides real voice IDs (#221). Other providers have
+  // working defaults and need no extra input.
+  const isTtsConfigValid =
+    newTtsName.trim() !== "" &&
+    (newTtsProvider !== "elevenlabs" ||
+      (newTtsVoice1Id.trim() !== "" && newTtsVoice2Id.trim() !== ""))
+
   const saveTTSConfig = async () => {
-    if (!newTtsName.trim()) return
+    if (!isTtsConfigValid) return
     setSavingTts(true)
     try {
+      const config = { ...(DEFAULT_CONFIGS[newTtsProvider] ?? {}) }
+      if (newTtsProvider === "elevenlabs") {
+        config.voice_1_id = newTtsVoice1Id.trim()
+        config.voice_2_id = newTtsVoice2Id.trim()
+      }
       const createResponse = await fetch(`/api/proxy/tts-configs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: newTtsName,
           provider: newTtsProvider,
-          config: DEFAULT_CONFIGS[newTtsProvider] ?? {},
+          config,
           is_default: false,
         }),
       })
@@ -381,6 +396,8 @@ export default function EpisodePage() {
         setTtsConfigs((prev) => [...prev, newConfig])
         setSelectedTtsConfigId(newConfig.id)
         setNewTtsName("")
+        setNewTtsVoice1Id("")
+        setNewTtsVoice2Id("")
         showSuccessToast("TTS configuration saved")
       } else {
         showErrorToast("Failed to save TTS configuration")
@@ -754,9 +771,36 @@ export default function EpisodePage() {
                     </SelectContent>
                   </Select>
                 </div>
+                {newTtsProvider === "elevenlabs" && (
+                  <>
+                    <div>
+                      <Label htmlFor="new-tts-voice-1" className="mb-1">Voice 1 ID</Label>
+                      <Input
+                        id="new-tts-voice-1"
+                        value={newTtsVoice1Id}
+                        onChange={(e) => setNewTtsVoice1Id(e.target.value)}
+                        placeholder="21m00Tcm4TlvDq8ikWAM"
+                        aria-required="true"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="new-tts-voice-2" className="mb-1">Voice 2 ID</Label>
+                      <Input
+                        id="new-tts-voice-2"
+                        value={newTtsVoice2Id}
+                        onChange={(e) => setNewTtsVoice2Id(e.target.value)}
+                        placeholder="AZnzlk1XvdvUeBnXmlld"
+                        aria-required="true"
+                      />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Required ElevenLabs voice IDs from your ElevenLabs account (Voice Library).
+                    </p>
+                  </>
+                )}
                 <Button
                   onClick={saveTTSConfig}
-                  disabled={savingTts || !newTtsName.trim()}
+                  disabled={savingTts || !isTtsConfigValid}
                   variant="outline"
                   className="w-full"
                 >

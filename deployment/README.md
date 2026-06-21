@@ -17,7 +17,7 @@ cd /opt/podcaststudiohub && bash deployment/scripts/harden-host.sh
 
 `harden-host.sh` (idempotent):
 1. Creates the `podcastfy` system account and an `~/.ssh` dir for the deploy key.
-2. Stops any root-owned PM2 services (releasing ports 8001/3003) and installs a
+2. Stops any root-owned PM2 services (releasing ports 8005/3010) and installs a
    boot-time PM2 resurrect unit for the `podcastfy` account so services survive reboots.
 3. Chowns `/opt/podcaststudiohub` to that account.
 4. Configures `ufw`: default-deny inbound, allow only OpenSSH / 80 / 443.
@@ -25,8 +25,9 @@ cd /opt/podcaststudiohub && bash deployment/scripts/harden-host.sh
 After running it, **add the deploy public key** to
 `/home/podcastfy/.ssh/authorized_keys` and **set the GitHub `SERVER_USER` deploy
 secret to `podcastfy`** so PM2 processes start under the non-root account on the
-next deploy. The API binds loopback (`API_HOST=127.0.0.1`, port `8001` matching the
-nginx upstream) and runs with `DEBUG=False` (uvicorn auto-reload stays off in prod).
+next deploy. The API binds loopback (`API_HOST=127.0.0.1`, port `8005` on the
+current dev host — matching that host's nginx upstream; see Environment Variables
+below) and runs with `DEBUG=False` (uvicorn auto-reload stays off in prod).
 
 ## Deployment Methods
 
@@ -101,7 +102,7 @@ find . -type f -name '*.pyc' -delete 2>/dev/null || true
 # Restart API
 pm2 delete podcaststudiohub-api 2>/dev/null || true
 pm2 start uv --name podcaststudiohub-api --cwd /opt/podcaststudiohub/api \
-  -- run uvicorn src.main:app --host 127.0.0.1 --port 8001
+  -- run uvicorn src.main:app --host 127.0.0.1 --port 8005
 pm2 save
 EOF
 ```
@@ -129,7 +130,7 @@ cat > .env.production << 'ENVEOF'
 NEXT_PUBLIC_API_URL=https://dev.podcaststudiohub.me/api
 NEXTAUTH_SECRET=<your-secret>
 NEXTAUTH_URL=https://dev.podcaststudiohub.me
-PORT=3003
+PORT=3010
 ENVEOF
 
 # Install and build
@@ -141,7 +142,7 @@ echo "window.__ENV__ = { API_URL: 'https://dev.podcaststudiohub.me/api' };" > pu
 
 # Restart frontend
 pm2 delete podcaststudiohub-frontend 2>/dev/null || true
-PORT=3003 \
+PORT=3010 \
 NEXT_PUBLIC_API_URL='https://dev.podcaststudiohub.me/api' \
 NEXTAUTH_SECRET='<your-secret>' \
 NEXTAUTH_URL='https://dev.podcaststudiohub.me' \
@@ -234,8 +235,14 @@ Configure in **Settings** → **Environments** → **development**:
 - `API_URL`: `https://dev.podcaststudiohub.me/api`
 - `FRONTEND_URL`: `https://dev.podcaststudiohub.me`
 - `NEXTAUTH_URL`: `https://dev.podcaststudiohub.me`
-- `API_PORT`: `8001`
-- `FRONTEND_PORT`: `3003`
+- `API_PORT`: `8005`
+- `FRONTEND_PORT`: `3010`
+
+> The dev host is **multi-tenant** (several apps share it), so these ports are
+> per-environment, not repo-wide constants. `API_PORT`/`FRONTEND_PORT` are the
+> source of truth and **must match that host's nginx upstream**
+> (`/etc/nginx/sites-available/podcaststudiohub` on the server). The values in
+> `deployment/nginx/podcastfy.conf` (8001/3003) are a single-tenant example.
 
 **Secrets:**
 - `SSH_PRIVATE_KEY`: SSH key for deployment
@@ -277,7 +284,7 @@ AWS_REGION=us-east-1
 NEXT_PUBLIC_API_URL=https://dev.podcaststudiohub.me/api
 NEXTAUTH_URL=https://dev.podcaststudiohub.me
 NEXTAUTH_SECRET=<same-as-github-secret>
-PORT=3003
+PORT=3010
 ```
 
 ### AWS S3 / IAM permissions
@@ -329,8 +336,8 @@ the key, so rotation never changes them.
 Nginx reverse proxy configuration is in `deployment/nginx/podcastfy.conf`.
 
 **Routes:**
-- `https://dev.podcaststudiohub.me/api` → `localhost:8001` (API)
-- `https://dev.podcaststudiohub.me` → `localhost:3003` (Frontend)
+- `https://dev.podcaststudiohub.me/api` → `localhost:8005` (API)
+- `https://dev.podcaststudiohub.me` → `localhost:3010` (Frontend)
 
 The config terminates TLS 1.2/1.3 only and sends every request through a
 301 HTTP→HTTPS redirect, plus HSTS / CSP / X-Frame-Options /
@@ -423,11 +430,11 @@ pm2 save --force
 
 # Restart API
 pm2 start uv --name podcaststudiohub-api --cwd /opt/podcaststudiohub/api \
-  -- run uvicorn src.main:app --host 127.0.0.1 --port 8001
+  -- run uvicorn src.main:app --host 127.0.0.1 --port 8005
 
 # Restart Frontend
 cd /opt/podcaststudiohub/frontend
-PORT=3003 pm2 start npm --name podcaststudiohub-frontend --cwd /opt/podcaststudiohub/frontend -- start
+PORT=3010 pm2 start npm --name podcaststudiohub-frontend --cwd /opt/podcaststudiohub/frontend -- start
 
 # Restart Celery
 cd /opt/podcaststudiohub/api

@@ -98,6 +98,14 @@ export default function EpisodePage() {
   const [savingTts, setSavingTts] = useState(false)
   const robustESRef = useRef<RobustEventSource | null>(null)
   const stopPollingRef = useRef<(() => void) | null>(null)
+  const isMountedRef = useRef(true)
+
+  useEffect(() => {
+    isMountedRef.current = true
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
 
   // Backend calls (fetch + EventSource) go through the same-origin /api/proxy
   // handler, which injects the bearer token server-side from the httpOnly cookie
@@ -109,6 +117,7 @@ export default function EpisodePage() {
       )
       if (response.ok) {
         const data = await response.json() as Episode
+        if (!isMountedRef.current) return
         setEpisode(data)
         if (data.tts_config_id) {
           setSelectedTtsConfigId(data.tts_config_id)
@@ -198,6 +207,7 @@ export default function EpisodePage() {
     const sseUrl = `/api/proxy/generation/episodes/${params.id}/progress`
 
     const handleMessage = (raw: unknown) => {
+      if (!isMountedRef.current) return
       const data = raw as { status: string; progress?: GenerationProgress }
       const newStatus = data.status
       const newProgress = data.progress
@@ -255,7 +265,9 @@ export default function EpisodePage() {
         console.warn(`SSE error: ${message} (attempt ${attempt}/${maxRetries})`)
       },
       onFallbackToPolling: handleFallbackToPolling,
-      onStatusChange: setConnectionStatus,
+      onStatusChange: (s) => {
+        if (isMountedRef.current) setConnectionStatus(s)
+      },
       maxRetries: 5,
       retryDelay: 1000,
     })

@@ -30,6 +30,21 @@ describe('SignupPage', () => {
     expect(screen.getByRole('button', { name: /sign up/i })).toBeInTheDocument()
   })
 
+  it('trims whitespace from the full name before sending', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({}) }) as jest.Mock
+    global.fetch = fetchMock
+
+    render(<SignupPage />)
+    await userEvent.type(screen.getByLabelText(/full name/i), '  Jane Doe  ')
+    await fillAndSubmit()
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.full_name).toBe('Jane Doe')
+  })
+
   it('shows the error and resets loading on failure', async () => {
     global.fetch = jest
       .fn()

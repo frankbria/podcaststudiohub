@@ -33,7 +33,7 @@ jobs:
       round: ${{ steps.select.outputs.round }}
       linked_issue: ${{ steps.select.outputs.linked_issue }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check if paused
         id: breaker
@@ -108,7 +108,7 @@ jobs:
     outputs:
       result: ${{ steps.post-check.outputs.result }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -269,7 +269,7 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -581,7 +581,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check for blockers
         id: blockers
@@ -691,7 +691,7 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Determine failure reason and action
         id: reason

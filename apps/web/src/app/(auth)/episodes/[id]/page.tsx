@@ -265,7 +265,9 @@ export default function EpisodePage() {
         console.warn(`SSE error: ${message} (attempt ${attempt}/${maxRetries})`)
       },
       onFallbackToPolling: handleFallbackToPolling,
-      onStatusChange: setConnectionStatus,
+      onStatusChange: (s) => {
+        if (isMountedRef.current) setConnectionStatus(s)
+      },
       maxRetries: 5,
       retryDelay: 1000,
     })

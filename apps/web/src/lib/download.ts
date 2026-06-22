@@ -33,11 +33,13 @@ export async function downloadAudioFile(
   const link = document.createElement("a")
   link.href = objectUrl
   link.download = filename
+  let appended = false
   try {
     document.body.appendChild(link)
+    appended = true
     link.click()
   } finally {
     window.URL.revokeObjectURL(objectUrl)
-    document.body.removeChild(link)
+    if (appended) document.body.removeChild(link)
   }
 }

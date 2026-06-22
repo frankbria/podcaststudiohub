@@ -2,7 +2,7 @@
 
 ## Overview
 
-This application deploys to **47.88.89.175** at `/opt/podcaststudiohub/` using **PM2** for process management.
+This application deploys to **<SERVER_IP>** at `/opt/podcaststudiohub/` using **PM2** for process management.
 
 ## Host Hardening (non-root + firewall) — issue #209
 
@@ -11,7 +11,7 @@ binds **127.0.0.1 only** (nginx reverse-proxies to it), and a host firewall bloc
 direct external access. Provision this once on the VPS:
 
 ```bash
-ssh root@47.88.89.175
+ssh root@<SERVER_IP>
 cd /opt/podcaststudiohub && bash deployment/scripts/harden-host.sh
 ```
 
@@ -61,7 +61,7 @@ git push origin main
 If you need to deploy manually (parallel to GitHub Actions workflow):
 
 #### Prerequisites
-- SSH access to server: `ssh root@47.88.89.175`
+- SSH access to server: `ssh root@<SERVER_IP>`
 - Server has PM2 installed globally
 - Server has `uv` installed for Python dependencies
 
@@ -79,18 +79,18 @@ cd ../..
 ```bash
 # Sync API source
 rsync -avz --exclude='__pycache__' --exclude='*.pyc' --exclude='.pytest_cache' --exclude='.venv' \
-  apps/api/src/ root@47.88.89.175:/opt/podcaststudiohub/api/src/
+  apps/api/src/ root@<SERVER_IP>:/opt/podcaststudiohub/api/src/
 
 # Sync API config
 rsync -avz apps/api/pyproject.toml apps/api/uv.lock apps/api/alembic.ini \
-  root@47.88.89.175:/opt/podcaststudiohub/api/
+  root@<SERVER_IP>:/opt/podcaststudiohub/api/
 
 # Sync migrations
 rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
-  apps/api/alembic/ root@47.88.89.175:/opt/podcaststudiohub/api/alembic/
+  apps/api/alembic/ root@<SERVER_IP>:/opt/podcaststudiohub/api/alembic/
 
 # Install dependencies and run migrations on server
-ssh root@47.88.89.175 << 'EOF'
+ssh root@<SERVER_IP> << 'EOF'
 cd /opt/podcaststudiohub/api
 uv sync
 uv run alembic upgrade head
@@ -111,18 +111,18 @@ EOF
 
 ```bash
 # Sync public files
-rsync -avz apps/web/public/ root@47.88.89.175:/opt/podcaststudiohub/frontend/public/
+rsync -avz apps/web/public/ root@<SERVER_IP>:/opt/podcaststudiohub/frontend/public/
 
 # Sync source files
-rsync -avz apps/web/src/ root@47.88.89.175:/opt/podcaststudiohub/frontend/src/
+rsync -avz apps/web/src/ root@<SERVER_IP>:/opt/podcaststudiohub/frontend/src/
 
 # Sync config files
 rsync -avz apps/web/package.json apps/web/next.config.mjs apps/web/tsconfig.json \
   apps/web/tailwind.config.ts apps/web/postcss.config.mjs \
-  root@47.88.89.175:/opt/podcaststudiohub/frontend/
+  root@<SERVER_IP>:/opt/podcaststudiohub/frontend/
 
 # Install dependencies and rebuild on server
-ssh root@47.88.89.175 << 'EOF'
+ssh root@<SERVER_IP> << 'EOF'
 cd /opt/podcaststudiohub/frontend
 
 # Create environment file
@@ -154,7 +154,7 @@ EOF
 #### Step 4: Restart Celery
 
 ```bash
-ssh root@47.88.89.175 << 'EOF'
+ssh root@<SERVER_IP> << 'EOF'
 cd /opt/podcaststudiohub/api
 
 pm2 delete podcaststudiohub-celery 2>/dev/null || true
@@ -168,7 +168,7 @@ EOF
 
 ```bash
 # Check PM2 processes
-ssh root@47.88.89.175 "pm2 list"
+ssh root@<SERVER_IP> "pm2 list"
 
 # Check API health
 curl https://dev.podcaststudiohub.me/api/health
@@ -201,26 +201,26 @@ curl https://dev.podcaststudiohub.me
 
 **View all processes:**
 ```bash
-ssh root@47.88.89.175 "pm2 list"
+ssh root@<SERVER_IP> "pm2 list"
 ```
 
 **Check logs:**
 ```bash
-ssh root@47.88.89.175 "pm2 logs podcaststudiohub-api --lines 50"
-ssh root@47.88.89.175 "pm2 logs podcaststudiohub-frontend --lines 50"
-ssh root@47.88.89.175 "pm2 logs podcaststudiohub-celery --lines 50"
+ssh root@<SERVER_IP> "pm2 logs podcaststudiohub-api --lines 50"
+ssh root@<SERVER_IP> "pm2 logs podcaststudiohub-frontend --lines 50"
+ssh root@<SERVER_IP> "pm2 logs podcaststudiohub-celery --lines 50"
 ```
 
 **Restart individual service:**
 ```bash
-ssh root@47.88.89.175 "pm2 restart podcaststudiohub-api"
-ssh root@47.88.89.175 "pm2 restart podcaststudiohub-frontend"
-ssh root@47.88.89.175 "pm2 restart podcaststudiohub-celery"
+ssh root@<SERVER_IP> "pm2 restart podcaststudiohub-api"
+ssh root@<SERVER_IP> "pm2 restart podcaststudiohub-frontend"
+ssh root@<SERVER_IP> "pm2 restart podcaststudiohub-celery"
 ```
 
 **Restart all:**
 ```bash
-ssh root@47.88.89.175 "pm2 restart all"
+ssh root@<SERVER_IP> "pm2 restart all"
 ```
 
 ## Environment Variables
@@ -230,7 +230,7 @@ ssh root@47.88.89.175 "pm2 restart all"
 Configure in **Settings** → **Environments** → **development**:
 
 **Variables:**
-- `SERVER_HOST`: `47.88.89.175`
+- `SERVER_HOST`: `<SERVER_IP>`
 - `SERVER_PATH`: `/opt/podcaststudiohub`
 - `API_URL`: `https://dev.podcaststudiohub.me/api`
 - `FRONTEND_URL`: `https://dev.podcaststudiohub.me`
@@ -350,8 +350,8 @@ Run it once on the VPS (idempotent — safe to re-run):
 
 ```bash
 # Prerequisites: DNS for the domain points at the server, port 80 open.
-scp -r deployment root@47.88.89.175:/opt/podcaststudiohub/deployment
-ssh root@47.88.89.175
+scp -r deployment root@<SERVER_IP>:/opt/podcaststudiohub/deployment
+ssh root@<SERVER_IP>
 cd /opt/podcaststudiohub && DOMAIN=dev.podcaststudiohub.me \
   bash deployment/scripts/provision-ssl.sh
 ```
@@ -380,8 +380,8 @@ nmap --script ssl-enum-ciphers -p 443 dev.podcaststudiohub.me
 
 **To update the Nginx config** (after editing `deployment/nginx/podcastfy.conf`):
 ```bash
-scp deployment/nginx/podcastfy.conf root@47.88.89.175:/etc/nginx/sites-available/podcastfy
-ssh root@47.88.89.175 "nginx -t && systemctl reload nginx"
+scp deployment/nginx/podcastfy.conf root@<SERVER_IP>:/etc/nginx/sites-available/podcastfy
+ssh root@<SERVER_IP> "nginx -t && systemctl reload nginx"
 ```
 
 ## Troubleshooting
@@ -398,7 +398,7 @@ ssh root@47.88.89.175 "nginx -t && systemctl reload nginx"
 
 ```bash
 # SSH to server
-ssh root@47.88.89.175
+ssh root@<SERVER_IP>
 
 # Check PM2 status
 pm2 list
@@ -412,7 +412,7 @@ pm2 save
 ### Database Migration Issues
 
 ```bash
-ssh root@47.88.89.175 << 'EOF'
+ssh root@<SERVER_IP> << 'EOF'
 cd /opt/podcaststudiohub/api
 uv run alembic current
 uv run alembic history
@@ -423,7 +423,7 @@ EOF
 ### Clear All and Restart
 
 ```bash
-ssh root@47.88.89.175 << 'EOF'
+ssh root@<SERVER_IP> << 'EOF'
 cd /opt/podcaststudiohub/api
 pm2 delete all
 pm2 save --force
@@ -454,7 +454,7 @@ See `.github/DEPLOYMENT_SETUP.md` for GitHub configuration instructions.
 
 ---
 
-**Server**: 47.88.89.175
+**Server**: <SERVER_IP>
 **Path**: `/opt/podcaststudiohub/`
 **Process Manager**: PM2
 **Domain**: https://dev.podcaststudiohub.me

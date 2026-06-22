@@ -94,6 +94,15 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+coverage/
+test-results/
+playwright-report/
+
+# Runtime data — generated audio/transcripts. Already-committed sample files
+# under data/audio stay tracked (git keeps tracked files even when ignored);
+# only new runtime output is ignored. Do NOT add !/data/audio/ — that would
+# re-track generated podcasts, the cruft this rule exists to prevent.
+/data/
 
 # Jupyter Notebook
 .ipynb_checkpoints

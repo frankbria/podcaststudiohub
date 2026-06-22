@@ -16,7 +16,7 @@ In the `development` environment, add these **Variables**:
 
 | Variable Name | Value | Description |
 |--------------|-------|-------------|
-| `SERVER_HOST` | `47.88.89.175` | Development server IP address |
+| `SERVER_HOST` | `<SERVER_IP>` | Development server IP address |
 | `SERVER_PATH` | `/var/www/podcaststudiohub` | Application directory on server |
 | `API_URL` | `https://dev.podcaststudiohub.me/api` | Public API URL |
 | `FRONTEND_URL` | `https://dev.podcaststudiohub.me` | Public frontend URL |
@@ -51,7 +51,7 @@ cat ~/.ssh/github_actions_deploy.pub
 
 ```bash
 # SSH into the server
-ssh root@47.88.89.175
+ssh root@<SERVER_IP>
 
 # Add the public key to authorized_keys
 echo "your-public-key-here" >> ~/.ssh/authorized_keys
@@ -66,7 +66,7 @@ chmod 700 ~/.ssh
 1. Go to repository **Settings** → **Environments** → **development**
 2. Click **Add secret**
 3. Name: `SSH_PRIVATE_KEY`
-4. Value: Paste the **entire private key** including `-----BEGIN OPENSSH PRIVATE KEY-----` and `-----END OPENSSH PRIVATE KEY-----`
+4. Value: Paste the **entire private key**, including its `BEGIN`/`END OPENSSH PRIVATE KEY` header and footer lines
 
 ## Deployment Triggers
 
@@ -132,7 +132,7 @@ Go to **Settings** → **Environments** → **development** to see:
 
 ```bash
 # SSH into server
-ssh root@47.88.89.175
+ssh root@<SERVER_IP>
 
 # Check PM2 status
 pm2 list
@@ -155,7 +155,7 @@ If deployment breaks something:
 
 ```bash
 # SSH into server
-ssh root@47.88.89.175
+ssh root@<SERVER_IP>
 cd /var/www/podcaststudiohub
 
 # Rollback to previous commit

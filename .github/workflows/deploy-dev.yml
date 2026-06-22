@@ -320,24 +320,28 @@ jobs:
           API_URL: ${{ vars.API_URL }}
           FRONTEND_URL: ${{ vars.FRONTEND_URL }}
         run: |
-          echo "Waiting for services to start..."
-          sleep 10
+          # Poll instead of a single shot: a cold uvicorn start (importing the
+          # podcastfy engine) routinely takes longer than a fixed sleep, so a
+          # one-shot curl races the upstream coming up and nginx returns 502.
+          # Retry with backoff and only fail if the service never becomes healthy.
+          wait_for() {
+            local name="$1" url="$2" want="$3"
+            local attempts=30 status
+            for i in $(seq 1 "$attempts"); do
+              status=$(curl -s -o /dev/null -w "%{http_code}" "$url" || echo "000")
+              if [ "$status" = "$want" ]; then
+                echo "✓ $name health check passed (after ${i} attempt(s))"
+                return 0
+              fi
+              echo "$name not ready (status: $status), retry $i/$attempts..."
+              sleep 5
+            done
+            echo "$name health check failed; last status: $status"
+            return 1
+          }
 
-          # Check API health
-          API_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $API_URL/health)
-          if [ "$API_STATUS" != "200" ]; then
-            echo "API health check failed with status: $API_STATUS"
-            exit 1
-          fi
-          echo "✓ API health check passed"
-
-          # Check frontend
-          FRONTEND_STATUS=$(curl -s -o /dev/null -w "%{http_code}" $FRONTEND_URL)
-          if [ "$FRONTEND_STATUS" != "200" ]; then
-            echo "Frontend health check failed with status: $FRONTEND_STATUS"
-            exit 1
-          fi
-          echo "✓ Frontend health check passed"
+          wait_for "API" "$API_URL/health" "200" || exit 1
+          wait_for "Frontend" "$FRONTEND_URL" "200" || exit 1
 
           echo "🚀 Deployment successful!"
 

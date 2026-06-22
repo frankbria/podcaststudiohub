@@ -85,7 +85,7 @@ jobs:
             -v
 
       - name: Upload backend coverage reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: backend-coverage
@@ -202,7 +202,7 @@ jobs:
             --coverageReporters=json-summary
 
       - name: Upload frontend coverage reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: frontend-coverage
@@ -249,7 +249,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Playwright report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: playwright-report
@@ -313,7 +313,7 @@ jobs:
         run: bash scripts/aggregate-coverage.sh
 
       - name: Upload combined coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: combined-coverage-report
           path: coverage/combined-coverage-report.md

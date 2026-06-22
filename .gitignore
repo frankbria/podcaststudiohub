@@ -94,6 +94,12 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+coverage/
+test-results/
+playwright-report/
+
+# Runtime data (committed upstream sample audio under data/audio stays tracked)
+/data/
 
 # Jupyter Notebook
 .ipynb_checkpoints

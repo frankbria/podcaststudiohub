@@ -10,7 +10,7 @@ A multi-tenant SaaS platform for AI-generated podcasts, built on top of the open
 
 Podcastfy Studio Hub is a full-stack web application that provides a user-friendly interface and multi-tenant architecture for generating AI-powered podcasts from various content sources. It wraps the powerful Podcastfy engine with:
 
-- **User authentication and authorization** (session-based)
+- **User authentication and authorization** (JWT-based)
 - **Project and episode management**
 - **Asynchronous background processing** with Celery
 - **Multi-tenant data isolation**
@@ -67,7 +67,7 @@ podcaststudiohub/
 - Multi-language support
 
 ### Platform Features
-- **User Management**: Secure authentication with session management
+- **User Management**: Secure authentication with JWT tokens
 - **Project Organization**: Group episodes into projects
 - **Episode Management**: Create, track, and manage podcast episodes
 - **Content Sources**: Support for URLs, files, and user-provided topics
@@ -104,10 +104,8 @@ cd apps/api
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install dependencies (using uv for faster installs)
+# Install dependencies (uv reads apps/api/pyproject.toml)
 uv sync
-# OR using pip
-pip install -r requirements.txt
 
 # Configure environment variables
 cp .env.example .env
@@ -197,7 +195,7 @@ NEXTAUTH_SECRET=<generate-with-openssl-rand-hex-32>
 
 ## Production Deployment
 
-Deployment to **47.88.89.175** (`/opt/podcaststudiohub/`) using **PM2** for process management.
+Deployment to **<SERVER_IP>** (`/opt/podcaststudiohub/`) using **PM2** for process management.
 
 ### Automated Deployment (Recommended)
 
@@ -269,26 +267,21 @@ podcaststudiohub/
 │
 ├── deployment/                       # Deployment configs
 │   ├── nginx/                        # Nginx configuration
-│   ├── systemd/                      # Systemd service files
 │   ├── scripts/                      # Deployment scripts
-│   ├── QUICKSTART.md                 # Deployment guide
-│   └── DEPLOYMENT.md                 # Full deployment docs
+│   ├── tests/                        # Deployment smoke tests
+│   └── README.md                     # Deployment guide & host hardening
 │
 ├── tests/                            # Test suite
-│   ├── test_api.py                   # API tests
-│   ├── test_auth.py                  # Auth tests
-│   └── ...
+│   └── e2e/                          # Playwright end-to-end tests
 │
-├── data/                             # Runtime data
+├── data/                             # Runtime data (gitignored)
 │   ├── audio/                        # Generated podcasts
 │   └── transcripts/                  # Generated transcripts
 │
 ├── .github/workflows/                # CI/CD workflows
 │   └── deploy.yml                    # Deployment workflow
 │
-├── pyproject.toml                    # Root Python config (podcastfy)
-├── package.json                      # Root Node config
-├── docker-compose.yml                # Local development stack
+├── package.json                      # Root npm scripts (orchestrates both apps)
 ├── CLAUDE.md                         # Claude Code instructions
 └── README.md                         # This file
 ```
@@ -410,18 +403,19 @@ Contributions are welcome! Please:
 
 ## Upstream Podcastfy Package
 
-This project is built on top of the excellent [Podcastfy](https://github.com/souzatharsis/podcastfy) package by Tharsis T. P. Souza. The core podcast generation engine (in the root directory) comes from that package.
+This project is built on top of the excellent [Podcastfy](https://github.com/souzatharsis/podcastfy) package by Tharsis T. P. Souza. The core podcast generation engine is consumed as a pinned **pip dependency** (`podcastfy==0.4.1`, declared in `apps/api/pyproject.toml`) — it is not vendored in this repo.
 
-### Syncing with Upstream
+### Upgrading the engine
 
-To update to a newer version of Podcastfy:
+To update to a newer version of Podcastfy, bump the pin in `apps/api/pyproject.toml` and re-sync:
 
 ```bash
-# See UPSTREAM_SYNC.md for detailed instructions
-git remote add upstream https://github.com/souzatharsis/podcastfy.git
-git fetch upstream
-# Follow merge strategy in UPSTREAM_SYNC.md
+cd apps/api
+# edit pyproject.toml: podcastfy==<new-version>
+uv sync
 ```
+
+The pin is intentional: backend task kwargs are coupled to the upstream call signature (see #204), so re-check `src/services/` and `src/tasks/` against the new signature before relying on the upgrade.
 
 ## License
 

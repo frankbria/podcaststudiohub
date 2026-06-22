@@ -82,6 +82,31 @@ describe('downloadAudioFile', () => {
     createElementSpy.mockRestore()
   })
 
+  it('revokes the object URL even if removeChild throws', async () => {
+    const mockBlob = new Blob(['audio data'], { type: 'audio/mpeg' })
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      blob: jest.fn().mockResolvedValue(mockBlob),
+    } as unknown as Response)
+
+    const createElementSpy = jest.spyOn(document, 'createElement').mockReturnValue({
+      href: '',
+      download: '',
+      click: jest.fn(),
+    } as unknown as HTMLAnchorElement)
+    ;(document.body.removeChild as jest.Mock).mockImplementation(() => {
+      throw new Error('removeChild failed')
+    })
+
+    await expect(
+      downloadAudioFile('https://example.com/audio.mp3', 'test.mp3')
+    ).rejects.toThrow('removeChild failed')
+
+    expect(window.URL.revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
+
+    createElementSpy.mockRestore()
+  })
+
   it('throws an error if fetch response is not ok', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,

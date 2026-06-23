@@ -34,8 +34,11 @@ from podcastfy.content_generator import ContentGenerator
 
 from ..config import settings
 from ..models import Episode
-from ..schemas.episode import EpisodeUpdate
-from .episode_service import get_episode_by_id, update_episode, update_generation_status
+from .episode_service import (
+	get_episode_by_id,
+	set_episode_system_fields,
+	update_generation_status,
+)
 from .content_service import get_content_sources
 
 
@@ -216,9 +219,8 @@ class ScriptGenerationService:
 				# Save transcript to file
 				transcript_path = await self._save_transcript(episode_id, transcript)
 
-				# Update episode with transcript_path and status='complete'
-				update_data = EpisodeUpdate(transcript_path=transcript_path)
-				await update_episode(db, episode, update_data)
+				# Update episode with transcript_path (system field) and status='complete'
+				await set_episode_system_fields(db, episode, transcript_path=transcript_path)
 
 				await self._update_status(
 					db, episode, 'complete',

@@ -6,6 +6,7 @@ status filtering, and tenant isolation for episodes.
 """
 
 import pytest
+from datetime import datetime, timezone
 from uuid import uuid4
 
 
@@ -339,8 +340,8 @@ async def test_create_multiple_episodes_same_project(client, project_and_auth):
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_update_generation_status(client, project_and_auth):
-	"""Test updating episode generation status."""
+async def test_update_cannot_change_generation_status(client, project_and_auth):
+	"""generation_status is system-managed and must not be writable via PUT."""
 	project_id, headers = project_and_auth
 
 	# Create episode
@@ -352,26 +353,20 @@ async def test_update_generation_status(client, project_and_auth):
 	assert create_response.json()["generation_status"] == "draft"
 	episode_id = create_response.json()["id"]
 
-	# Update status to generating
+	# Attempt to forge the generation status — must be silently ignored
 	update_response = await client.put(
 		f"/episodes/{episode_id}",
 		headers=headers,
-		json={"generation_status": "generating"}
+		json={"generation_status": "complete", "episode_number": 2}
 	)
 	assert update_response.status_code == 200
-	assert update_response.json()["generation_status"] == "generating"
-
-	# Update status to complete
-	complete_response = await client.put(
-		f"/episodes/{episode_id}",
-		headers=headers,
-		json={"generation_status": "complete"}
-	)
-	assert complete_response.json()["generation_status"] == "complete"
+	data = update_response.json()
+	assert data["generation_status"] == "draft"  # unchanged
+	assert data["episode_number"] == 2  # user-editable field still applied
 
 
 @pytest.mark.asyncio
-async def test_filter_by_status(client, project_and_auth):
+async def test_filter_by_status(client, project_and_auth, set_system_fields):
 	"""Test filtering episodes by generation status."""
 	project_id, headers = project_and_auth
 
@@ -390,10 +385,8 @@ async def test_filter_by_status(client, project_and_auth):
 	})
 	ep2_id = ep2_resp.json()["id"]
 
-	# Update one to generating
-	await client.put(f"/episodes/{ep1_id}", headers=headers, json={
-		"generation_status": "generating"
-	})
+	# Move one to 'generating' (system field — set directly, as the pipeline does)
+	await set_system_fields(ep1_id, generation_status="generating")
 
 	# Keep ep2 in draft
 
@@ -817,8 +810,9 @@ async def test_episode_created_with_null_task_fields(client, project_and_auth):
 
 
 @pytest.mark.asyncio
-async def test_update_task_id(client, project_and_auth):
-	"""Test storing a Celery task UUID in task_id field."""
+async def test_update_cannot_set_task_fields(client, project_and_auth):
+	"""task_id/task_started_at/task_completed_at are system-managed (Celery
+	tracking) and must not be writable via the public PUT endpoint."""
 	project_id, headers = project_and_auth
 
 	create_response = await client.post("/episodes", headers=headers, json={
@@ -828,93 +822,80 @@ async def test_update_task_id(client, project_and_auth):
 	})
 	episode_id = create_response.json()["id"]
 
-	celery_task_uuid = "550e8400-e29b-41d4-a716-446655440000"
 	update_response = await client.put(
 		f"/episodes/{episode_id}",
 		headers=headers,
 		json={
-			"task_id": celery_task_uuid,
-			"generation_status": "queued"
-		}
-	)
-	assert update_response.status_code == 200
-	data = update_response.json()
-	assert data["task_id"] == celery_task_uuid
-	assert data["generation_status"] == "queued"
-
-
-@pytest.mark.asyncio
-async def test_update_task_started_at(client, project_and_auth):
-	"""Test storing task_started_at timestamp when Celery task is submitted."""
-	project_id, headers = project_and_auth
-
-	create_response = await client.post("/episodes", headers=headers, json={
-		"project_id": project_id,
-		"episode_number": 1,
-		"episode_metadata": {"title": "Task Start Test", "description": "Desc"}
-	})
-	episode_id = create_response.json()["id"]
-
-	started_at = "2026-03-17T10:00:00+00:00"
-	update_response = await client.put(
-		f"/episodes/{episode_id}",
-		headers=headers,
-		json={
-			"task_id": "abc-123-def-456",
-			"task_started_at": started_at,
-			"generation_status": "queued"
-		}
-	)
-	assert update_response.status_code == 200
-	data = update_response.json()
-	assert data["task_started_at"] is not None
-	assert data["task_id"] == "abc-123-def-456"
-
-
-@pytest.mark.asyncio
-async def test_update_task_completed_at(client, project_and_auth):
-	"""Test storing task_completed_at timestamp when Celery task finishes."""
-	project_id, headers = project_and_auth
-
-	create_response = await client.post("/episodes", headers=headers, json={
-		"project_id": project_id,
-		"episode_number": 1,
-		"episode_metadata": {"title": "Task Complete Test", "description": "Desc"}
-	})
-	episode_id = create_response.json()["id"]
-
-	# Simulate task submission
-	await client.put(
-		f"/episodes/{episode_id}",
-		headers=headers,
-		json={
-			"task_id": "abc-123-def-456",
+			"task_id": "550e8400-e29b-41d4-a716-446655440000",
 			"task_started_at": "2026-03-17T10:00:00+00:00",
-			"generation_status": "generating"
-		}
-	)
-
-	# Simulate task completion
-	completed_at = "2026-03-17T10:05:00+00:00"
-	update_response = await client.put(
-		f"/episodes/{episode_id}",
-		headers=headers,
-		json={
-			"task_completed_at": completed_at,
-			"generation_status": "complete"
+			"task_completed_at": "2026-03-17T10:05:00+00:00",
 		}
 	)
 	assert update_response.status_code == 200
 	data = update_response.json()
-	assert data["task_completed_at"] is not None
-	assert data["generation_status"] == "complete"
-	# task_id should remain from previous update
-	assert data["task_id"] == "abc-123-def-456"
+	assert data["task_id"] is None
+	assert data["task_started_at"] is None
+	assert data["task_completed_at"] is None
 
 
 @pytest.mark.asyncio
-async def test_task_fields_returned_in_get_episode(client, project_and_auth):
-	"""Test that task tracking fields are returned when fetching an episode."""
+async def test_update_ignores_all_system_fields(client, project_and_auth):
+	"""A PUT carrying every system-managed field must not mutate any of them,
+	while user-editable fields in the same request still apply (mass-assignment guard)."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Forge Test", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	response = await client.put(
+		f"/episodes/{episode_id}",
+		headers=headers,
+		json={
+			"episode_metadata": {"title": "Legit Edit", "description": "Desc"},
+			"generation_status": "complete",
+			"generation_progress": {"stage": "complete", "progress": 100},
+			"s3_key": "user-1/forged.mp3",
+			"s3_url": "https://evil.example/forged.mp3",
+			"duration_seconds": 9999.0,
+			"file_size_bytes": 123456,
+			"file_path": "/etc/passwd",
+			"transcript_path": "/tmp/forged.txt",
+		},
+	)
+	assert response.status_code == 200
+	data = response.json()
+	# User-editable field applied
+	assert data["episode_metadata"]["title"] == "Legit Edit"
+	# Every system field unchanged from creation defaults
+	assert data["generation_status"] == "draft"
+	assert data["generation_progress"] == {}
+	assert data["s3_key"] is None
+	assert data["s3_url"] is None
+	assert data["duration_seconds"] is None
+	assert data["file_size_bytes"] is None
+	assert data["file_path"] is None
+	assert data["transcript_path"] is None
+
+
+def test_episode_allowlist_excludes_system_fields():
+	"""Defense-in-depth: the service allowlist must never include system fields."""
+	from src.services.episode_service import EPISODE_USER_EDITABLE_FIELDS
+
+	system_fields = {
+		"generation_status", "generation_progress", "s3_key", "s3_url",
+		"duration_seconds", "file_size_bytes", "file_path", "transcript_path",
+		"task_id", "task_started_at", "task_completed_at",
+	}
+	assert system_fields.isdisjoint(EPISODE_USER_EDITABLE_FIELDS)
+
+
+@pytest.mark.asyncio
+async def test_task_fields_returned_in_get_episode(client, project_and_auth, set_system_fields):
+	"""Task tracking fields set by the pipeline are returned when fetching an episode."""
 	project_id, headers = project_and_auth
 
 	create_response = await client.post("/episodes", headers=headers, json={
@@ -925,14 +906,11 @@ async def test_task_fields_returned_in_get_episode(client, project_and_auth):
 	episode_id = create_response.json()["id"]
 
 	celery_task_uuid = "deadbeef-dead-beef-dead-beefdeadbeef"
-	await client.put(
-		f"/episodes/{episode_id}",
-		headers=headers,
-		json={
-			"task_id": celery_task_uuid,
-			"task_started_at": "2026-03-17T09:00:00+00:00",
-			"generation_status": "generating"
-		}
+	await set_system_fields(
+		episode_id,
+		task_id=celery_task_uuid,
+		task_started_at=datetime(2026, 3, 17, 9, 0, tzinfo=timezone.utc),
+		generation_status="generating",
 	)
 
 	get_response = await client.get(f"/episodes/{episode_id}", headers=headers)
@@ -944,8 +922,8 @@ async def test_task_fields_returned_in_get_episode(client, project_and_auth):
 
 
 @pytest.mark.asyncio
-async def test_task_fields_in_list_response(client, project_and_auth):
-	"""Test that task tracking fields are included in list responses."""
+async def test_task_fields_in_list_response(client, project_and_auth, set_system_fields):
+	"""Task tracking fields set by the pipeline are included in list responses."""
 	project_id, headers = project_and_auth
 
 	create_response = await client.post("/episodes", headers=headers, json={
@@ -955,11 +933,7 @@ async def test_task_fields_in_list_response(client, project_and_auth):
 	})
 	episode_id = create_response.json()["id"]
 
-	await client.put(
-		f"/episodes/{episode_id}",
-		headers=headers,
-		json={"task_id": "task-uuid-123"}
-	)
+	await set_system_fields(episode_id, task_id="task-uuid-123")
 
 	list_response = await client.get(
 		f"/episodes?project_id={project_id}",
@@ -1078,18 +1052,18 @@ async def test_search_empty_returns_all(client, project_and_auth):
 
 
 @pytest.mark.asyncio
-async def test_filter_by_min_duration(client, project_and_auth):
+async def test_filter_by_min_duration(client, project_and_auth, set_system_fields):
 	"""Test filtering episodes by minimum duration."""
 	project_id, headers = project_and_auth
 
-	# Create episode and set duration via update
+	# Create episode and set duration (system field — set directly)
 	ep1 = await client.post("/episodes", headers=headers, json={
 		"project_id": project_id,
 		"episode_number": 1,
 		"episode_metadata": {"title": "Short", "description": "desc"}
 	})
 	ep1_id = ep1.json()["id"]
-	await client.put(f"/episodes/{ep1_id}", headers=headers, json={"duration_seconds": 60.0})
+	await set_system_fields(ep1_id, duration_seconds=60.0)
 
 	ep2 = await client.post("/episodes", headers=headers, json={
 		"project_id": project_id,
@@ -1097,7 +1071,7 @@ async def test_filter_by_min_duration(client, project_and_auth):
 		"episode_metadata": {"title": "Long", "description": "desc"}
 	})
 	ep2_id = ep2.json()["id"]
-	await client.put(f"/episodes/{ep2_id}", headers=headers, json={"duration_seconds": 3600.0})
+	await set_system_fields(ep2_id, duration_seconds=3600.0)
 
 	response = await client.get(f"/episodes?project_id={project_id}&min_duration=1000", headers=headers)
 	assert response.status_code == 200
@@ -1107,7 +1081,7 @@ async def test_filter_by_min_duration(client, project_and_auth):
 
 
 @pytest.mark.asyncio
-async def test_filter_by_max_duration(client, project_and_auth):
+async def test_filter_by_max_duration(client, project_and_auth, set_system_fields):
 	"""Test filtering episodes by maximum duration."""
 	project_id, headers = project_and_auth
 
@@ -1117,7 +1091,7 @@ async def test_filter_by_max_duration(client, project_and_auth):
 		"episode_metadata": {"title": "Short", "description": "desc"}
 	})
 	ep1_id = ep1.json()["id"]
-	await client.put(f"/episodes/{ep1_id}", headers=headers, json={"duration_seconds": 120.0})
+	await set_system_fields(ep1_id, duration_seconds=120.0)
 
 	ep2 = await client.post("/episodes", headers=headers, json={
 		"project_id": project_id,
@@ -1125,7 +1099,7 @@ async def test_filter_by_max_duration(client, project_and_auth):
 		"episode_metadata": {"title": "Long", "description": "desc"}
 	})
 	ep2_id = ep2.json()["id"]
-	await client.put(f"/episodes/{ep2_id}", headers=headers, json={"duration_seconds": 7200.0})
+	await set_system_fields(ep2_id, duration_seconds=7200.0)
 
 	response = await client.get(f"/episodes?project_id={project_id}&max_duration=500", headers=headers)
 	assert response.status_code == 200
@@ -1204,7 +1178,7 @@ async def test_invalid_sort_order_returns_422(client, project_and_auth):
 
 
 @pytest.mark.asyncio
-async def test_combined_search_and_status_filter(client, project_and_auth):
+async def test_combined_search_and_status_filter(client, project_and_auth, set_system_fields):
 	"""Test combining search query with status filter."""
 	project_id, headers = project_and_auth
 
@@ -1214,7 +1188,7 @@ async def test_combined_search_and_status_filter(client, project_and_auth):
 		"episode_metadata": {"title": "Science Talk", "description": "discussion"}
 	})
 	ep1_id = ep1.json()["id"]
-	await client.put(f"/episodes/{ep1_id}", headers=headers, json={"generation_status": "complete"})
+	await set_system_fields(ep1_id, generation_status="complete")
 
 	await client.post("/episodes", headers=headers, json={
 		"project_id": project_id,

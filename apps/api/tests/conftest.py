@@ -77,6 +77,35 @@ async def test_db():
 
 
 @pytest.fixture
+def set_system_fields(test_db):
+    """Return an async helper that sets pipeline-managed (system) episode fields
+    directly in the DB — the same path the generation pipeline uses
+    (episode_service.set_episode_system_fields).
+
+    The public PUT endpoint intentionally refuses system fields
+    (generation_status, generation_progress, s3_key, duration_seconds, …), so
+    tests that need an episode in a particular generated state set them here
+    instead of through the API. Relies on the RLS tenant context already
+    established on the shared test session by a preceding API request.
+
+    Usage:
+        await set_system_fields(episode_id, generation_status="complete", s3_key="…")
+    """
+    from uuid import UUID
+    from src.services.episode_service import (
+        get_episode_by_id,
+        set_episode_system_fields,
+    )
+
+    async def _set(episode_id, **fields):
+        episode = await get_episode_by_id(test_db, UUID(str(episode_id)))
+        await set_episode_system_fields(test_db, episode, **fields)
+        return episode
+
+    return _set
+
+
+@pytest.fixture
 async def client(test_db):
     """
     Create an async HTTP client for testing FastAPI endpoints with test database.

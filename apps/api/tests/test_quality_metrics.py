@@ -491,9 +491,9 @@ async def test_calculate_metrics_full_integration(mock_read, metrics_calculator,
 @pytest.mark.asyncio
 @patch('src.services.quality_metrics_service.QualityMetricsCalculator._read_transcript_file')
 @patch('src.services.quality_metrics_service.get_episode_by_id')
-@patch('src.services.quality_metrics_service.update_episode')
+@patch('src.services.quality_metrics_service.set_episode_system_fields')
 async def test_calculate_and_store_metrics(
-	mock_update, mock_get_episode, mock_read,
+	mock_set_fields, mock_get_episode, mock_read,
 	metrics_calculator, mock_db, sample_episode, balanced_transcript
 ):
 	"""Test metrics calculation and storage in generation_progress JSONB."""
@@ -509,17 +509,17 @@ async def test_calculate_and_store_metrics(
 	# Verify episode was fetched
 	mock_get_episode.assert_called_once_with(mock_db, episode_id)
 
-	# Verify update_episode was called with quality_metrics in generation_progress
-	mock_update.assert_called_once()
-	call_args = mock_update.call_args
+	# generation_progress is system-managed: written via set_episode_system_fields
+	# with the fetched episode object (not via the user-facing update path)
+	mock_set_fields.assert_called_once()
+	call_args = mock_set_fields.call_args
 	assert call_args[0][0] == mock_db
-	assert call_args[0][1] == episode_id
+	assert call_args[0][1] == sample_episode
 
-	updated_data = call_args[0][2]
-	assert "generation_progress" in updated_data
-	assert "quality_metrics" in updated_data["generation_progress"]
+	generation_progress = call_args.kwargs["generation_progress"]
+	assert "quality_metrics" in generation_progress
 
-	quality_metrics = updated_data["generation_progress"]["quality_metrics"]
+	quality_metrics = generation_progress["quality_metrics"]
 	assert quality_metrics["total_words"] == metrics.total_words
 	assert quality_metrics["tone"] == metrics.tone
 	assert quality_metrics["is_balanced"] == metrics.is_balanced

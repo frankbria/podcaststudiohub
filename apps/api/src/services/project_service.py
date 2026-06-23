@@ -13,6 +13,18 @@ from typing import Optional
 from ..models import Project
 from ..schemas.project import ProjectCreate, ProjectUpdate
 
+# Fields an end user may set through the public update endpoint. Defense-in-depth
+# allowlist so a future ProjectUpdate addition (e.g. an ownership/billing column)
+# can't silently become mass-assignable. Mirrors EPISODE_USER_EDITABLE_FIELDS.
+PROJECT_USER_EDITABLE_FIELDS = {
+	"name",
+	"description",
+	"podcast_metadata",
+	"default_tts_config_id",
+	"default_template_id",
+	"is_archived",
+}
+
 
 async def create_project(
 	db: AsyncSession,
@@ -131,6 +143,8 @@ async def update_project(
 	"""
 	update_dict = update_data.model_dump(exclude_unset=True)
 	for field, value in update_dict.items():
+		if field not in PROJECT_USER_EDITABLE_FIELDS:
+			continue  # never mass-assign non-user-editable fields
 		setattr(project, field, value)
 
 	await db.commit()

@@ -56,7 +56,16 @@ class EpisodeCreate(BaseModel):
 
 
 class EpisodeUpdate(BaseModel):
-	"""Schema for updating an existing episode. All fields optional for partial updates."""
+	"""Schema for updating an existing episode (public, user-editable fields only).
+
+	System-managed fields (generation_status, generation_progress, s3_key, s3_url,
+	duration_seconds, file_size_bytes, file_path, transcript_path, task_id,
+	task_started_at, task_completed_at) are deliberately NOT accepted here: they are
+	written only by the generation pipeline (src/tasks/** and the generation router),
+	never by an end user. See episode_service.EPISODE_USER_EDITABLE_FIELDS for the
+	service-layer allowlist that enforces this even if the schema regresses.
+	All fields optional for partial updates.
+	"""
 
 	episode_number: Optional[int] = Field(
 		None,
@@ -67,14 +76,6 @@ class EpisodeUpdate(BaseModel):
 		None,
 		description="JSONB metadata for episode information"
 	)
-	generation_status: Optional[str] = Field(
-		None,
-		description="Generation status (draft, queued, processing, completed, failed)"
-	)
-	generation_progress: Optional[dict] = Field(
-		None,
-		description="Generation progress tracking data"
-	)
 	tts_config_id: Optional[UUID] = Field(
 		None,
 		description="TTS configuration ID"
@@ -82,42 +83,6 @@ class EpisodeUpdate(BaseModel):
 	template_id: Optional[UUID] = Field(
 		None,
 		description="Conversation template ID"
-	)
-	s3_key: Optional[str] = Field(
-		None,
-		description="S3 storage key for audio file"
-	)
-	s3_url: Optional[str] = Field(
-		None,
-		description="S3 URL for audio file"
-	)
-	duration_seconds: Optional[float] = Field(
-		None,
-		description="Audio duration in seconds"
-	)
-	file_size_bytes: Optional[int] = Field(
-		None,
-		description="Audio file size in bytes"
-	)
-	file_path: Optional[str] = Field(
-		None,
-		description="Local file path"
-	)
-	transcript_path: Optional[str] = Field(
-		None,
-		description="Transcript file path"
-	)
-	task_id: Optional[str] = Field(
-		None,
-		description="Celery task UUID for tracking background generation job"
-	)
-	task_started_at: Optional[datetime] = Field(
-		None,
-		description="When the Celery task was submitted to the broker"
-	)
-	task_completed_at: Optional[datetime] = Field(
-		None,
-		description="When the Celery task finished (success or failure)"
 	)
 
 	@field_validator('episode_metadata')

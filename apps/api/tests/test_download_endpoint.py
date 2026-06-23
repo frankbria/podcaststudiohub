@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 # ============================================================================
 
 @pytest.fixture
-async def episode_and_auth(client):
+async def episode_and_auth(client, set_system_fields):
 	"""Create user, project, and a complete episode with s3_key set."""
 	# Register user
 	reg_response = await client.post("/auth/register", json={
@@ -56,14 +56,14 @@ async def episode_and_auth(client):
 	assert ep_response.status_code == 201
 	episode_id = ep_response.json()["id"]
 
-	# Update episode to "complete" status with s3_key and file_size_bytes
-	update_response = await client.put(f"/episodes/{episode_id}", headers=headers, json={
-		"generation_status": "complete",
-		"s3_key": f"podcasts/user-test/episode-{episode_id}.mp3",
-		"s3_url": f"https://test-bucket.s3.amazonaws.com/podcasts/user-test/episode-{episode_id}.mp3",
-		"file_size_bytes": 5242880
-	})
-	assert update_response.status_code == 200
+	# Mark complete with s3_key/file_size_bytes (system fields — set as the pipeline does)
+	await set_system_fields(
+		episode_id,
+		generation_status="complete",
+		s3_key=f"podcasts/user-test/episode-{episode_id}.mp3",
+		s3_url=f"https://test-bucket.s3.amazonaws.com/podcasts/user-test/episode-{episode_id}.mp3",
+		file_size_bytes=5242880,
+	)
 
 	return episode_id, headers
 
@@ -136,7 +136,7 @@ async def test_download_episode_not_complete(client, episode_and_auth):
 
 
 @pytest.mark.asyncio
-async def test_download_episode_missing_s3_key(client, episode_and_auth):
+async def test_download_episode_missing_s3_key(client, episode_and_auth, set_system_fields):
 	"""Returns 404 when episode is complete but s3_key is not set."""
 	_, headers = episode_and_auth
 
@@ -158,10 +158,8 @@ async def test_download_episode_missing_s3_key(client, episode_and_auth):
 	})
 	episode_id = ep_response.json()["id"]
 
-	# Mark complete without setting s3_key
-	await client.put(f"/episodes/{episode_id}", headers=headers, json={
-		"generation_status": "complete"
-	})
+	# Mark complete without setting s3_key (system field — set as the pipeline does)
+	await set_system_fields(episode_id, generation_status="complete")
 
 	response = await client.get(f"/episodes/{episode_id}/download", headers=headers)
 	assert response.status_code == 404

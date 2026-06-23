@@ -202,6 +202,43 @@ async def test_update_project_multiple_fields(client, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_update_project_ignores_ownership_fields(client, auth_headers):
+	"""A PUT carrying ownership/system fields must not reassign them
+	(mass-assignment guard); user-editable fields in the same request still apply."""
+	create_response = await client.post("/projects", headers=auth_headers, json={
+		"name": "Original Name",
+		"podcast_metadata": {
+			"show_title": "Show", "author": "Author", "description": "Desc"
+		}
+	})
+	created = create_response.json()
+	project_id = created["id"]
+	original_user_id = created["user_id"]
+	original_tenant_id = created["tenant_id"]
+
+	response = await client.put(f"/projects/{project_id}", headers=auth_headers, json={
+		"name": "Renamed",
+		"id": str(uuid4()),
+		"user_id": str(uuid4()),
+		"tenant_id": str(uuid4()),
+	})
+	assert response.status_code == 200
+	data = response.json()
+	assert data["name"] == "Renamed"  # user-editable field applied
+	assert data["id"] == project_id  # ownership unchanged
+	assert data["user_id"] == original_user_id
+	assert data["tenant_id"] == original_tenant_id
+
+
+def test_project_allowlist_excludes_ownership_fields():
+	"""Defense-in-depth: the service allowlist must never include ownership/system fields."""
+	from src.services.project_service import PROJECT_USER_EDITABLE_FIELDS
+
+	protected = {"id", "user_id", "tenant_id", "created_at", "updated_at"}
+	assert protected.isdisjoint(PROJECT_USER_EDITABLE_FIELDS)
+
+
+@pytest.mark.asyncio
 async def test_update_nonexistent_project(client, auth_headers):
 	"""Test updating project that doesn't exist."""
 	fake_id = str(uuid4())

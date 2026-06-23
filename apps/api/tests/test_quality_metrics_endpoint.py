@@ -85,22 +85,58 @@ async def user_project_episode(client):
 
 
 @pytest.fixture
-async def episode_with_metrics(client, user_project_episode):
+async def episode_with_metrics(client, user_project_episode, set_system_fields):
 	"""Episode that has quality metrics stored in generation_progress."""
 	project_id, episode_id, headers = user_project_episode
 
-	# Inject quality metrics via episode update
-	update = await client.put(f"/episodes/{episode_id}", headers=headers, json={
-		"generation_status": "complete",
-		"generation_progress": {
+	# Inject quality metrics (system fields — set as the pipeline does)
+	await set_system_fields(
+		episode_id,
+		generation_status="complete",
+		generation_progress={
 			"stage": "complete",
 			"progress": 100,
 			"quality_metrics": SAMPLE_QUALITY_METRICS,
 		},
-	})
-	assert update.status_code == 200
+	)
 
 	return project_id, episode_id, headers
+
+
+@pytest.mark.asyncio
+async def test_store_metrics_persists_alongside_existing_progress(
+	client, user_project_episode, set_system_fields, test_db
+):
+	"""Regression (#271 review): storing quality metrics must persist even when the
+	episode already has a non-empty generation_progress. generation_progress is a
+	plain JSONB column, so the writer must build a NEW dict — mutating the existing
+	dict in place and reassigning the same reference would not register as a change
+	and the metrics would silently fail to commit."""
+	from unittest.mock import AsyncMock, MagicMock, patch
+	from uuid import UUID
+	from src.services.quality_metrics_service import QualityMetricsCalculator
+	from src.services.episode_service import get_episode_by_id
+
+	_, episode_id, _ = user_project_episode
+
+	# Episode already carries pipeline progress before metrics are calculated
+	await set_system_fields(
+		episode_id,
+		generation_progress={"stage": "complete", "progress": 100},
+	)
+
+	fake_metrics = MagicMock()
+	fake_metrics.to_dict.return_value = SAMPLE_QUALITY_METRICS
+	with patch.object(
+		QualityMetricsCalculator, "calculate_metrics",
+		new=AsyncMock(return_value=fake_metrics),
+	):
+		await QualityMetricsCalculator().calculate_and_store_metrics(test_db, episode_id)
+
+	# Re-fetch from the DB: both the pre-existing progress and the new metrics survive
+	episode = await get_episode_by_id(test_db, UUID(episode_id))
+	assert episode.generation_progress.get("stage") == "complete"  # preserved
+	assert episode.generation_progress.get("quality_metrics") == SAMPLE_QUALITY_METRICS
 
 
 # ============================================================================
@@ -261,16 +297,14 @@ async def test_get_project_quality_metrics_with_episodes(client, episode_with_me
 
 
 @pytest.mark.asyncio
-async def test_get_project_quality_metrics_multiple_episodes(client, user_project_episode):
+async def test_get_project_quality_metrics_multiple_episodes(client, user_project_episode, set_system_fields):
 	"""Test aggregation with multiple episodes having different quality metrics."""
 	project_id, episode_id, headers = user_project_episode
 
 	# Update first episode with good metrics
-	await client.put(f"/episodes/{episode_id}", headers=headers, json={
-		"generation_progress": {
-			"stage": "complete",
-			"quality_metrics": SAMPLE_QUALITY_METRICS,
-		},
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
 	})
 
 	# Create a second episode with poor metrics
@@ -283,11 +317,9 @@ async def test_get_project_quality_metrics_multiple_episodes(client, user_projec
 		},
 	})
 	ep2_id = ep2.json()["id"]
-	await client.put(f"/episodes/{ep2_id}", headers=headers, json={
-		"generation_progress": {
-			"stage": "complete",
-			"quality_metrics": POOR_QUALITY_METRICS,
-		},
+	await set_system_fields(ep2_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": POOR_QUALITY_METRICS,
 	})
 
 	response = await client.get(
@@ -363,16 +395,14 @@ async def test_list_project_episode_metrics_with_data(client, episode_with_metri
 
 
 @pytest.mark.asyncio
-async def test_list_project_episode_metrics_pagination(client, user_project_episode):
+async def test_list_project_episode_metrics_pagination(client, user_project_episode, set_system_fields):
 	"""Test pagination parameters."""
 	project_id, episode_id, headers = user_project_episode
 
 	# Add metrics to episode 1
-	await client.put(f"/episodes/{episode_id}", headers=headers, json={
-		"generation_progress": {
-			"stage": "complete",
-			"quality_metrics": SAMPLE_QUALITY_METRICS,
-		},
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
 	})
 
 	# Create episodes 2 and 3 with metrics
@@ -385,11 +415,9 @@ async def test_list_project_episode_metrics_pagination(client, user_project_epis
 				"description": f"Description {i}",
 			},
 		})
-		await client.put(f"/episodes/{ep.json()['id']}", headers=headers, json={
-			"generation_progress": {
-				"stage": "complete",
-				"quality_metrics": SAMPLE_QUALITY_METRICS,
-			},
+		await set_system_fields(ep.json()["id"], generation_progress={
+			"stage": "complete",
+			"quality_metrics": SAMPLE_QUALITY_METRICS,
 		})
 
 	# Page 1 with page_size=2
@@ -417,16 +445,14 @@ async def test_list_project_episode_metrics_pagination(client, user_project_epis
 
 
 @pytest.mark.asyncio
-async def test_list_project_episode_metrics_sort_by_overall_score(client, user_project_episode):
+async def test_list_project_episode_metrics_sort_by_overall_score(client, user_project_episode, set_system_fields):
 	"""Test sorting by overall_score."""
 	project_id, episode_id, headers = user_project_episode
 
 	# Good episode
-	await client.put(f"/episodes/{episode_id}", headers=headers, json={
-		"generation_progress": {
-			"stage": "complete",
-			"quality_metrics": SAMPLE_QUALITY_METRICS,
-		},
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
 	})
 
 	# Poor episode
@@ -438,11 +464,9 @@ async def test_list_project_episode_metrics_sort_by_overall_score(client, user_p
 			"description": "Poor quality",
 		},
 	})
-	await client.put(f"/episodes/{ep2.json()['id']}", headers=headers, json={
-		"generation_progress": {
-			"stage": "complete",
-			"quality_metrics": POOR_QUALITY_METRICS,
-		},
+	await set_system_fields(ep2.json()["id"], generation_progress={
+		"stage": "complete",
+		"quality_metrics": POOR_QUALITY_METRICS,
 	})
 
 	# Sort descending by overall_score (best first)

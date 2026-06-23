@@ -1,49 +1,41 @@
-# Issue #225 — docs: rewrite CLAUDE.md/README for the SaaS monorepo; fix refs, auth, JWT drift; remove cruft & IP
+# Issue #271 — Restrict episode/project update to user-editable fields (mass-assignment)
 
-Plan source: issue body (acceptance criteria). Verified against current repo 2026-06-22.
+Branch: `advisor/005-restrict-update-mass-assignment`
+Plan source: issue body + `plans/005-restrict-update-mass-assignment.md` (no drift vs defc572)
 
-## Steps
+## Key adaptation vs the written plan
+The plan assumed only the Celery pipeline (`tasks/callbacks.py`) writes system fields and
+that nothing internal uses `update_episode`. **Two internal callers actually write system
+fields through `update_episode`:**
+- `script_generation_service.py:220` → `transcript_path`
+- `quality_metrics_service.py:193` → `generation_progress` — **already broken**: calls
+  `update_episode(db, episode_id, {dict})` but the signature is `(db, episode, EpisodeUpdate)`;
+  `dict.model_dump()` would raise in production (only passes today because the test mocks it).
 
-1. **Rewrite `CLAUDE.md` for the monorepo**
-   - Describe PodcastStudioHub SaaS monorepo: `apps/api` (FastAPI + Celery + Postgres + Alembic + JWT auth), `apps/web` (Next.js), `deployment/`.
-   - Add a scoped **Upstream Podcastfy Engine** subsection for the root `podcastfy/` package (keep useful engine details, clearly scoped).
-   - Fix dev commands to target the monorepo, not the upstream engine.
+So a blanket allowlist on `update_episode` would silently drop these legitimate writes.
+Adaptation: give the pipeline a dedicated `set_episode_system_fields()` writer and reserve
+`update_episode` (allowlisted) for the public endpoint. This also fixes the latent bug.
 
-2. **Fix `README.md` dead refs + auth wording**
-   - `requirements.txt` (line 110) → drop pip line, `uv sync` only.
-   - `docker-compose.yml` (tree line 291) → remove.
-   - `deployment/QUICKSTART.md` & `DEPLOYMENT.md` (tree 274-275) → `deployment/README.md`.
-   - `UPSTREAM_SYNC.md` (420/423) → remove dead refs, inline the note.
-   - Auth: lines 13 & 70 "session-based" / "session management" → JWT-based.
+## Steps (TDD)
+- [ ] **Schema** `schemas/episode.py`: `EpisodeUpdate` keeps only user-editable fields —
+      `episode_number`, `episode_metadata`, `tts_config_id`, `template_id`. Remove
+      `generation_status`, `generation_progress`, `s3_key`, `s3_url`, `duration_seconds`,
+      `file_size_bytes`, `file_path`, `transcript_path`, `task_id`, `task_started_at`,
+      `task_completed_at`.
+- [ ] **episode_service.py**: add `EPISODE_USER_EDITABLE_FIELDS` constant; filter in
+      `update_episode` (defense-in-depth). Add `set_episode_system_fields(db, episode, **fields)`
+      internal helper.
+- [ ] **script_generation_service.py:220-221**: write `transcript_path` via
+      `set_episode_system_fields`.
+- [ ] **quality_metrics_service.py:193**: write `generation_progress` via
+      `set_episode_system_fields` (fixes broken signature).
+- [ ] **project_service.py**: add `PROJECT_USER_EDITABLE_FIELDS` allowlist + filter in
+      `update_project`. `ProjectUpdate` schema unchanged (all 6 fields are user-editable).
+- [ ] **Tests**: episodes — PUT system fields ⇒ columns unchanged; user-editable update works.
+      projects — allowlist holds; normal update works. Update `test_quality_metrics` for the
+      new `set_episode_system_fields` call. Confirm `test_script_generation` still passes.
+- [ ] Verify: `uv run pytest tests/ -k "episode or project or quality or script" -q` + `ruff check .`
+- [ ] Update `plans/README.md` status row.
 
-3. **Fix JWT_ALGORITHM drift** — root `.env.example:17` `RS256` → `HS256` (matches `apps/api/src/config.py:33`). Keep file.
-
-4. **Replace hardcoded IP `47.88.89.175`** with `<SERVER_IP>` placeholder:
-   - `README.md` (1), `deployment/README.md` (30), `.github/DEPLOYMENT_SETUP.md` (4).
-
-5. **Remove dev cruft** (git rm tracked):
-   - `smoke-test-report-2025-11-11.md`, `schema-comparison-report-2025-11-11.md`, `coverage/combined-coverage-report.md`
-   - `TESTING_AUTOMATION_ANALYSIS.md`, `TESTING_GUIDE.md`, `TESTING_GUIDE_MANUAL.md`
-   - `apps/api/check_indexes.py`, `apps/api/verify_schema.py`, `apps/api/test_basic_operations.py`
-   - `apps/api/.apm/` (stray placeholder — 2 files)
-   - rm gitignored working-tree `demo.md` (root, apps/web, apps/api)
-
-6. **gitignore runtime output dirs** — add `coverage/`, `test-results/`, `playwright-report/`, `/data/` to `.gitignore`.
-   - `__pycache__/` already ignored; rm stale working dirs locally (no repo change).
-
-## Acceptance criteria
-- [ ] CLAUDE.md describes monorepo + scoped upstream-engine subsection
-- [ ] README dead refs fixed; auth described as JWT
-- [ ] root .env.example HS256
-- [ ] hardcoded IP replaced everywhere
-- [ ] dated reports, demo.md, apps/api scratch scripts deleted
-- [ ] coverage/, data/, test-results/, playwright-report/ gitignored
-- [ ] empty .apm placeholder deleted; stale __pycache__ handled
-
-## Deviations / notes
-- `TESTING_*.md`: issue groups as cruft; stale Nov-2025 guides → delete per issue.
-- Root `.env.example` kept & fixed (not deleted) — only full-stack example with Postgres/Redis/NextAuth vars.
-- `data/` has committed upstream sample mp3s; gitignore prevents new runtime data only, won't untrack samples.
-- `__pycache__` already gitignored — no repo change needed.
-- Root `.apm/` left intact; only stray `apps/api/.apm/` removed.
-- Docs-drift root cause (m13v comment) → out of scope of acceptance criteria; noted as Known Limitation, no regen/CI guard built (YAGNI).
+## Out of scope (unchanged)
+`tasks/**` (sync Celery writers via `_update_episode`), DB columns, auth/ownership.

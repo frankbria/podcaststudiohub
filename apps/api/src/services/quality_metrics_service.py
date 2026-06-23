@@ -36,7 +36,7 @@ import statistics
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .episode_service import get_episode_by_id, update_episode
+from .episode_service import get_episode_by_id, set_episode_system_fields
 
 
 logger = logging.getLogger(__name__)
@@ -185,12 +185,15 @@ class QualityMetricsCalculator:
 		# Calculate metrics
 		metrics = await self.calculate_metrics(episode_id, transcript_path)
 
-		# Update episode.generation_progress with quality metrics
-		current_progress = episode.generation_progress or {}
+		# Update episode.generation_progress with quality metrics. Build a NEW dict
+		# rather than mutating episode.generation_progress in place: plain JSONB
+		# columns don't track in-place mutation, and reassigning the same object
+		# reference would not register as a change, so the metrics might never persist.
+		current_progress = dict(episode.generation_progress or {})
 		current_progress["quality_metrics"] = metrics.to_dict()
 
-		# Update episode in database
-		await update_episode(db, episode_id, {"generation_progress": current_progress})
+		# Update episode in database (generation_progress is a system-managed field)
+		await set_episode_system_fields(db, episode, generation_progress=current_progress)
 
 		self.logger.info(
 			f"Stored quality metrics in episode {episode_id} generation_progress"

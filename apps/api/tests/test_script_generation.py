@@ -160,7 +160,7 @@ async def test_generate_script_success(
 	"""Test successful script generation with valid transcript."""
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_episode') as mock_update_episode, \
+		 patch('src.services.script_generation_service.set_episode_system_fields') as mock_update_episode, \
 		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status, \
 		 patch.object(generation_service, '_call_gemini_api', return_value=valid_transcript) as mock_gemini, \
 		 patch('builtins.open', mock_open()):
@@ -221,7 +221,7 @@ async def test_generate_script_with_template_config(
 
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_episode'), \
+		 patch('src.services.script_generation_service.set_episode_system_fields'), \
 		 patch('src.services.script_generation_service.update_generation_status'), \
 		 patch.object(generation_service, '_call_gemini_api', return_value=valid_transcript) as mock_gemini, \
 		 patch('builtins.open', mock_open()):
@@ -254,7 +254,7 @@ async def test_generate_script_longform(
 	"""Test long-form script generation."""
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_episode'), \
+		 patch('src.services.script_generation_service.set_episode_system_fields'), \
 		 patch('src.services.script_generation_service.update_generation_status'), \
 		 patch.object(generation_service, '_call_gemini_api', return_value=valid_transcript) as mock_gemini, \
 		 patch('builtins.open', mock_open()):
@@ -291,7 +291,7 @@ async def test_status_transition_draft_to_complete(
 	"""Test status transitions: draft → queued → generating → complete."""
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_episode'), \
+		 patch('src.services.script_generation_service.set_episode_system_fields'), \
 		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status, \
 		 patch.object(generation_service, '_call_gemini_api', return_value=valid_transcript), \
 		 patch('builtins.open', mock_open()):
@@ -317,7 +317,7 @@ async def test_status_transition_queued_to_complete(
 	"""Test status transitions from queued: queued → generating → complete."""
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_episode'), \
+		 patch('src.services.script_generation_service.set_episode_system_fields'), \
 		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status, \
 		 patch.object(generation_service, '_call_gemini_api', return_value=valid_transcript), \
 		 patch('builtins.open', mock_open()):
@@ -398,7 +398,7 @@ async def test_generate_script_empty_content(
 
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_episode'), \
+		 patch('src.services.script_generation_service.set_episode_system_fields'), \
 		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status:
 
 		mock_get_episode.return_value = draft_episode
@@ -518,7 +518,7 @@ async def test_generate_script_multiple_sources(
 	"""Test script generation with multiple content sources."""
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_episode'), \
+		 patch('src.services.script_generation_service.set_episode_system_fields'), \
 		 patch('src.services.script_generation_service.update_generation_status'), \
 		 patch.object(generation_service, '_call_gemini_api', return_value=valid_transcript) as mock_gemini, \
 		 patch('builtins.open', mock_open()):
@@ -714,7 +714,7 @@ async def test_generation_progress_updates(
 	"""Test generation_progress JSONB is updated correctly."""
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_episode'), \
+		 patch('src.services.script_generation_service.set_episode_system_fields'), \
 		 patch('src.services.script_generation_service.update_generation_status') as mock_update_status, \
 		 patch.object(generation_service, '_call_gemini_api', return_value=valid_transcript), \
 		 patch('builtins.open', mock_open()):
@@ -1023,7 +1023,7 @@ async def test_generate_script_retry_on_validation_failure(
 
 	with patch('src.services.script_generation_service.get_episode_by_id') as mock_get_episode, \
 		 patch('src.services.script_generation_service.get_content_sources') as mock_get_sources, \
-		 patch('src.services.script_generation_service.update_episode'), \
+		 patch('src.services.script_generation_service.set_episode_system_fields'), \
 		 patch('src.services.script_generation_service.update_generation_status'), \
 		 patch.object(generation_service, '_call_gemini_api', side_effect=side_effects) as mock_gemini, \
 		 patch('builtins.open', mock_open()):

@@ -22,6 +22,19 @@ from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
 VALID_SORT_FIELDS = {"episode_number", "created_at", "duration_seconds"}
 VALID_SORT_ORDERS = {"asc", "desc"}
 
+# Fields an end user may set through the public update endpoint. Everything else
+# (generation_status, generation_progress, s3_key/s3_url, duration_seconds,
+# file_size_bytes, file_path, transcript_path, task_*) is system-managed and is
+# written only by the generation pipeline via set_episode_system_fields(). This
+# allowlist is the source of truth: a system field re-added to EpisodeUpdate stays
+# unwritable until it is deliberately added here.
+EPISODE_USER_EDITABLE_FIELDS = {
+	"episode_number",
+	"episode_metadata",
+	"tts_config_id",
+	"template_id",
+}
+
 
 async def create_episode(
 	db: AsyncSession,
@@ -248,6 +261,37 @@ async def update_episode(
 	"""
 	update_dict = update_data.model_dump(exclude_unset=True)
 	for field, value in update_dict.items():
+		if field not in EPISODE_USER_EDITABLE_FIELDS:
+			# Never mass-assign system-managed fields, even if a future schema
+			# change re-adds one to EpisodeUpdate.
+			continue
+		setattr(episode, field, value)
+
+	await db.commit()
+	return episode
+
+
+async def set_episode_system_fields(
+	db: AsyncSession,
+	episode: Episode,
+	**fields,
+) -> Episode:
+	"""Write pipeline-managed (system) episode fields directly.
+
+	For internal use by the generation pipeline only (e.g. transcript_path,
+	generation_progress, s3_key). This intentionally bypasses the
+	EPISODE_USER_EDITABLE_FIELDS allowlist that guards update_episode, so it must
+	never be reachable from a request handler with user-controlled field names.
+
+	Args:
+		db: Database session
+		episode: Existing episode instance
+		**fields: Episode column names mapped to their new values
+
+	Returns:
+		Updated Episode instance
+	"""
+	for field, value in fields.items():
 		setattr(episode, field, value)
 
 	await db.commit()

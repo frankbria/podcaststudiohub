@@ -30,7 +30,7 @@ export type EpisodeFormData = z.infer<typeof episodeSchema>
 export const contentSourceSchema = z
   .object({
     sourceType: z.enum(["url", "text"], {
-      errorMap: () => ({ message: "Select URL or Text" }),
+      error: () => "Select URL or Text",
     }),
     url: z
       .string()

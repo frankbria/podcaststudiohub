@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Sun01Icon, Moon01Icon, Computer01Icon } from "@hugeicons/core-free-icons"
+import { Sun01Icon, Moon01Icon, ComputerIcon } from "@hugeicons/core-free-icons"
 
 export function ThemeToggle() {
   const { theme, setTheme, resolvedTheme } = useTheme()
@@ -53,7 +53,7 @@ export function ThemeToggle() {
           onClick={() => setTheme("system")}
           aria-checked={theme === "system"}
         >
-          <HugeiconsIcon icon={Computer01Icon} size={16} />
+          <HugeiconsIcon icon={ComputerIcon} size={16} />
           System
         </DropdownMenuItem>
       </DropdownMenuContent>

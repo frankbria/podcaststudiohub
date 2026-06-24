@@ -33,7 +33,7 @@ interface Episode {
   id: string
   episode_metadata: { title: string; description: string }
   generation_status: string
-  generation_progress: GenerationProgress
+  generation_progress?: GenerationProgress
   s3_url: string | null
   project_id: string
   tts_config_id: string | null

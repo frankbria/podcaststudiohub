@@ -189,6 +189,10 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
+      - name: Run TypeScript type check
+        working-directory: apps/web
+        run: npm run typecheck
+
       - name: Run Jest with coverage
         working-directory: apps/web
         run: |

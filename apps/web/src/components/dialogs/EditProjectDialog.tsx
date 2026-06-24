@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { projectSchema, type ProjectFormData } from "@/lib/validation"
 
-interface Project {
+export interface Project {
   id: string
   title: string
   description: string | null

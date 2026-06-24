@@ -15,7 +15,7 @@ import { showSuccessToast, showErrorToast } from "@/lib/toast"
 import { DashboardSkeleton } from "@/components/skeletons/DashboardSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
 import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
-import { EditProjectDialog } from "@/components/dialogs/EditProjectDialog"
+import { EditProjectDialog, type Project as EditableProject } from "@/components/dialogs/EditProjectDialog"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { FolderOpenIcon, PencilEdit01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 
@@ -113,7 +113,7 @@ export default function DashboardPage() {
     }
   }
 
-  const handleUpdateProject = async (updated: Project) => {
+  const handleUpdateProject = async (updated: EditableProject) => {
     try {
       const response = await fetch(
         `/api/proxy/projects/${updated.id}`,

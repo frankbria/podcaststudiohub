@@ -16,9 +16,9 @@ import { EpisodeListSkeleton } from "@/components/skeletons/EpisodeListSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
 import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
 import { EditProjectDialog } from "@/components/dialogs/EditProjectDialog"
-import { EditEpisodeDialog } from "@/components/dialogs/EditEpisodeDialog"
+import { EditEpisodeDialog, type Episode as EditableEpisode } from "@/components/dialogs/EditEpisodeDialog"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { Inbox01Icon, PencilEdit01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
+import { InboxIcon, PencilEdit01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 
 interface Episode {
   id: string
@@ -169,7 +169,7 @@ export default function ProjectPage() {
     }
   }
 
-  const handleUpdateEpisode = async (updated: Episode) => {
+  const handleUpdateEpisode = async (updated: EditableEpisode) => {
     try {
       const response = await fetch(
         `/api/proxy/episodes/${updated.id}`,
@@ -285,7 +285,7 @@ export default function ProjectPage() {
 
         {episodes.length === 0 ? (
           <EmptyState
-            icon={<HugeiconsIcon icon={Inbox01Icon} size={64} />}
+            icon={<HugeiconsIcon icon={InboxIcon} size={64} />}
             title="No episodes in this project"
             description="Create an episode to start generating podcasts"
             action={{

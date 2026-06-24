@@ -102,10 +102,11 @@ async def register(
     except HTTPException:
         # Re-raise HTTPExceptions from create_user (duplicate email, etc.)
         raise
-    except Exception as e:
+    except Exception:
+        logger.exception("Registration failed")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Registration failed: {str(e)}"
+            detail="Registration failed. Please try again."
         )
 
 

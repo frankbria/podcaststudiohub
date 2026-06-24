@@ -6,6 +6,8 @@ feeds. The public feed endpoint requires no authentication, while management
 endpoints require a valid JWT token.
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +19,8 @@ from ..models import User
 from ..schemas.rss_feed import RSSFeedResponse, RSSFeedUpdate
 from ..services.rss_generation_service import RSSGenerationService
 from ..services.project_service import get_project_by_id
+
+logger = logging.getLogger(__name__)
 
 # Authenticated management endpoints nested under /projects
 router = APIRouter(tags=["rss-feed"])
@@ -85,10 +89,11 @@ async def generate_rss_feed(
 			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
 			detail=str(e),
 		)
-	except Exception as e:
+	except Exception:
+		logger.exception("Failed to generate RSS feed for project %s", project_id)
 		raise HTTPException(
 			status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-			detail=f"Failed to generate RSS feed: {str(e)}",
+			detail="Failed to generate RSS feed.",
 		)
 
 	return rss_feed
@@ -197,10 +202,11 @@ async def update_rss_feed(
 			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
 			detail=str(e),
 		)
-	except Exception as e:
+	except Exception:
+		logger.exception("Failed to regenerate RSS feed for project %s", project_id)
 		raise HTTPException(
 			status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-			detail=f"Failed to regenerate RSS feed: {str(e)}",
+			detail="Failed to regenerate RSS feed.",
 		)
 
 	return rss_feed
@@ -248,10 +254,11 @@ async def get_public_rss_feed(
 	# Fetch XML from S3
 	try:
 		xml_content = await _fetch_rss_from_s3(rss_service, rss_feed.s3_key)
-	except Exception as e:
+	except Exception:
+		logger.exception("Failed to fetch RSS feed for project %s", project_id)
 		raise HTTPException(
 			status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-			detail=f"Failed to fetch RSS feed: {str(e)}",
+			detail="Failed to fetch RSS feed.",
 		)
 
 	return Response(

@@ -164,6 +164,27 @@ async def test_generate_rss_feed_invalid_metadata(client, project_with_metadata)
 	assert "show_title" in response.json()["detail"]
 
 
+@pytest.mark.asyncio
+async def test_generate_rss_feed_internal_error_hides_details(client, project_with_metadata):
+	"""500 from an unexpected error returns a generic message, not exception internals."""
+	project_id, headers = project_with_metadata
+	secret = "boto3 AccessDenied arn:aws:s3:::secret-bucket"
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.generate_rss_for_project.side_effect = RuntimeError(secret)
+		MockService.return_value = mock_instance
+
+		response = await client.post(
+			f"/projects/{project_id}/rss-feed/generate",
+			headers=headers,
+		)
+
+	assert response.status_code == 500
+	assert response.json()["detail"] == "Failed to generate RSS feed."
+	assert secret not in response.text
+
+
 # ============================================================================
 # GET /projects/{project_id}/rss-feed
 # ============================================================================
@@ -295,6 +316,28 @@ async def test_update_rss_feed_requires_auth(client, project_with_metadata):
 	assert response.status_code == 401
 
 
+@pytest.mark.asyncio
+async def test_update_rss_feed_internal_error_hides_details(client, project_with_metadata):
+	"""500 during regeneration returns a generic message, not exception internals."""
+	project_id, headers = project_with_metadata
+	secret = "psycopg constraint rss_feeds_pkey violated"
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.generate_rss_for_project.side_effect = RuntimeError(secret)
+		MockService.return_value = mock_instance
+
+		response = await client.put(
+			f"/projects/{project_id}/rss-feed",
+			headers=headers,
+			json={"podcast_metadata": {"show_title": "New Title"}},
+		)
+
+	assert response.status_code == 500
+	assert response.json()["detail"] == "Failed to regenerate RSS feed."
+	assert secret not in response.text
+
+
 # ============================================================================
 # GET /feeds/{project_id}/podcast.xml (public endpoint)
 # ============================================================================
@@ -356,6 +399,26 @@ async def test_public_feed_not_found_when_no_feed(client, project_with_metadata)
 
 	assert response.status_code == 404
 	assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_public_feed_internal_error_hides_details(client, project_with_metadata):
+	"""500 while fetching from S3 returns a generic message, not exception internals."""
+	project_id, _ = project_with_metadata
+	secret = "S3 NoSuchKey rss-feeds/internal/path.xml"
+	mock_feed = make_mock_rss_feed(project_id)
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService, \
+	     patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(side_effect=RuntimeError(secret))):
+		mock_instance = AsyncMock()
+		mock_instance.get_rss_feed.return_value = mock_feed
+		MockService.return_value = mock_instance
+
+		response = await client.get(f"/feeds/{project_id}/podcast.xml")
+
+	assert response.status_code == 500
+	assert response.json()["detail"] == "Failed to fetch RSS feed."
+	assert secret not in response.text
 
 
 @pytest.mark.asyncio

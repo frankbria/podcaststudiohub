@@ -212,6 +212,27 @@ async def test_register_success(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_register_internal_error_hides_details(client: AsyncClient):
+    """500 from an unexpected error returns a generic message, not exception internals."""
+    from unittest.mock import patch
+
+    secret = "asyncpg UniqueViolationError users_email_key constraint"
+    with patch("src.routers.auth.create_user", side_effect=RuntimeError(secret)):
+        response = await client.post(
+            "/auth/register",
+            json={
+                "email": "boom@example.com",
+                "password": "SecurePass123!",
+                "full_name": "Boom User",
+            },
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Registration failed. Please try again."
+    assert secret not in response.text
+
+
+@pytest.mark.asyncio
 async def test_register_duplicate_email(client: AsyncClient):
     """Test registration with duplicate email"""
     user_data = {

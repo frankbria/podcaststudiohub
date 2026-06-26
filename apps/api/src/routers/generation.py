@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -279,38 +279,63 @@ async def generate_podcast(
                 episode_id, episode.project_id,
             )
 
-    # Start Celery task. apply_async (not .delay) so we can attach a link_error:
-    # if the task is hard-killed (time limit) or crashes before its own except
-    # handler runs, on_workflow_failure still flips the episode to 'failed' instead
-    # of leaving it stuck at 'queued' forever (issue #294).
-    task = generate_podcast_task.apply_async(
-        kwargs={
-            "episode_id": str(episode_id),
-            "urls": urls if urls else None,
-            "text_content": "\n\n".join(text_content) if text_content else None,
-            "enable_composition": use_composition,
-            "enable_distribution": use_distribution,
-            **extra_kwargs,
-        },
-        link_error=on_workflow_failure.s(
-            episode_id=str(episode_id), task_name="generate_podcast"
-        ),
-    )
+    # Commit 'queued' BEFORE dispatch so the worker's #295 idempotency guard never
+    # observes the pre-regeneration status (e.g. 'complete') and skip a legitimate
+    # run. The task id is pre-generated and passed to apply_async so the status can
+    # be persisted with celery_task_id ahead of enqueue. Stamp task_started_at so
+    # the beat reaper can detect a genuinely-stuck run by age (issue #294).
+    # Snapshot the prior (restartable) state so an enqueue failure can restore it
+    # rather than clobbering a still-valid 'complete' episode (issue #295).
+    prior_status = episode.generation_status
+    prior_progress = episode.generation_progress
 
-    # Update episode status. Stamp task_started_at so the beat reaper can detect a
-    # genuinely-stuck run by age (issue #294).
+    new_task_id = str(uuid4())
     episode.generation_status = "queued"
     episode.task_started_at = datetime.now(timezone.utc)
     episode.generation_progress = {
         "stage": "queued",
         "progress": 0,
-        "celery_task_id": task.id,
+        "celery_task_id": new_task_id,
     }
     await db.commit()
 
+    # Start Celery task. apply_async (not .delay) so we can attach a link_error:
+    # if the task is hard-killed (time limit) or crashes before its own except
+    # handler runs, on_workflow_failure still flips the episode to 'failed' instead
+    # of leaving it stuck at 'queued' forever (issue #294).
+    try:
+        generate_podcast_task.apply_async(
+            kwargs={
+                "episode_id": str(episode_id),
+                "urls": urls if urls else None,
+                "text_content": "\n\n".join(text_content) if text_content else None,
+                "enable_composition": use_composition,
+                "enable_distribution": use_distribution,
+                **extra_kwargs,
+            },
+            task_id=new_task_id,
+            link_error=on_workflow_failure.s(
+                episode_id=str(episode_id), task_name="generate_podcast"
+            ),
+        )
+    except Exception as exc:
+        # Enqueue failed (broker down/rejected) AFTER we committed 'queued'. Restore
+        # the prior restartable status so the episode is immediately retryable and a
+        # still-valid 'complete' episode stays downloadable — not stuck 'queued'
+        # until the reaper, nor wrongly marked 'failed' (issue #295).
+        logger.error("Failed to enqueue generation for episode %s: %s", episode_id, exc)
+        episode.generation_status = prior_status
+        episode.generation_progress = prior_progress
+        episode.task_started_at = None
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not start generation (task queue unavailable); please retry.",
+        )
+
     return {
         "episode_id": str(episode_id),
-        "task_id": task.id,
+        "task_id": new_task_id,
         "status": "queued",
         "message": "Podcast generation started",
     }

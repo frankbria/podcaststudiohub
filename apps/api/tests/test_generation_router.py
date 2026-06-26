@@ -457,6 +457,59 @@ async def test_generate_allowed_from_restartable_status(restartable_status):
     # flips the episode to 'failed', and task_started_at is stamped for the reaper.
     assert mock_delay.call_args.kwargs["link_error"] is not None
     assert episode.task_started_at is not None
+    # Issue #295: 'queued' is committed BEFORE dispatch (so the worker's idempotency
+    # guard can't see the pre-regeneration 'complete' and skip the run), and the
+    # pre-generated task_id is both dispatched and returned.
+    assert db.commit.called
+    dispatched_task_id = mock_delay.call_args.kwargs["task_id"]
+    assert dispatched_task_id == result["task_id"]
+    assert episode.generation_progress["celery_task_id"] == dispatched_task_id
+
+
+@pytest.mark.asyncio
+async def test_generate_enqueue_failure_restores_prior_status():
+    """If apply_async raises after committing 'queued', the episode is restored to its
+    prior restartable status (a still-valid 'complete' stays complete, not stuck
+    'queued' nor wrongly 'failed') and a 503 is returned (issue #295)."""
+    from src.routers.generation import generate_podcast
+
+    episode = MagicMock()
+    episode.generation_status = "complete"
+    episode.tts_config = None
+    episode.template = None
+    episode.project = None
+
+    source = MagicMock()
+    source.source_type = "text"
+    source.extraction_status = "complete"
+    source.extracted_content = _TEXT_BODY
+
+    episode_result = MagicMock()
+    episode_result.unique.return_value.scalar_one_or_none.return_value = episode
+    content_result = MagicMock()
+    content_result.scalars.return_value.all.return_value = [source]
+
+    db = AsyncMock()
+    db.execute.side_effect = [episode_result, content_result]
+
+    current_user = MagicMock()
+    current_user.tenant_id = uuid4()
+
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
+        mock_delay.side_effect = ConnectionError("broker down")
+        with pytest.raises(HTTPException) as exc_info:
+            await generate_podcast(
+                episode_id=uuid4(),
+                enable_composition=False,
+                enable_distribution=False,
+                current_user=current_user,
+                db=db,
+            )
+
+    assert exc_info.value.status_code == 503
+    # Prior 'complete' restored: still-valid audio stays downloadable and retryable.
+    assert episode.generation_status == "complete"
+    assert episode.task_started_at is None
 
 
 @pytest.mark.parametrize(

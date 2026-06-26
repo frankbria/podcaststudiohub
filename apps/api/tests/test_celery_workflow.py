@@ -893,7 +893,9 @@ class TestFailurePathsWriteDbStatus:
             result = pg.generate_podcast_task.run(episode_id=ep_id)
 
         assert result["status"] == "failed"
-        mock_upd.assert_called_once()
+        # Entry guard now writes 'generating' first (issue #295); the failure path
+        # write is the last call, validated below.
+        mock_upd.assert_called()
         assert mock_upd.call_args.kwargs["updates"]["generation_status"] == "failed"
 
     def test_retry_exhaustion_writes_failed(self):
@@ -912,5 +914,7 @@ class TestFailurePathsWriteDbStatus:
             result = task.run(episode_id=ep_id)
 
         assert result["status"] == "failed"
-        mock_upd.assert_called_once()
+        # Entry guard now writes 'generating' first (issue #295); the failure path
+        # write is the last call, validated below.
+        mock_upd.assert_called()
         assert mock_upd.call_args.kwargs["updates"]["generation_status"] == "failed"

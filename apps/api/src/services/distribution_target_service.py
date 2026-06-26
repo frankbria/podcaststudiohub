@@ -13,9 +13,11 @@ from typing import Optional
 from uuid import UUID
 
 import httpx
+from redis import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
 
+from ..config import settings
 from ..models.distribution_target import DistributionTarget
 from ..schemas.distribution_target import (
 	WebhookDistributionCreate,
@@ -71,18 +73,28 @@ async def _decrypt_sensitive_headers(db: AsyncSession, headers: dict) -> dict:
 	return result
 
 
-# In-memory OAuth state store: {state: {user_id: str, created_at: datetime}}
-# In production, replace with Redis for multi-instance support.
-_oauth_states: dict[str, dict] = {}
+# OAuth CSRF state is stored in Redis (keyed "oauth_state:<state>") so it works
+# across multiple API processes and survives restarts/deploys — a module dict
+# breaks both (issue #273). Redis TTL handles expiry, so no manual cleanup.
+_OAUTH_STATE_PREFIX = "oauth_state:"
 _STATE_TTL_SECONDS = 600  # 10 minutes
+
+
+def _redis() -> Redis:
+	"""Redis client for OAuth state, constructed from settings.REDIS_URL.
+
+	Mirrors how rate_limiter.py builds its client (same Redis instance, no new
+	infra). decode_responses=True so getdel returns str, not bytes.
+	"""
+	return Redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 
 def generate_oauth_state(user_id: str) -> str:
 	"""
 	Generate a CSRF state token for OAuth flows.
 
-	Stores the state in memory with a TTL of 10 minutes.
-	In production environments with multiple API instances, use Redis.
+	Stores the state in Redis under "oauth_state:<state>" with a 10-minute TTL,
+	so it is visible to any API process and cleaned up automatically on expiry.
 
 	Args:
 		user_id: ID of the user initiating the OAuth flow
@@ -91,53 +103,30 @@ def generate_oauth_state(user_id: str) -> str:
 		Secure random state token
 	"""
 	state = secrets.token_urlsafe(32)
-	_oauth_states[state] = {
-		"user_id": user_id,
-		"created_at": datetime.now(timezone.utc),
-	}
-	# Clean up expired states while we're here
-	_cleanup_expired_states()
+	_redis().setex(f"{_OAUTH_STATE_PREFIX}{state}", _STATE_TTL_SECONDS, str(user_id))
 	return state
 
 
 def validate_oauth_state(state: str) -> Optional[str]:
 	"""
-	Validate and consume an OAuth state token.
+	Validate and consume an OAuth state token (one-time use).
 
-	Returns the user_id if valid, None if invalid or expired.
-	Removes the state after validation (one-time use).
+	Uses an atomic GETDEL so a state cannot be replayed — concurrent callbacks
+	race for the single delete and only one wins. Fails closed: if Redis is
+	unreachable, returns None (reject) rather than accepting, because this is a
+	CSRF security control (unlike the rate limiter, which fails open).
 
 	Args:
 		state: OAuth state token to validate
 
 	Returns:
-		user_id string if valid, None if invalid/expired
+		user_id string if valid, None if invalid/expired/Redis error
 	"""
-	state_data = _oauth_states.get(state)
-	if not state_data:
+	try:
+		return _redis().getdel(f"{_OAUTH_STATE_PREFIX}{state}")
+	except Exception as exc:
+		logger.warning("OAuth state validation failed (Redis error) — rejecting: %s", exc)
 		return None
-
-	# Check TTL
-	age = datetime.now(timezone.utc) - state_data["created_at"]
-	if age.total_seconds() > _STATE_TTL_SECONDS:
-		del _oauth_states[state]
-		return None
-
-	# Consume the state (one-time use)
-	del _oauth_states[state]
-	return state_data["user_id"]
-
-
-def _cleanup_expired_states() -> None:
-	"""Remove expired OAuth states from memory."""
-	now = datetime.now(timezone.utc)
-	expired = [
-		state
-		for state, data in _oauth_states.items()
-		if (now - data["created_at"]).total_seconds() > _STATE_TTL_SECONDS
-	]
-	for state in expired:
-		del _oauth_states[state]
 
 
 async def create_webhook_target(

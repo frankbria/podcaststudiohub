@@ -224,11 +224,17 @@ class TestFinalizeEpisodeGenerationTask:
         mock_db.commit = MagicMock()
         return mock_db
 
-    def test_skips_s3_upload_when_bucket_not_configured(self):
-        """If AWS_S3_BUCKET is not set, episode is marked complete without S3 upload."""
+    def test_skips_s3_upload_when_bucket_not_configured(self, tmp_path):
+        """If AWS_S3_BUCKET is not set, episode is marked complete and the audio is
+        persisted off /tmp into LOCAL_AUDIO_STORAGE_PATH so it stays downloadable (#292)."""
         episode_id = str(uuid.uuid4())
         episode = _make_mock_episode(episode_id)
-        generation_result = self._make_generation_result()
+
+        # Real source file so the no-S3 branch can copy it to persistent storage.
+        src_audio = tmp_path / "episode-abc.mp3"
+        src_audio.write_bytes(b"FAKE_MP3")
+        storage_dir = tmp_path / "audio"
+        generation_result = self._make_generation_result(audio_file_path=str(src_audio))
         mock_db = self._make_db_context_manager(episode)
 
         with (
@@ -236,13 +242,17 @@ class TestFinalizeEpisodeGenerationTask:
             patch("src.tasks.podcast_generation.settings") as mock_settings,
         ):
             mock_settings.AWS_S3_BUCKET = None
+            mock_settings.LOCAL_AUDIO_STORAGE_PATH = str(storage_dir)
             result = self._invoke_finalize(episode_id, generation_result, mock_db)
 
         assert result["status"] == "success"
         assert episode.generation_status == "complete"
         assert episode.s3_url is None
         assert episode.s3_key is None
-        assert episode.file_path == "/tmp/episode-abc.mp3"
+        # file_path now points into persistent storage, not the ephemeral source
+        assert episode.file_path == str(storage_dir / f"episode-{episode_id}.mp3")
+        assert os.path.isfile(episode.file_path)
+        assert episode.file_path != str(src_audio)
 
     def test_populates_s3_url_on_successful_upload(self):
         """Episode.s3_url and s3_key are populated after successful S3 upload."""
@@ -380,12 +390,15 @@ class TestFinalizeEpisodeGenerationTask:
         expected_key = f"podcasts/user-{user_id}/episode-{episode_id}.mp3"
         assert captured.get("s3_key") == expected_key
 
-    def test_episode_stores_file_metadata(self):
+    def test_episode_stores_file_metadata(self, tmp_path):
         """Episode stores file_path, duration_seconds, file_size_bytes regardless of S3."""
         episode_id = str(uuid.uuid4())
         episode = _make_mock_episode(episode_id)
+        src_audio = tmp_path / "my-podcast.mp3"
+        src_audio.write_bytes(b"FAKE_MP3")
+        storage_dir = tmp_path / "audio"
         generation_result = self._make_generation_result(
-            audio_file_path="/tmp/my-podcast.mp3",
+            audio_file_path=str(src_audio),
             transcript_path="/tmp/my-podcast_transcript.txt",
             duration_seconds=450.5,
             file_size_bytes=9_999_999,
@@ -397,10 +410,14 @@ class TestFinalizeEpisodeGenerationTask:
             patch("src.tasks.podcast_generation.settings") as mock_settings,
         ):
             mock_settings.AWS_S3_BUCKET = None
+            mock_settings.LOCAL_AUDIO_STORAGE_PATH = str(storage_dir)
             result = self._invoke_finalize(episode_id, generation_result, mock_db)
 
         assert result["status"] == "success"
-        assert episode.file_path == "/tmp/my-podcast.mp3"
+        # No-S3 path persists audio off /tmp; transcript_path is untouched (#292)
+        assert episode.file_path == str(storage_dir / f"episode-{episode_id}.mp3")
+        assert episode.duration_seconds == 450.5
+        assert episode.file_size_bytes == 9_999_999
         assert episode.transcript_path == "/tmp/my-podcast_transcript.txt"
         assert episode.duration_seconds == 450.5
         assert episode.file_size_bytes == 9_999_999

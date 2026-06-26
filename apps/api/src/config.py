@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     AWS_S3_BUCKET: Optional[str] = None
     AWS_REGION: str = "us-east-1"
 
+    # Local audio storage (no-S3 fallback). When AWS_S3_BUCKET is unset, generated
+    # audio is persisted here and served from disk. MUST be a persistent, backed-up
+    # path in production — not ephemeral /tmp (issue #292).
+    LOCAL_AUDIO_STORAGE_PATH: str = "storage/audio"
+
     # Stripe billing (both required to enable billing; see billing_service)
     STRIPE_SECRET_KEY: Optional[str] = None
     STRIPE_WEBHOOK_SECRET: Optional[str] = None

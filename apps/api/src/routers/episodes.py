@@ -6,6 +6,7 @@ status filtering, and generation management. All endpoints require authenticatio
 and automatically enforce tenant isolation via RLS.
 """
 
+import os
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from fastapi.responses import StreamingResponse
@@ -35,7 +36,14 @@ from ..services.episode_service import (
 	VALID_SORT_ORDERS,
 )
 from ..services.storage_service import StorageService
-from ..utils.download_utils import get_episode_filename, parse_range_header, iter_s3_body
+from ..config import settings
+from ..utils.download_utils import (
+	get_episode_filename,
+	parse_range_header,
+	iter_s3_body,
+	iter_local_file,
+	is_within_dir,
+)
 
 router = APIRouter(prefix="/episodes", tags=["episodes"])
 
@@ -350,26 +358,39 @@ async def download_episode_audio(
 			detail=f"Episode not ready for download. Status: {episode.generation_status}"
 		)
 
-	if not episode.s3_key:
+	# Prefer S3 when an object key exists; otherwise fall back to local disk
+	# (no-S3 deployments persist the artifact to LOCAL_AUDIO_STORAGE_PATH — #292).
+	has_s3 = bool(episode.s3_key)
+	# Only serve local files that live under the configured audio store, so a
+	# bad/corrupted file_path can't expose an arbitrary local file (issue #292).
+	has_local = (
+		bool(episode.file_path)
+		and is_within_dir(episode.file_path, settings.LOCAL_AUDIO_STORAGE_PATH)
+		and os.path.isfile(episode.file_path)
+	)
+
+	if not has_s3 and not has_local:
 		raise HTTPException(
 			status_code=status.HTTP_404_NOT_FOUND,
 			detail="Episode audio file not found in storage"
 		)
 
-	storage = StorageService()
-
-	# Get file metadata from S3
-	head_response = storage.s3_client.head_object(
-		Bucket=storage.bucket_name,
-		Key=episode.s3_key
-	)
-	total_size = head_response["ContentLength"]
-
 	filename = get_episode_filename(episode)
 	http_status = 200
 	start_byte = 0
-	content_length = total_size
 	extra_headers = {}
+
+	if has_s3:
+		storage = StorageService()
+		head_response = storage.s3_client.head_object(
+			Bucket=storage.bucket_name,
+			Key=episode.s3_key
+		)
+		total_size = head_response["ContentLength"]
+	else:
+		total_size = os.path.getsize(episode.file_path)
+
+	content_length = total_size
 
 	if range:
 		# Parse range header - return 416 on invalid range
@@ -386,18 +407,22 @@ async def download_episode_audio(
 		content_length = end_byte - start_byte + 1
 		extra_headers["Content-Range"] = f"bytes {start_byte}-{end_byte}/{total_size}"
 
-		s3_response = storage.s3_client.get_object(
-			Bucket=storage.bucket_name,
-			Key=episode.s3_key,
-			Range=f"bytes={start_byte}-{end_byte}"
-		)
+	if has_s3:
+		if range:
+			s3_response = storage.s3_client.get_object(
+				Bucket=storage.bucket_name,
+				Key=episode.s3_key,
+				Range=f"bytes={start_byte}-{end_byte}"
+			)
+		else:
+			s3_response = storage.s3_client.get_object(
+				Bucket=storage.bucket_name,
+				Key=episode.s3_key
+			)
+		content = iter_s3_body(s3_response["Body"])
 	else:
-		s3_response = storage.s3_client.get_object(
-			Bucket=storage.bucket_name,
-			Key=episode.s3_key
-		)
-
-	body = s3_response["Body"]
+		end_arg = end_byte if range else None
+		content = iter_local_file(episode.file_path, start=start_byte, end=end_arg)
 
 	response_headers = {
 		"Content-Disposition": f'attachment; filename="{filename}"',
@@ -408,7 +433,7 @@ async def download_episode_audio(
 	}
 
 	return StreamingResponse(
-		content=iter_s3_body(body),
+		content=content,
 		status_code=http_status,
 		headers=response_headers,
 		media_type="audio/mpeg"

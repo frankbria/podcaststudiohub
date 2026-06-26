@@ -23,7 +23,7 @@ podcaststudiohub/
 │   │   ├── alembic/      # DB migrations (versions/ up to 012_…)
 │   │   ├── tests/        # pytest + pytest-bdd
 │   │   └── pyproject.toml
-│   └── web/              # Next.js 14 frontend (TypeScript, App Router)
+│   └── web/              # Next.js 15 frontend (TypeScript, App Router)
 │       └── src/          # app/, components/, hooks/, lib/, types/, middleware.ts
 ├── deployment/           # VPS deploy: nginx/, scripts/, tests/, README.md (PM2 + nginx)
 ├── tests/e2e/            # Playwright end-to-end tests
@@ -43,7 +43,7 @@ podcaststudiohub/
 
 ### Frontend (`apps/web`)
 
-- **Next.js 14** App Router, TypeScript, **Tailwind + Shadcn/UI**, TanStack Query.
+- **Next.js 15** App Router, TypeScript, **Tailwind + Shadcn/UI**, TanStack Query.
 - Auth: the backend issues JWTs; authenticated browser calls and SSE go through a server-side
   `/api/proxy` Route Handler so the JWT is never exposed to the client.
 

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Boolean, Float, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.analytics_event import (
@@ -68,45 +68,70 @@ async def get_episode_analytics(
 	if date_to is None:
 		date_to = datetime.utcnow()
 
-	base_query = (
-		select(AnalyticsEvent)
-		.where(AnalyticsEvent.episode_id == episode_id)
-		.where(AnalyticsEvent.created_at >= date_from)
-		.where(AnalyticsEvent.created_at <= date_to)
+	window = (
+		(AnalyticsEvent.episode_id == episode_id)
+		& (AnalyticsEvent.created_at >= date_from)
+		& (AnalyticsEvent.created_at <= date_to)
 	)
 
-	result = await db.execute(base_query)
-	events = result.scalars().all()
-
-	# Count by event type
+	# Count by event type (GROUP BY instead of a Python loop over all rows)
 	counts: Dict[str, int] = {"download": 0, "play": 0, "stream": 0, "share": 0}
+	rows = await db.execute(
+		select(AnalyticsEvent.event_type, func.count())
+		.where(window)
+		.group_by(AnalyticsEvent.event_type)
+	)
+	for event_type, n in rows.all():
+		counts[event_type] = counts.get(event_type, 0) + n
+
+	# Device / app / country breakdowns — filter out falsy values to match the
+	# old `if event.<field>:` guard (skips both NULL and empty string).
 	device_breakdown: Dict[str, int] = {"mobile": 0, "desktop": 0, "tablet": 0, "unknown": 0}
-	app_breakdown: Dict[str, int] = {}
-	country_counts: Dict[str, int] = {}
+	rows = await db.execute(
+		select(AnalyticsEvent.device_type, func.count())
+		.where(window & AnalyticsEvent.device_type.isnot(None) & (AnalyticsEvent.device_type != ""))
+		.group_by(AnalyticsEvent.device_type)
+	)
+	for device, n in rows.all():
+		device_breakdown[device] = device_breakdown.get(device, 0) + n
 
-	total_duration = 0.0
-	completed_count = 0
-	play_count_for_avg = 0
+	rows = await db.execute(
+		select(AnalyticsEvent.app_name, func.count())
+		.where(window & AnalyticsEvent.app_name.isnot(None) & (AnalyticsEvent.app_name != ""))
+		.group_by(AnalyticsEvent.app_name)
+	)
+	app_breakdown: Dict[str, int] = {app: n for app, n in rows.all()}
 
-	for event in events:
-		counts[event.event_type] = counts.get(event.event_type, 0) + 1
+	rows = await db.execute(
+		select(AnalyticsEvent.country, func.count())
+		.where(window & AnalyticsEvent.country.isnot(None) & (AnalyticsEvent.country != ""))
+		.group_by(AnalyticsEvent.country)
+	)
+	country_counts: Dict[str, int] = {c: n for c, n in rows.all()}
 
-		if event.device_type:
-			device_breakdown[event.device_type] = device_breakdown.get(event.device_type, 0) + 1
+	# Listen duration: sum + count over plays whose JSONB duration is truthy
+	# (matches the old `if duration:` guard — excludes missing key, NULL, and 0).
+	duration_col = AnalyticsEvent.event_metadata["duration_listened_seconds"].astext.cast(Float)
+	total_duration, play_count_for_avg = (
+		await db.execute(
+			select(func.coalesce(func.sum(duration_col), 0.0), func.count())
+			.where(
+				window
+				& (AnalyticsEvent.event_type == "play")
+				& duration_col.isnot(None)
+				& (duration_col != 0)
+			)
+		)
+	).one()
 
-		if event.app_name:
-			app_breakdown[event.app_name] = app_breakdown.get(event.app_name, 0) + 1
-
-		if event.country:
-			country_counts[event.country] = country_counts.get(event.country, 0) + 1
-
-		if event.event_metadata and event.event_type == "play":
-			duration = event.event_metadata.get("duration_listened_seconds", 0)
-			if duration:
-				total_duration += duration
-				play_count_for_avg += 1
-			if event.event_metadata.get("completed", False):
-				completed_count += 1
+	# Completed plays: JSONB `completed` is true (missing/NULL/false excluded)
+	completed_col = AnalyticsEvent.event_metadata["completed"].astext.cast(Boolean)
+	completed_count = (
+		await db.execute(
+			select(func.count())
+			.where(window & (AnalyticsEvent.event_type == "play") & completed_col.is_(True))
+		)
+	).scalar_one()
 
 	total_plays = counts["play"]
 	avg_duration = total_duration / play_count_for_avg if play_count_for_avg > 0 else 0.0
@@ -144,38 +169,64 @@ async def get_project_analytics(
 	date_to = datetime.utcnow()
 	date_from = date_to - timedelta(days=days)
 
-	result = await db.execute(
-		select(AnalyticsEvent)
-		.where(AnalyticsEvent.project_id == project_id)
-		.where(AnalyticsEvent.created_at >= date_from)
-		.where(AnalyticsEvent.created_at <= date_to)
+	window = (
+		(AnalyticsEvent.project_id == project_id)
+		& (AnalyticsEvent.created_at >= date_from)
+		& (AnalyticsEvent.created_at <= date_to)
 	)
-	events = result.scalars().all()
 
-	total_downloads = 0
-	total_plays = 0
-	total_listen_seconds = 0.0
-	episode_downloads: Dict[str, int] = {}
+	# Download / play totals via GROUP BY event_type
+	type_counts = {
+		t: n
+		for t, n in (
+			await db.execute(
+				select(AnalyticsEvent.event_type, func.count())
+				.where(window)
+				.group_by(AnalyticsEvent.event_type)
+			)
+		).all()
+	}
+	total_downloads = type_counts.get("download", 0)
+	total_plays = type_counts.get("play", 0)
 
-	# Weekly buckets: key = "YYYY-WNN"
+	# Sum listen seconds over plays (missing/NULL duration counts as 0, matching
+	# the old `metadata.get("duration_listened_seconds", 0)`).
+	duration_col = AnalyticsEvent.event_metadata["duration_listened_seconds"].astext.cast(Float)
+	total_listen_seconds = (
+		await db.execute(
+			select(func.coalesce(func.sum(func.coalesce(duration_col, 0.0)), 0.0))
+			.where(window & (AnalyticsEvent.event_type == "play"))
+		)
+	).scalar_one()
+
+	# Per-episode download breakdown
+	episode_downloads: Dict[str, int] = {
+		str(eid): n
+		for eid, n in (
+			await db.execute(
+				select(AnalyticsEvent.episode_id, func.count())
+				.where(
+					window
+					& (AnalyticsEvent.event_type == "download")
+					& AnalyticsEvent.episode_id.isnot(None)
+				)
+				.group_by(AnalyticsEvent.episode_id)
+			)
+		).all()
+	}
+
+	# Weekly buckets: GROUP BY day in SQL (O(days), not O(events)), then bucket
+	# by Python's "%Y-W%W" so the key format stays byte-for-byte identical
+	# (Postgres ISO/`to_char` week numbering would NOT match strftime("%W")).
 	weekly: Dict[str, int] = {}
-
-	for event in events:
-		if event.event_type == "download":
-			total_downloads += 1
-		elif event.event_type == "play":
-			total_plays += 1
-			if event.event_metadata:
-				total_listen_seconds += event.event_metadata.get("duration_listened_seconds", 0)
-
-		# Episode breakdown for downloads
-		if event.episode_id and event.event_type == "download":
-			key = str(event.episode_id)
-			episode_downloads[key] = episode_downloads.get(key, 0) + 1
-
-		# Weekly bucketing
-		week_key = event.created_at.strftime("%Y-W%W")
-		weekly[week_key] = weekly.get(week_key, 0) + 1
+	day_rows = await db.execute(
+		select(func.date(AnalyticsEvent.created_at), func.count())
+		.where(window)
+		.group_by(func.date(AnalyticsEvent.created_at))
+	)
+	for day, n in day_rows.all():
+		week_key = day.strftime("%Y-W%W")
+		weekly[week_key] = weekly.get(week_key, 0) + n
 
 	top_episodes = sorted(
 		[{"episode_id": eid, "downloads": cnt} for eid, cnt in episode_downloads.items()],

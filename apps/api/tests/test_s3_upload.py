@@ -725,3 +725,36 @@ class TestTempFileCleanup:
         finally:
             if os.path.exists(path):
                 os.remove(path)
+
+    def test_temp_file_deleted_on_non_retryable_error(self):
+        """Non-retryable failure (e.g. AccessDenied) is terminal — it raises and
+        no retry follows, so the temp artifact must still be cleaned up."""
+        path = self._make_temp_file()
+        try:
+            client_error = ClientError(
+                {"Error": {"Code": "AccessDenied", "Message": "denied"}},
+                "PutObject",
+            )
+            with (
+                patch("src.tasks.s3_upload.settings") as mock_settings,
+                patch("src.tasks.s3_upload.boto3") as mock_boto,
+                patch("src.tasks.s3_upload.os.path.getsize", return_value=16),
+            ):
+                mock_settings.AWS_REGION = "us-east-1"
+                mock_s3 = MagicMock()
+                mock_s3.upload_file.side_effect = client_error
+                mock_boto.client.return_value = mock_s3
+
+                try:
+                    self._invoke_upload(
+                        file_path=path,
+                        s3_key="test/key.mp3",
+                        bucket_name="my-bucket",
+                    )
+                except ClientError:
+                    pass  # non-retryable errors re-raise — expected
+
+            assert not os.path.exists(path), "temp file should be deleted on terminal non-retryable error"
+        finally:
+            if os.path.exists(path):
+                os.remove(path)

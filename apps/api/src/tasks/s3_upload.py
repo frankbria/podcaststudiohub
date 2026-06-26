@@ -117,8 +117,10 @@ def upload_to_s3_task(
             "SignatureDoesNotMatch", "AccessDenied",
         })
         if error_code in NON_RETRYABLE_CODES:
-            # Permanent errors are never retried.
+            # Permanent errors are never retried — terminal failure, so the temp
+            # artifact is disposable (re-running generation re-composes it).
             logger.error(f"S3 upload failed with non-retryable error ({error_code}): {e}")
+            _cleanup_temp_file(file_path)
             raise
         # Retryable S3 error — retry with exponential backoff
         logger.warning(

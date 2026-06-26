@@ -1,7 +1,7 @@
 """Billing usage model for tracking resource consumption"""
 
 from datetime import datetime
-from sqlalchemy import Column, Integer, BigInteger, Float, DateTime, Date, Numeric
+from sqlalchemy import Column, Integer, BigInteger, Float, DateTime, Date, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
@@ -12,6 +12,9 @@ class BillingUsage(Base):
 	"""Track usage for pricing enforcement and overage charges"""
 
 	__tablename__ = "billing_usage"
+	__table_args__ = (
+		UniqueConstraint("user_id", "period_start", name="uq_billing_usage_user_period"),
+	)
 
 	id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
 	user_id = Column(UUID(as_uuid=True), nullable=False, index=True)

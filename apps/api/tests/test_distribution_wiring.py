@@ -197,7 +197,7 @@ async def test_generate_forwards_platforms_when_distribution_enabled(client):
 
     with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True), \
          patch.object(generation_router.settings, "AWS_S3_BUCKET", "test-bucket"), \
-         patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+         patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-dist")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate?enable_distribution=true",
@@ -206,7 +206,7 @@ async def test_generate_forwards_platforms_when_distribution_enabled(client):
 
     assert resp.status_code == 202, resp.text
     mock_delay.assert_called_once()
-    kwargs = mock_delay.call_args.kwargs
+    kwargs = mock_delay.call_args.kwargs["kwargs"]
     assert kwargs["enable_distribution"] is True
     platforms = kwargs["platforms"]
     assert "webhook" in platforms
@@ -230,7 +230,7 @@ async def test_generate_keeps_one_target_per_type(client):
 
     with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True), \
          patch.object(generation_router.settings, "AWS_S3_BUCKET", "test-bucket"), \
-         patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+         patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-dup")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate?enable_distribution=true",
@@ -238,7 +238,7 @@ async def test_generate_keeps_one_target_per_type(client):
         )
 
     assert resp.status_code == 202, resp.text
-    platforms = mock_delay.call_args.kwargs["platforms"]
+    platforms = mock_delay.call_args.kwargs["kwargs"]["platforms"]
     # Exactly one webhook entry, and it is one of the two configured URLs.
     assert list(platforms.keys()) == ["webhook"]
     assert platforms["webhook"]["url"] in (
@@ -255,7 +255,7 @@ async def test_generate_omits_platforms_when_no_targets(client):
     await _create_text_source(client, episode_id, headers)
 
     with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True), \
-         patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+         patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-nodist")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate?enable_distribution=true",
@@ -264,7 +264,7 @@ async def test_generate_omits_platforms_when_no_targets(client):
 
     assert resp.status_code == 202, resp.text
     mock_delay.assert_called_once()
-    assert "platforms" not in mock_delay.call_args.kwargs
+    assert "platforms" not in mock_delay.call_args.kwargs["kwargs"]
 
 
 @pytest.mark.asyncio
@@ -282,7 +282,7 @@ async def test_generate_skips_distribution_without_s3_bucket(client):
 
     with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True), \
          patch.object(generation_router.settings, "AWS_S3_BUCKET", ""), \
-         patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+         patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-nobucket")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate?enable_distribution=true",
@@ -290,7 +290,7 @@ async def test_generate_skips_distribution_without_s3_bucket(client):
         )
 
     assert resp.status_code == 202, resp.text
-    kwargs = mock_delay.call_args.kwargs
+    kwargs = mock_delay.call_args.kwargs["kwargs"]
     assert "platforms" not in kwargs
     # Distribution disabled because no bucket → task won't take the workflow path.
     assert kwargs["enable_distribution"] is False
@@ -308,7 +308,7 @@ async def test_generate_omits_platforms_when_distribution_disabled(client):
     )
 
     with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True), \
-         patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+         patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-off")
         # enable_distribution defaults to false here.
         resp = await client.post(
@@ -318,5 +318,5 @@ async def test_generate_omits_platforms_when_distribution_disabled(client):
 
     assert resp.status_code == 202, resp.text
     mock_delay.assert_called_once()
-    assert "platforms" not in mock_delay.call_args.kwargs
-    assert mock_delay.call_args.kwargs["enable_distribution"] is False
+    assert "platforms" not in mock_delay.call_args.kwargs["kwargs"]
+    assert mock_delay.call_args.kwargs["kwargs"]["enable_distribution"] is False

@@ -873,3 +873,44 @@ class TestGeneratePodcastTaskWorkflowParameters:
         assert sig.parameters["enable_distribution"].default is False
         assert sig.parameters["platforms"].default is None
         assert sig.parameters["composition_timeline"].default is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #294: every in-task failure path must write a terminal DB status so the
+# episode never stays stuck at 'queued'.
+# ---------------------------------------------------------------------------
+class TestFailurePathsWriteDbStatus:
+    def test_soft_time_limit_writes_failed(self):
+        """SoftTimeLimitExceeded persists generation_status='failed' to the DB."""
+        from celery.exceptions import SoftTimeLimitExceeded
+        from src.tasks import podcast_generation as pg
+
+        ep_id = str(uuid.uuid4())
+        pg.generate_podcast_task.request.update(id="soft-tl", retries=0)
+        with patch("podcastfy.client.generate_podcast", side_effect=SoftTimeLimitExceeded()), \
+             patch.object(pg.generate_podcast_task, "update_state", MagicMock()), \
+             patch("src.tasks.podcast_generation._update_episode") as mock_upd:
+            result = pg.generate_podcast_task.run(episode_id=ep_id)
+
+        assert result["status"] == "failed"
+        mock_upd.assert_called_once()
+        assert mock_upd.call_args.kwargs["updates"]["generation_status"] == "failed"
+
+    def test_retry_exhaustion_writes_failed(self):
+        """When retries are exhausted, the episode is marked 'failed' in the DB."""
+        from src.tasks import podcast_generation as pg
+
+        ep_id = str(uuid.uuid4())
+        task = pg.generate_podcast_task
+        task.request.update(id="retry-exh")
+        # Force retry() to signal exhaustion so we exercise the MaxRetriesExceeded
+        # branch directly (eager retry would otherwise re-invoke the task inline).
+        with patch("podcastfy.client.generate_podcast", side_effect=RuntimeError("boom")), \
+             patch.object(task, "update_state", MagicMock()), \
+             patch.object(task, "retry", side_effect=task.MaxRetriesExceededError()), \
+             patch("src.tasks.podcast_generation._update_episode") as mock_upd:
+            result = task.run(episode_id=ep_id)
+
+        assert result["status"] == "failed"
+        mock_upd.assert_called_once()
+        assert mock_upd.call_args.kwargs["updates"]["generation_status"] == "failed"

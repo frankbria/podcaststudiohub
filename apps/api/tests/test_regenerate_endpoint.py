@@ -81,7 +81,7 @@ async def test_regenerate_happy_path(client, episode_with_content):
     """POST /regenerate queues generation and returns 202 with the episode id."""
     episode_id, headers = episode_with_content
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-regen-123")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/regenerate", headers=headers
@@ -148,7 +148,7 @@ async def test_regenerate_does_not_degrade_episode_on_failure():
     current_user = MagicMock()
     current_user.tenant_id = uuid4()
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         with pytest.raises(HTTPException) as exc_info:
             await regenerate_podcast(
                 episode_id=uuid4(), current_user=current_user, db=db

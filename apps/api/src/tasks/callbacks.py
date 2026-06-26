@@ -259,9 +259,9 @@ def on_workflow_complete(self: Task, result: Dict[str, Any], episode_id: str) ->
 def on_workflow_failure(
 	self: Task,
 	task_id: str,
-	exc: Any,
-	traceback: Any,
-	episode_id: str,
+	exc: Any = None,
+	traceback: Any = None,
+	episode_id: str = "",
 	task_name: str = "unknown",
 ) -> None:
 	"""
@@ -270,8 +270,12 @@ def on_workflow_failure(
 	Sets Episode.generation_status = 'failed' and records the error in
 	generation_progress.
 
-	This task uses Celery's link_error signature: the first three positional
-	arguments after ``self`` are task_id, exc, and traceback as passed by Celery.
+	Celery invokes ``bind=True`` error callbacks "old style": only the failed
+	task's id is passed positionally — ``exc``/``traceback`` are *not* (see
+	``BaseBackend._call_task_errbacks``, which routes bound errbacks via the
+	single-arg path). They therefore default to None and are recovered from the
+	result backend below, so this works both as a ``link_error`` on a real task
+	and when called directly with explicit args (issue #294).
 
 	Args:
 		self: Celery task instance.
@@ -281,6 +285,18 @@ def on_workflow_failure(
 		episode_id: UUID string of the episode.
 		task_name: Human-readable name of the task that failed.
 	"""
+	if exc is None and task_id:
+		# Old-style errback: pull the failure detail from the result backend so
+		# the recorded message is meaningful rather than "... failed: None".
+		try:
+			from celery.result import AsyncResult
+
+			ar = AsyncResult(str(task_id), app=self.app)
+			exc = ar.result
+			traceback = traceback or ar.traceback
+		except Exception:  # pragma: no cover - backend best-effort
+			logger.debug("Could not fetch failure detail for task %s", task_id)
+
 	error_message = f"Task '{task_name}' failed: {exc}"
 	updated = _update_episode(
 		episode_id,

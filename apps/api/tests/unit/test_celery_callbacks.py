@@ -423,6 +423,32 @@ class TestOnWorkflowFailure:
 
 		mock_session.commit.assert_not_called()
 
+	def test_old_style_errback_marks_failed(self):
+		"""Celery invokes bound errbacks with only task_id (exc/traceback omitted).
+
+		Regression for issue #294: previously exc/traceback were required, so this
+		invocation raised TypeError and the episode was never marked failed.
+		"""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		mock_ctx, _ = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_failure
+
+		fake_result = MagicMock(result=RuntimeError("kaboom"), traceback="tb")
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx), \
+			patch("celery.result.AsyncResult", return_value=fake_result):
+			# Old-style: task_id positional only, exc/traceback NOT passed.
+			_invoke_task(
+				on_workflow_failure,
+				task_id="failed-task-id",
+				episode_id=episode_id,
+				task_name="generate_podcast",
+			)
+
+		assert episode.generation_status == "failed"
+		assert "kaboom" in episode.generation_progress.get("error_message", "")
+
 
 # ---------------------------------------------------------------------------
 # build_generation_workflow

@@ -8,6 +8,7 @@ import time
 import uuid as uuid_module
 import logging
 from celery import Task, chain
+from celery.exceptions import SoftTimeLimitExceeded
 from typing import Optional, List, Dict, Any
 from pydub import AudioSegment
 
@@ -15,6 +16,7 @@ from src.worker import celery_app
 from src.config import settings
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
+from src.tasks.callbacks import _update_episode, _utcnow_iso
 from src.tasks.s3_upload import upload_to_s3_task
 from src.tasks.retry_utils import calculate_backoff
 
@@ -98,7 +100,13 @@ def _upload_to_s3_with_retries(
     }
 
 
-@celery_app.task(bind=True, name="generate_podcast", time_limit=600, max_retries=3)
+@celery_app.task(
+    bind=True,
+    name="generate_podcast",
+    time_limit=settings.CELERY_TASK_TIME_LIMIT,
+    soft_time_limit=settings.CELERY_TASK_SOFT_TIME_LIMIT,
+    max_retries=3,
+)
 def generate_podcast_task(
     self: Task,
     episode_id: str,
@@ -345,6 +353,41 @@ def generate_podcast_task(
 
         return generation_result
 
+    except SoftTimeLimitExceeded:
+        # Hit the soft time limit (e.g. a long-form run exceeding the ceiling).
+        # SoftTimeLimitExceeded subclasses BaseException, so it bypasses the broad
+        # `except Exception` below; catch it explicitly and treat it as terminal —
+        # retrying would just hit the limit again. Persist 'failed' to the DB so the
+        # episode does not stay stuck at 'queued' (issue #294).
+        msg = "Generation exceeded the soft time limit"
+        logger.error("Podcast generation soft-timeout for episode %s", episode_id)
+        _update_episode(
+            episode_id,
+            updates={"generation_status": "failed"},
+            progress_updates={
+                "status": "failed",
+                "error_message": msg,
+                "failed_at": _utcnow_iso(),
+            },
+        )
+        self.update_state(
+            state='FAILURE',
+            meta={
+                'episode_id': episode_id,
+                'stage': 'failed',
+                'progress': 0,
+                'status': f'Generation failed: {msg}',
+            },
+        )
+        return {
+            "status": "failed",
+            "audio_file_path": None,
+            "transcript_path": None,
+            "duration_seconds": 0,
+            "file_size_bytes": 0,
+            "error": msg,
+        }
+
     except Exception as e:
         logger.warning(
             f"Podcast generation error for episode {episode_id}, "
@@ -366,6 +409,18 @@ def generate_podcast_task(
                 f"Podcast generation failed after {self.max_retries} retries "
                 f"for episode {episode_id}: {e}"
             )
+            # Persist 'failed' to the DB. update_state() below only writes the
+            # ephemeral result backend; without this the episode stays stuck at
+            # 'queued' once retries are exhausted (issue #294).
+            _update_episode(
+                episode_id,
+                updates={"generation_status": "failed"},
+                progress_updates={
+                    "status": "failed",
+                    "error_message": f"Generation failed after retries: {e}",
+                    "failed_at": _utcnow_iso(),
+                },
+            )
             self.update_state(
                 state='FAILURE',
                 meta={
@@ -385,7 +440,13 @@ def generate_podcast_task(
             }
 
 
-@celery_app.task(bind=True, name="finalize_episode_generation", time_limit=360, max_retries=3)
+@celery_app.task(
+    bind=True,
+    name="finalize_episode_generation",
+    time_limit=settings.CELERY_TASK_TIME_LIMIT,
+    soft_time_limit=settings.CELERY_TASK_SOFT_TIME_LIMIT,
+    max_retries=3,
+)
 def finalize_episode_generation_task(
     self: Task,
     episode_id: str,

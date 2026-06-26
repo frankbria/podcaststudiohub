@@ -6,8 +6,40 @@ validation, and tenant isolation for distribution targets.
 """
 
 import pytest
+from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import patch, AsyncMock, MagicMock
+
+
+class _FakeOAuthRedis:
+	"""In-memory stand-in for the OAuth-state Redis client.
+
+	The test suite runs without a Redis server (rate limiting is disabled and the
+	rate-limiter tests mock Redis), so the OAuth CSRF state store is faked here.
+	Supports only the subset distribution_target_service uses: setex + getdel.
+	"""
+
+	def __init__(self):
+		self._store = {}
+
+	def setex(self, key, ttl, value):
+		self._store[key] = value
+
+	def getdel(self, key):
+		return self._store.pop(key, None)
+
+
+@pytest.fixture(autouse=True)
+def fake_oauth_state_store(monkeypatch):
+	"""Back OAuth CSRF state with an in-memory store so authorize/callback work
+	without a real Redis. One shared instance per test so generate→validate sees
+	the same state."""
+	fake = _FakeOAuthRedis()
+	monkeypatch.setattr(
+		"src.services.distribution_target_service.Redis",
+		SimpleNamespace(from_url=lambda *a, **k: fake),
+	)
+	return fake
 
 
 @pytest.fixture

@@ -5,6 +5,8 @@ Uses unittest.mock to avoid requiring real AWS credentials or a running database
 Tests invoke the underlying task logic by calling the task's __wrapped__ function
 or by configuring Celery eager mode.
 """
+import os
+import tempfile
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -579,3 +581,147 @@ class TestNonRetryableS3Errors:
 
         assert result["status"] == "failed"
         assert "InternalError" in result["error"]
+
+
+# ============================================================================
+# Temp-file cleanup (issue #275)
+# ============================================================================
+
+class TestTempFileCleanup:
+    """The composed audio temp file must be deleted once it's safely in S3, but
+    only when it lives under the system temp dir and never while a retry could
+    still need it."""
+
+    def _invoke_upload(self, **kwargs):
+        from src.tasks.s3_upload import upload_to_s3_task
+        return _invoke_task(upload_to_s3_task, **kwargs)
+
+    def _make_temp_file(self) -> str:
+        """Create a real file under the system temp dir; return its path."""
+        fd, path = tempfile.mkstemp(prefix="composed_", suffix=".mp3")
+        os.write(fd, b"fake audio bytes")
+        os.close(fd)
+        return path
+
+    def test_temp_file_deleted_after_successful_upload(self):
+        """Success path: a temp-dir file is removed once uploaded to S3."""
+        path = self._make_temp_file()
+        try:
+            with (
+                patch("src.tasks.s3_upload.settings") as mock_settings,
+                patch("src.tasks.s3_upload.boto3") as mock_boto,
+            ):
+                mock_settings.AWS_REGION = "us-east-1"
+                mock_boto.client.return_value = MagicMock()
+
+                result = self._invoke_upload(
+                    file_path=path,
+                    s3_key="test/key.mp3",
+                    bucket_name="my-bucket",
+                )
+
+            assert result["status"] == "success"
+            assert not os.path.exists(path), "temp file should be deleted after upload"
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_non_temp_file_is_not_deleted(self, tmp_path):
+        """Guard: a file OUTSIDE the system temp dir must never be deleted."""
+        # tmp_path is pytest's per-test dir; force it outside tempfile.gettempdir()
+        # by pointing gettempdir() elsewhere so this path is treated as non-temp.
+        persistent = tmp_path / "audio.mp3"
+        persistent.write_bytes(b"keep me")
+        fake_temp_root = tmp_path / "systmp"
+        fake_temp_root.mkdir()
+
+        with (
+            patch("src.tasks.s3_upload.settings") as mock_settings,
+            patch("src.tasks.s3_upload.boto3") as mock_boto,
+            patch("src.tasks.s3_upload.os.path.getsize", return_value=7),
+            patch("src.tasks.s3_upload.tempfile.gettempdir", return_value=str(fake_temp_root)),
+        ):
+            mock_settings.AWS_REGION = "us-east-1"
+            mock_boto.client.return_value = MagicMock()
+
+            result = self._invoke_upload(
+                file_path=str(persistent),
+                s3_key="test/key.mp3",
+                bucket_name="my-bucket",
+            )
+
+        assert result["status"] == "success"
+        assert persistent.exists(), "non-temp file must be preserved"
+
+    def test_temp_file_kept_while_retrying(self):
+        """Retry path: a transient error that triggers a retry must NOT delete
+        the file — the next retry still needs it."""
+        path = self._make_temp_file()
+        try:
+            from src.tasks.s3_upload import upload_to_s3_task
+
+            # retry() raises Retry; the task never reaches a terminal branch.
+            with (
+                patch("src.tasks.s3_upload.settings") as mock_settings,
+                patch("src.tasks.s3_upload.boto3") as mock_boto,
+                patch("src.tasks.s3_upload.os.path.getsize", return_value=16),
+                patch.object(
+                    upload_to_s3_task,
+                    "retry",
+                    side_effect=RuntimeError("retry-signal"),
+                ),
+            ):
+                mock_settings.AWS_REGION = "us-east-1"
+                mock_s3 = MagicMock()
+                mock_s3.upload_file.side_effect = RuntimeError("Connection timeout")
+                mock_boto.client.return_value = mock_s3
+                upload_to_s3_task.request.update(retries=0)
+
+                try:
+                    self._invoke_upload(
+                        file_path=path,
+                        s3_key="test/key.mp3",
+                        bucket_name="my-bucket",
+                    )
+                except RuntimeError:
+                    pass  # the retry signal — expected
+
+            assert os.path.exists(path), "file must be kept while a retry is pending"
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+    def test_temp_file_deleted_after_retries_exhausted(self):
+        """Terminal-failure path: once retries are exhausted no retry will read
+        the file, so the temp artifact must be cleaned up to avoid leaking /tmp."""
+        path = self._make_temp_file()
+        try:
+            from src.tasks.s3_upload import upload_to_s3_task
+
+            with (
+                patch("src.tasks.s3_upload.settings") as mock_settings,
+                patch("src.tasks.s3_upload.boto3") as mock_boto,
+                patch("src.tasks.s3_upload.os.path.getsize", return_value=16),
+                patch.object(
+                    upload_to_s3_task,
+                    "retry",
+                    side_effect=upload_to_s3_task.MaxRetriesExceededError(),
+                ),
+            ):
+                mock_settings.AWS_REGION = "us-east-1"
+                mock_s3 = MagicMock()
+                mock_s3.upload_file.side_effect = RuntimeError("Connection timeout")
+                mock_boto.client.return_value = mock_s3
+                upload_to_s3_task.request.update(retries=3)
+
+                result = self._invoke_upload(
+                    file_path=path,
+                    s3_key="test/key.mp3",
+                    bucket_name="my-bucket",
+                )
+
+            assert result["status"] == "failed"
+            assert not os.path.exists(path), "temp file should be deleted after terminal failure"
+        finally:
+            if os.path.exists(path):
+                os.remove(path)

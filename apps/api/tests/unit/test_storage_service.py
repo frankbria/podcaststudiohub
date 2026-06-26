@@ -60,6 +60,47 @@ def test_init_sets_region(mock_boto3_client):
 	assert svc.region_name == "eu-west-1"
 
 
+@pytest.mark.asyncio
+async def test_no_arg_service_downloads_against_configured_bucket():
+	"""Regression for #291: a no-arg StorageService() must pick up AWS_S3_BUCKET
+	and AWS_REGION from settings (not the non-existent S3_BUCKET_NAME, which left
+	bucket_name=None and broke episode download + RSS upload), and the download
+	path must hit S3 with that resolved bucket."""
+	with patch("src.services.storage_service.boto3.client") as mock_client, \
+		patch("src.services.storage_service.settings") as mock_settings:
+		mock_s3 = MagicMock()
+		mock_client.return_value = mock_s3
+		mock_settings.AWS_ACCESS_KEY_ID = "key"
+		mock_settings.AWS_SECRET_ACCESS_KEY = "secret"
+		mock_settings.AWS_S3_BUCKET = "configured-bucket"
+		mock_settings.AWS_REGION = "eu-central-1"
+
+		svc = StorageService()  # exactly how episodes.py / rss_generation_service.py build it
+		assert svc.bucket_name == "configured-bucket"
+		assert svc.region_name == "eu-central-1"
+
+		# boto3 client created in the configured region, and the download path
+		# (which was broken with Bucket=None) now targets the real bucket.
+		assert mock_client.call_args.kwargs["region_name"] == "eu-central-1"
+		await svc.download_file("episodes/ep1.mp3", "/tmp/ep1.mp3")
+		mock_s3.download_file.assert_called_once_with(
+			Bucket="configured-bucket", Key="episodes/ep1.mp3", Filename="/tmp/ep1.mp3"
+		)
+
+
+def test_init_region_falls_back_to_us_east_1_when_settings_empty():
+	"""Empty/None AWS_REGION must still resolve to the ultimate 'us-east-1' default."""
+	with patch("src.services.storage_service.boto3.client") as mock_client, \
+		patch("src.services.storage_service.settings") as mock_settings:
+		mock_client.return_value = MagicMock()
+		mock_settings.AWS_ACCESS_KEY_ID = "key"
+		mock_settings.AWS_SECRET_ACCESS_KEY = "secret"
+		mock_settings.AWS_S3_BUCKET = "b"
+		mock_settings.AWS_REGION = ""
+		svc = StorageService()
+	assert svc.region_name == "us-east-1"
+
+
 # ===========================================================================
 # upload_file
 # ===========================================================================

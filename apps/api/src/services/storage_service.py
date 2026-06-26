@@ -16,7 +16,7 @@ class StorageService:
         aws_access_key_id: Optional[str] = None,
         aws_secret_access_key: Optional[str] = None,
         bucket_name: Optional[str] = None,
-        region_name: str = "us-east-1",
+        region_name: Optional[str] = None,
     ):
         """
         Initialize S3 storage service
@@ -24,13 +24,18 @@ class StorageService:
         Args:
             aws_access_key_id: AWS access key (uses settings.AWS_ACCESS_KEY_ID if not provided)
             aws_secret_access_key: AWS secret key (uses settings.AWS_SECRET_ACCESS_KEY if not provided)
-            bucket_name: S3 bucket name (uses settings.S3_BUCKET_NAME if not provided)
-            region_name: AWS region
+            bucket_name: S3 bucket name (uses settings.AWS_S3_BUCKET if not provided)
+            region_name: AWS region (uses settings.AWS_REGION, default "us-east-1", if not provided)
         """
         self.aws_access_key_id = aws_access_key_id or getattr(settings, "AWS_ACCESS_KEY_ID", None)
         self.aws_secret_access_key = aws_secret_access_key or getattr(settings, "AWS_SECRET_ACCESS_KEY", None)
-        self.bucket_name = bucket_name or getattr(settings, "S3_BUCKET_NAME", None)
-        self.region_name = region_name
+        self.bucket_name = bucket_name or getattr(settings, "AWS_S3_BUCKET", None)
+        resolved_region = (
+            region_name
+            if region_name is not None
+            else getattr(settings, "AWS_REGION", None)
+        )
+        self.region_name = resolved_region or "us-east-1"
 
         # Initialize S3 client
         self.s3_client = boto3.client(

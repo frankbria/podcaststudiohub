@@ -135,12 +135,8 @@ async def test_download_episode_not_complete(client, episode_and_auth):
 	assert "not ready" in response.json()["detail"].lower()
 
 
-@pytest.mark.asyncio
-async def test_download_episode_missing_s3_key(client, episode_and_auth, set_system_fields):
-	"""Returns 404 when episode is complete but s3_key is not set."""
-	_, headers = episode_and_auth
-
-	# Create a project and episode with complete status but no s3_key
+async def _make_complete_episode(client, headers, **system_fields):
+	"""Create a project + episode, then set pipeline-managed fields. Returns id."""
 	proj_response = await client.post("/projects", headers=headers, json={
 		"name": "No S3 Project",
 		"podcast_metadata": {
@@ -156,14 +152,85 @@ async def test_download_episode_missing_s3_key(client, episode_and_auth, set_sys
 		"episode_number": 1,
 		"episode_metadata": {"title": "No S3 Ep", "description": "Desc"}
 	})
-	episode_id = ep_response.json()["id"]
+	assert ep_response.status_code == 201
+	return ep_response.json()["id"], system_fields
 
-	# Mark complete without setting s3_key (system field — set as the pipeline does)
+
+@pytest.mark.asyncio
+async def test_download_episode_missing_s3_key(client, episode_and_auth, set_system_fields):
+	"""Returns 404 only when BOTH s3_key and a usable local file_path are absent."""
+	_, headers = episode_and_auth
+
+	episode_id, _ = await _make_complete_episode(client, headers)
+
+	# Mark complete with neither s3_key nor file_path (system fields — pipeline path)
 	await set_system_fields(episode_id, generation_status="complete")
 
 	response = await client.get(f"/episodes/{episode_id}/download", headers=headers)
 	assert response.status_code == 404
 	assert "audio file not found" in response.json()["detail"].lower()
+
+
+# ============================================================================
+# No-S3 local-disk download (issue #292)
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_download_local_file_success(
+	client, episode_and_auth, set_system_fields, tmp_path, monkeypatch
+):
+	"""Serves a 200 from local disk when s3_key is absent but file_path exists."""
+	from src.config import settings
+	monkeypatch.setattr(settings, "LOCAL_AUDIO_STORAGE_PATH", str(tmp_path))
+	_, headers = episode_and_auth
+	audio = b"LOCAL_MP3_CONTENT_" * 16
+	audio_path = tmp_path / "episode-local.mp3"
+	audio_path.write_bytes(audio)
+
+	episode_id, _ = await _make_complete_episode(client, headers)
+	await set_system_fields(
+		episode_id, generation_status="complete", s3_key=None, file_path=str(audio_path)
+	)
+
+	response = await client.get(f"/episodes/{episode_id}/download", headers=headers)
+
+	assert response.status_code == 200
+	assert response.headers["content-type"] == "audio/mpeg"
+	assert "attachment" in response.headers["content-disposition"]
+	assert ".mp3" in response.headers["content-disposition"]
+	assert int(response.headers["content-length"]) == len(audio)
+	assert response.headers["accept-ranges"] == "bytes"
+	assert response.content == audio
+
+
+@pytest.mark.asyncio
+async def test_download_local_file_range_206(
+	client, episode_and_auth, set_system_fields, tmp_path, monkeypatch
+):
+	"""Range request over a local file returns 206 with correct slice and headers."""
+	from src.config import settings
+	monkeypatch.setattr(settings, "LOCAL_AUDIO_STORAGE_PATH", str(tmp_path))
+	_, headers = episode_and_auth
+	audio = bytes(range(256)) * 8  # 2048 bytes
+	audio_path = tmp_path / "episode-local.mp3"
+	audio_path.write_bytes(audio)
+	total_size = len(audio)
+	range_start, range_end = 100, 199
+
+	episode_id, _ = await _make_complete_episode(client, headers)
+	await set_system_fields(
+		episode_id, generation_status="complete", s3_key=None, file_path=str(audio_path)
+	)
+
+	response = await client.get(
+		f"/episodes/{episode_id}/download",
+		headers={**headers, "Range": f"bytes={range_start}-{range_end}"}
+	)
+
+	assert response.status_code == 206
+	assert response.headers["content-range"] == f"bytes {range_start}-{range_end}/{total_size}"
+	assert int(response.headers["content-length"]) == 100
+	assert response.content == audio[range_start:range_end + 1]
 
 
 # ============================================================================

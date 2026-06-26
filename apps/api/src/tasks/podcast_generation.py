@@ -3,6 +3,7 @@ Celery tasks for podcast generation
 Wraps the existing podcastfy CLI functionality
 """
 import os
+import shutil
 import time
 import uuid as uuid_module
 import logging
@@ -28,6 +29,24 @@ def build_podcast_s3_key(user_id: str, episode_id: str) -> str:
     bucket-policy/IAM/lifecycle rules scope on (issue #215).
     """
     return f"podcasts/user-{user_id}/episode-{episode_id}.mp3"
+
+
+def _persist_local_audio(audio_file_path: str, episode_id: str) -> str:
+    """Copy generated audio out of ephemeral /tmp into persistent local storage.
+
+    Used when AWS_S3_BUCKET is unset: the artifact would otherwise be the only
+    copy and would live in /tmp, so the episode is marked complete yet becomes
+    permanently undownloadable once /tmp is cleared (issue #292). Returns the
+    persistent path (or the original path unchanged if it is already inside the
+    storage dir).
+    """
+    storage_dir = settings.LOCAL_AUDIO_STORAGE_PATH
+    os.makedirs(storage_dir, exist_ok=True)
+    dest = os.path.join(storage_dir, f"episode-{episode_id}.mp3")
+    if os.path.abspath(dest) == os.path.abspath(audio_file_path):
+        return audio_file_path
+    shutil.copy2(audio_file_path, dest)
+    return dest
 
 
 def _upload_to_s3_with_retries(
@@ -474,8 +493,13 @@ def finalize_episode_generation_task(
                     db.commit()
                     return {"status": "failed", "error": error_msg}
             else:
+                # No S3: persist the artifact off ephemeral /tmp so the episode
+                # stays downloadable from local disk (issue #292).
+                persistent_path = _persist_local_audio(audio_file_path, episode_id)
+                episode.file_path = persistent_path
                 logger.info(
-                    f"AWS_S3_BUCKET not configured, skipping S3 upload for episode {episode_id}"
+                    f"AWS_S3_BUCKET not configured; persisted episode {episode_id} "
+                    f"audio to {persistent_path}"
                 )
 
             # Update episode with all file metadata and mark as complete

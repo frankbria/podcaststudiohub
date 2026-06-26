@@ -7,9 +7,25 @@ Provides helpers for:
 - S3 streaming with range support
 """
 
+import os
 import re
 import asyncio
 from typing import AsyncIterator
+
+
+def is_within_dir(path: str, root: str) -> bool:
+	"""True if ``path`` resolves to a location inside ``root``.
+
+	Defense-in-depth for the no-S3 download fallback: only files under the
+	configured audio storage root may be streamed from disk, so a corrupted or
+	mis-written ``file_path`` can never expose an arbitrary local file (issue
+	#292). Uses ``realpath`` so symlinks can't escape the root.
+	"""
+	if not path:
+		return False
+	root_real = os.path.realpath(root)
+	path_real = os.path.realpath(path)
+	return os.path.commonpath([root_real, path_real]) == root_real
 
 
 def sanitize_filename(filename: str) -> str:
@@ -116,6 +132,49 @@ def get_episode_filename(episode) -> str:
 		return f"{sanitized_title}.mp3"
 	else:
 		return "episode.mp3"
+
+
+async def iter_local_file(
+	path: str,
+	start: int = 0,
+	end: int | None = None,
+	chunk_size: int = 8192,
+) -> AsyncIterator[bytes]:
+	"""Async generator that streams a local file in chunks, with optional range.
+
+	Filesystem analogue of ``iter_s3_body`` for the no-S3 download path (issue
+	#292). Streams bytes ``[start, end]`` inclusive (``end=None`` means to EOF),
+	offloading blocking reads via ``asyncio.to_thread`` so the event loop is not
+	blocked.
+
+	Args:
+		path: Local filesystem path to the audio file.
+		start: First byte offset to read (inclusive).
+		end: Last byte offset to read (inclusive), or None for end of file.
+		chunk_size: Number of bytes per chunk (default 8KB).
+
+	Yields:
+		Bytes chunks from the file within the requested range.
+	"""
+	def _open():
+		f = open(path, "rb")
+		if start:
+			f.seek(start)
+		return f
+
+	f = await asyncio.to_thread(_open)
+	try:
+		remaining = None if end is None else (end - start + 1)
+		while remaining is None or remaining > 0:
+			to_read = chunk_size if remaining is None else min(chunk_size, remaining)
+			chunk = await asyncio.to_thread(f.read, to_read)
+			if not chunk:
+				break
+			if remaining is not None:
+				remaining -= len(chunk)
+			yield chunk
+	finally:
+		await asyncio.to_thread(f.close)
 
 
 async def iter_s3_body(body, chunk_size: int = 8192) -> AsyncIterator[bytes]:

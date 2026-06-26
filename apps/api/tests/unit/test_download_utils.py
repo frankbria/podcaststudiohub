@@ -8,7 +8,39 @@ Covers filename sanitization, range header parsing, and episode filename generat
 import pytest
 from unittest.mock import MagicMock
 
-from src.utils.download_utils import sanitize_filename, parse_range_header, get_episode_filename, iter_s3_body
+from src.utils.download_utils import (
+	sanitize_filename,
+	parse_range_header,
+	get_episode_filename,
+	iter_s3_body,
+	iter_local_file,
+	is_within_dir,
+)
+
+
+class TestIsWithinDir:
+	"""Cover the download containment guard (issue #292)."""
+
+	def test_file_inside_root(self, tmp_path):
+		f = tmp_path / "audio" / "episode-1.mp3"
+		f.parent.mkdir()
+		f.write_bytes(b"x")
+		assert is_within_dir(str(f), str(tmp_path / "audio")) is True
+
+	def test_file_outside_root(self, tmp_path):
+		root = tmp_path / "audio"
+		root.mkdir()
+		outside = tmp_path / "secret.txt"
+		outside.write_bytes(b"x")
+		assert is_within_dir(str(outside), str(root)) is False
+
+	def test_traversal_escape_blocked(self, tmp_path):
+		root = tmp_path / "audio"
+		root.mkdir()
+		assert is_within_dir(str(root / ".." / "etc-passwd"), str(root)) is False
+
+	def test_empty_path(self, tmp_path):
+		assert is_within_dir("", str(tmp_path)) is False
 
 
 # ============================================================================
@@ -277,3 +309,51 @@ class TestIterS3Body:
 			chunks.append(chunk)
 
 		assert chunks == []
+
+
+# ============================================================================
+# iter_local_file (issue #292)
+# ============================================================================
+
+class TestIterLocalFile:
+	"""Cover the iter_local_file async generator (full + ranged reads)."""
+
+	@pytest.mark.asyncio
+	async def test_full_read(self, tmp_path):
+		"""Without a range, streams the whole file in order."""
+		data = b"ABCDEFGHIJ" * 100  # 1000 bytes
+		path = tmp_path / "audio.mp3"
+		path.write_bytes(data)
+
+		chunks = []
+		async for chunk in iter_local_file(str(path), chunk_size=64):
+			chunks.append(chunk)
+
+		assert b"".join(chunks) == data
+		assert all(len(c) <= 64 for c in chunks)
+
+	@pytest.mark.asyncio
+	async def test_ranged_read(self, tmp_path):
+		"""With start/end (inclusive), streams exactly that byte range."""
+		data = bytes(range(256))
+		path = tmp_path / "audio.mp3"
+		path.write_bytes(data)
+
+		chunks = []
+		async for chunk in iter_local_file(str(path), start=10, end=19, chunk_size=4):
+			chunks.append(chunk)
+
+		assert b"".join(chunks) == data[10:20]
+
+	@pytest.mark.asyncio
+	async def test_range_to_eof(self, tmp_path):
+		"""start with end=None reads from start to end of file."""
+		data = b"0123456789"
+		path = tmp_path / "audio.mp3"
+		path.write_bytes(data)
+
+		chunks = []
+		async for chunk in iter_local_file(str(path), start=5):
+			chunks.append(chunk)
+
+		assert b"".join(chunks) == data[5:]

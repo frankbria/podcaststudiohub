@@ -331,6 +331,14 @@ here and on the dev machine → `pm2 restart podcaststudiohub-api` → verify (P
 DeleteObject) → **then** deactivate and delete the old key. Permissions live on the IAM user, not
 the key, so rotation never changes them.
 
+**Enable bucket versioning (required):** versioning protects generated audio against accidental
+overwrite/delete. The app's least-privilege IAM user *cannot* toggle versioning, so this is a
+one-time **administrative** action — run it from AWS CloudShell (admin identity), not the app user:
+
+```bash
+deployment/scripts/enable-s3-versioning.sh podcaststudiohub-audio
+```
+
 ## Nginx Configuration
 
 Nginx reverse proxy configuration is in `deployment/nginx/podcastfy.conf`.

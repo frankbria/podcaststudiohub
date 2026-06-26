@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from celery import Task
+from sqlalchemy import select
 
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
@@ -21,6 +22,21 @@ logger = logging.getLogger(__name__)
 def _utcnow_iso() -> str:
 	"""Return current UTC time as ISO 8601 string."""
 	return datetime.now(timezone.utc).isoformat()
+
+
+def _get_episode_for_update(db: Any, episode_id: str) -> Optional[Episode]:
+	"""
+	Fetch an Episode with a row-level lock (SELECT ... FOR UPDATE).
+
+	Callbacks read-modify-write the ``generation_progress`` JSONB column. The
+	per-platform distribution callbacks run as independent Celery tasks that can
+	overlap, so an unlocked read-modify-write loses updates (issue #276). Locking
+	the row serializes concurrent callbacks: the second blocks until the first
+	commits, then re-reads the merged value. The lock is released on commit.
+	"""
+	return db.execute(
+		select(Episode).where(Episode.id == uuid_module.UUID(episode_id)).with_for_update()
+	).scalar_one_or_none()
 
 
 def _update_episode(
@@ -41,7 +57,7 @@ def _update_episode(
 	"""
 	try:
 		with SyncSessionLocal() as db:
-			episode = db.get(Episode, uuid_module.UUID(episode_id))
+			episode = _get_episode_for_update(db, episode_id)
 			if episode is None:
 				logger.error("Episode %s not found in database", episode_id)
 				return False
@@ -176,7 +192,7 @@ def on_distribution_complete(
 
 	try:
 		with SyncSessionLocal() as db:
-			episode = db.get(Episode, uuid_module.UUID(episode_id))
+			episode = _get_episode_for_update(db, episode_id)
 			if episode is None:
 				logger.error("Episode %s not found in database", episode_id)
 				return

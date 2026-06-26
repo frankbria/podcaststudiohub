@@ -41,8 +41,10 @@ fi
 # ── Resolve which backup to restore ────────────────────────────────────────
 ARG="${1:-}"
 if [[ -z "$ARG" ]]; then
-	# Latest = last line of the sorted (timestamped keys sort chronologically) listing.
-	NAME="$(aws s3 ls "s3://${DB_BACKUP_S3_BUCKET}/${DB_BACKUP_S3_PREFIX}" | awk '{print $4}' | grep -v '^$' | sort | tail -n1)"
+	# Latest = last of the chronologically-sorted dumps. Filter to our own
+	# podcastfy-<stamp>.dump pattern so a stray object under the prefix can't be
+	# selected as the "backup" to restore.
+	NAME="$(aws s3 ls "s3://${DB_BACKUP_S3_BUCKET}/${DB_BACKUP_S3_PREFIX}" | awk '{print $4}' | grep -E '^podcastfy-[0-9]{8}T[0-9]{6}Z\.dump$' | sort | tail -n1)"
 	if [[ -z "$NAME" ]]; then
 		echo "No backups found under s3://${DB_BACKUP_S3_BUCKET}/${DB_BACKUP_S3_PREFIX}" >&2
 		exit 1
@@ -78,8 +80,10 @@ echo "Downloading ${SRC}..."
 aws s3 cp "$SRC" "$DUMP_FILE"
 
 echo "Restoring into target database..."
-# --clean --if-exists makes the restore idempotent over an existing schema;
-# pg_restore exits non-zero on real errors (set -e propagates the failure).
-pg_restore --clean --if-exists --no-owner --dbname "$TARGET_DB" "$DUMP_FILE"
+# --single-transaction + --exit-on-error make the restore atomic: any failure
+# rolls the whole thing back, so a half-applied --clean can't leave the live DB
+# corrupted. --clean --if-exists makes it idempotent over an existing schema.
+pg_restore --single-transaction --exit-on-error --clean --if-exists --no-owner \
+	--dbname "$TARGET_DB" "$DUMP_FILE"
 
 echo "Restore complete from ${SRC}."

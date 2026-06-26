@@ -75,6 +75,9 @@ aws s3 ls "s3://${DB_BACKUP_S3_BUCKET}/${DB_BACKUP_S3_PREFIX}" | while read -r l
 	file_date="$(echo "$line" | awk '{print $1}')"
 	file_name="$(echo "$line" | awk '{print $4}')"
 	[[ -z "$file_name" ]] && continue
+	# Only ever prune objects this script created — never unrelated keys that
+	# happen to share the prefix. Match our own podcastfy-<stamp>.dump pattern.
+	[[ "$file_name" == podcastfy-*.dump ]] || continue
 	if [[ "$file_date" < "$CUTOFF" ]]; then
 		echo "  deleting aged-out backup: ${file_name}"
 		aws s3 rm "s3://${DB_BACKUP_S3_BUCKET}/${DB_BACKUP_S3_PREFIX}${file_name}"

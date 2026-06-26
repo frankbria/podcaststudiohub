@@ -2,6 +2,7 @@
 Celery tasks for S3 file uploads
 """
 import os
+import tempfile
 import logging
 from celery import Task
 from typing import Dict, Any
@@ -14,6 +15,24 @@ from src.config import settings
 from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
+
+
+def _cleanup_temp_file(file_path: str) -> None:
+    """Best-effort delete of a temp upload artifact once it is no longer needed.
+
+    Only removes files under the system temp dir so it can never delete a
+    persistent file (e.g. under ``data/``); never raises. Call this only when the
+    local copy is disposable: after a successful upload, or after retries are
+    exhausted (no further retry will read it) — never on the retry path.
+    """
+    try:
+        temp_root = os.path.realpath(tempfile.gettempdir())
+        real = os.path.realpath(file_path)
+        if os.path.commonpath([temp_root, real]) == temp_root and os.path.isfile(real):
+            os.remove(real)
+            logger.info("Removed temp upload artifact: %s", real)
+    except Exception as exc:  # cleanup must never fail the task
+        logger.warning("Failed to clean up temp file %s: %s", file_path, exc)
 
 
 @celery_app.task(bind=True, name="upload_to_s3", time_limit=300, max_retries=3)
@@ -80,6 +99,9 @@ def upload_to_s3_task(
         else:
             s3_url = f"https://{bucket_name}.s3.{region}.amazonaws.com/{s3_key}"
 
+        # Upload succeeded — the local copy is now disposable.
+        _cleanup_temp_file(file_path)
+
         return {
             "status": "success",
             "s3_key": s3_key,
@@ -95,8 +117,10 @@ def upload_to_s3_task(
             "SignatureDoesNotMatch", "AccessDenied",
         })
         if error_code in NON_RETRYABLE_CODES:
-            # Permanent errors are never retried.
+            # Permanent errors are never retried — terminal failure, so the temp
+            # artifact is disposable (re-running generation re-composes it).
             logger.error(f"S3 upload failed with non-retryable error ({error_code}): {e}")
+            _cleanup_temp_file(file_path)
             raise
         # Retryable S3 error — retry with exponential backoff
         logger.warning(
@@ -107,6 +131,9 @@ def upload_to_s3_task(
             raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
         except self.MaxRetriesExceededError:
             logger.error(f"S3 upload failed after {self.max_retries} retries for {file_path}: {e}")
+            # Retries exhausted — no further retry will read the file, so the temp
+            # artifact is disposable. Without this, the failed tail leaks /tmp too.
+            _cleanup_temp_file(file_path)
             return {
                 "status": "failed",
                 "s3_key": None,
@@ -124,6 +151,9 @@ def upload_to_s3_task(
             raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
         except self.MaxRetriesExceededError:
             logger.error(f"S3 upload failed after {self.max_retries} retries for {file_path}: {e}")
+            # Retries exhausted — no further retry will read the file, so the temp
+            # artifact is disposable. Without this, the failed tail leaks /tmp too.
+            _cleanup_temp_file(file_path)
             return {
                 "status": "failed",
                 "s3_key": None,

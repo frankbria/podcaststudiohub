@@ -179,7 +179,7 @@ async def test_generate_forwards_episode_tts_provider(client, episode_project_an
     )
     assert upd.status_code == 200, upd.text
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-tts")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
@@ -187,7 +187,7 @@ async def test_generate_forwards_episode_tts_provider(client, episode_project_an
 
     assert resp.status_code == 202, resp.text
     mock_delay.assert_called_once()
-    assert mock_delay.call_args.kwargs["tts_model"] == "elevenlabs"
+    assert mock_delay.call_args.kwargs["kwargs"]["tts_model"] == "elevenlabs"
 
 
 @pytest.mark.asyncio
@@ -202,7 +202,7 @@ async def test_generate_falls_back_to_project_default_tts(client, episode_projec
     )
     assert upd.status_code == 200, upd.text
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-gemini")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
@@ -210,7 +210,7 @@ async def test_generate_falls_back_to_project_default_tts(client, episode_projec
 
     assert resp.status_code == 202, resp.text
     mock_delay.assert_called_once()
-    assert mock_delay.call_args.kwargs["tts_model"] == "gemini"
+    assert mock_delay.call_args.kwargs["kwargs"]["tts_model"] == "gemini"
 
 
 @pytest.mark.asyncio
@@ -225,14 +225,14 @@ async def test_generate_normalizes_gemini_multi_provider(client, episode_project
     )
     assert upd.status_code == 200, upd.text
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-gm")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
         )
 
     assert resp.status_code == 202, resp.text
-    kwargs = mock_delay.call_args.kwargs
+    kwargs = mock_delay.call_args.kwargs["kwargs"]
     assert kwargs["tts_model"] == "geminimulti"
     # The nested text_to_speech block is keyed by the normalized provider name.
     assert "geminimulti" in kwargs["conversation_config"]["text_to_speech"]
@@ -264,14 +264,14 @@ async def test_generate_forwards_conversation_config(client, episode_project_and
     )
     assert upd.status_code == 200, upd.text
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-cfg")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
         )
 
     assert resp.status_code == 202, resp.text
-    conv = mock_delay.call_args.kwargs["conversation_config"]
+    conv = mock_delay.call_args.kwargs["kwargs"]["conversation_config"]
     # Template fields are forwarded at the top level (podcastfy reads them there).
     assert conv["word_count"] == 300
     # The flat TTS config is translated into podcastfy's nested text_to_speech
@@ -291,14 +291,14 @@ async def test_generate_without_config_uses_task_default(client, episode_project
     episode_id, _project_id, headers = episode_project_and_auth
     await _create_text_source(client, episode_id, headers)
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-default")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
         )
 
     assert resp.status_code == 202, resp.text
-    call_kwargs = mock_delay.call_args.kwargs
+    call_kwargs = mock_delay.call_args.kwargs["kwargs"]
     # Not passed → task default tts_model="openai" / conversation_config=None applies.
     assert "tts_model" not in call_kwargs
     assert "conversation_config" not in call_kwargs
@@ -310,7 +310,7 @@ async def test_generate_rejects_unextracted_file_source(client, episode_and_auth
     episode_id, headers = episode_and_auth
     source = await _create_pdf_source(client, episode_id, headers)
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
         )
@@ -327,7 +327,7 @@ async def test_generate_passes_extracted_pdf_as_text(client, episode_and_auth):
     source = await _create_pdf_source(client, episode_id, headers)
     await _mark_complete(client, source["id"], headers, "Extracted PDF body.")
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-123")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
@@ -335,7 +335,7 @@ async def test_generate_passes_extracted_pdf_as_text(client, episode_and_auth):
 
     assert resp.status_code == 202, resp.text
     mock_delay.assert_called_once()
-    call_kwargs = mock_delay.call_args.kwargs
+    call_kwargs = mock_delay.call_args.kwargs["kwargs"]
     assert "file_paths" not in call_kwargs
     assert call_kwargs["text_content"] == "Extracted PDF body."
 
@@ -360,14 +360,14 @@ async def test_generate_passes_url_source_via_urls(client, episode_and_auth):
         )
     assert resp.status_code == 201, resp.text
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-456")
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
         )
 
     assert resp.status_code == 202, resp.text
-    call_kwargs = mock_delay.call_args.kwargs
+    call_kwargs = mock_delay.call_args.kwargs["kwargs"]
     assert "file_paths" not in call_kwargs
     assert "https://example.com/a" in call_kwargs["urls"]
 
@@ -385,7 +385,7 @@ async def test_generate_rejects_when_already_in_progress(client, episode_and_aut
     episode_id, headers = episode_and_auth
     await _create_text_source(client, episode_id, headers)
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-1")
         first = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
@@ -439,7 +439,7 @@ async def test_generate_allowed_from_restartable_status(restartable_status):
     current_user = MagicMock()
     current_user.tenant_id = uuid4()
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         mock_delay.return_value = MagicMock(id="task-restart")
         result = await generate_podcast(
             episode_id=uuid4(),
@@ -453,6 +453,10 @@ async def test_generate_allowed_from_restartable_status(restartable_status):
     mock_delay.assert_called_once()
     assert result["status"] == "queued"
     assert episode.generation_status == "queued"
+    # Issue #294: a link_error catch-all is attached so a hard-kill/crash still
+    # flips the episode to 'failed', and task_started_at is stamped for the reaper.
+    assert mock_delay.call_args.kwargs["link_error"] is not None
+    assert episode.task_started_at is not None
 
 
 @pytest.mark.parametrize(
@@ -476,7 +480,7 @@ async def test_generate_rejects_each_in_progress_status(in_progress_status):
     current_user = MagicMock()
     current_user.tenant_id = uuid4()
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         with pytest.raises(HTTPException) as exc_info:
             await generate_podcast(
                 episode_id=uuid4(),
@@ -521,7 +525,7 @@ async def test_generate_rejects_when_no_usable_content(client, episode_and_auth)
     )
     assert upd.status_code == 200, upd.text
 
-    with patch("src.routers.generation.generate_podcast_task.delay") as mock_delay:
+    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
         resp = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
         )

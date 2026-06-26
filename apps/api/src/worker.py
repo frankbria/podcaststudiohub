@@ -2,6 +2,7 @@
 Celery worker configuration for background tasks
 """
 from celery import Celery
+from datetime import timedelta
 
 from src.config import settings
 
@@ -17,6 +18,7 @@ celery_app = Celery(
         "src.tasks.platform_distribution",
         "src.tasks.content_extraction",
         "src.tasks.callbacks",
+        "src.tasks.maintenance",
     ]
 )
 
@@ -31,8 +33,15 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_always_eager=settings.CELERY_TASK_ALWAYS_EAGER,  # For testing
-    task_time_limit=600,  # 10 minutes max
-    task_soft_time_limit=540,  # 9 minutes soft limit
+    # Long-form generation needs a high ceiling. Invariant: soft < hard <
+    # visibility_timeout so the in-task SoftTimeLimitExceeded handler fires (and
+    # writes DB 'failed') before the hard kill, and the broker does not redeliver
+    # an in-flight message as a duplicate before it finishes/is killed (issue #294).
+    task_time_limit=settings.CELERY_TASK_TIME_LIMIT,
+    task_soft_time_limit=settings.CELERY_TASK_SOFT_TIME_LIMIT,
+    broker_transport_options={
+        "visibility_timeout": settings.CELERY_BROKER_VISIBILITY_TIMEOUT,
+    },
     worker_prefetch_multiplier=1,  # Take one task at a time
     worker_max_tasks_per_child=50,  # Restart workers after 50 tasks
     task_acks_late=True,  # Acknowledge tasks after completion
@@ -56,15 +65,17 @@ celery_app.conf.task_routes = {
     "on_distribution_complete": {"queue": "callbacks"},
     "on_workflow_complete": {"queue": "callbacks"},
     "on_workflow_failure": {"queue": "callbacks"},
+    "reap_stuck_episodes": {"queue": "callbacks"},
 }
 
-# Beat schedule (optional - for periodic tasks)
+# Beat schedule — periodic reaper that fails episodes stuck in a non-terminal
+# status past EPISODE_REAP_THRESHOLD_SECONDS, a final safety net for runs that
+# slip past every in-task guard (worker crash, broker loss) (issue #294).
 celery_app.conf.beat_schedule = {
-    # Example: Clean up old temporary files every day
-    # "cleanup-temp-files": {
-    #     "task": "src.tasks.maintenance.cleanup_temp_files",
-    #     "schedule": crontab(hour=2, minute=0),  # 2 AM daily
-    # },
+    "reap-stuck-episodes": {
+        "task": "reap_stuck_episodes",
+        "schedule": timedelta(seconds=settings.REAP_STUCK_EPISODES_INTERVAL_SECONDS),
+    },
 }
 
 if __name__ == "__main__":

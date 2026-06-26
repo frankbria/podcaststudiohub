@@ -3,7 +3,7 @@ Configuration management for Podcastfy API
 Loads environment variables and provides application settings
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from typing import Optional
 
 
@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: Optional[str] = None
     CELERY_RESULT_BACKEND: Optional[str] = None
     CELERY_TASK_ALWAYS_EAGER: bool = False
+    # Long-form generation can run for many minutes. Ordering invariant must hold:
+    # soft < hard < visibility_timeout < reaper threshold (issue #294).
+    CELERY_TASK_SOFT_TIME_LIMIT: int = 1500   # 25m — in-task SoftTimeLimitExceeded fires
+    CELERY_TASK_TIME_LIMIT: int = 1800        # 30m — hard kill ceiling
+    CELERY_BROKER_VISIBILITY_TIMEOUT: int = 2400  # 40m — keep in-flight msgs from redelivering
+    EPISODE_REAP_THRESHOLD_SECONDS: int = 2700    # 45m — reaper fails genuinely-stuck episodes
+    REAP_STUCK_EPISODES_INTERVAL_SECONDS: int = 300  # reaper cadence
 
     # Spotify OAuth
     SPOTIFY_CLIENT_ID: Optional[str] = None
@@ -131,6 +138,29 @@ class Settings(BaseSettings):
                 "ENCRYPTION_KEY must be at least 32 characters for secure AES encryption"
             )
         return v
+
+    @model_validator(mode="after")
+    def validate_celery_timeout_ordering(self) -> "Settings":
+        """Enforce soft < hard < visibility_timeout < reaper threshold (issue #294).
+
+        The ordering is what guarantees the in-task SoftTimeLimitExceeded handler
+        fires before the hard kill, the broker does not redeliver in-flight
+        messages, and the reaper only catches genuinely-stuck rows. Env overrides
+        could otherwise silently break it and reintroduce stuck/duplicate episodes.
+        """
+        ordered = [
+            ("CELERY_TASK_SOFT_TIME_LIMIT", self.CELERY_TASK_SOFT_TIME_LIMIT),
+            ("CELERY_TASK_TIME_LIMIT", self.CELERY_TASK_TIME_LIMIT),
+            ("CELERY_BROKER_VISIBILITY_TIMEOUT", self.CELERY_BROKER_VISIBILITY_TIMEOUT),
+            ("EPISODE_REAP_THRESHOLD_SECONDS", self.EPISODE_REAP_THRESHOLD_SECONDS),
+        ]
+        for (lo_name, lo), (hi_name, hi) in zip(ordered, ordered[1:]):
+            if not lo < hi:
+                raise ValueError(
+                    f"{lo_name} ({lo}) must be < {hi_name} ({hi}): "
+                    "required invariant soft < hard < visibility_timeout < reaper"
+                )
+        return self
 
     model_config = SettingsConfigDict(
         env_file=".env",

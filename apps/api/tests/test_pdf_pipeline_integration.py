@@ -104,14 +104,14 @@ async def test_pdf_upload_extract_generate_pipeline(client, test_db, episode_and
 
     # ---- 3. Generate: source resolves to text, engine gets text_content ----
     with patch("src.routers.generation.generate_podcast_task") as mock_task:
-        mock_task.delay.return_value.id = "celery-task-123"
+        mock_task.apply_async.return_value.id = "celery-task-123"
         gen = await client.post(
             f"/generation/episodes/{episode_id}/generate", headers=headers
         )
 
     assert gen.status_code == 202
-    mock_task.delay.assert_called_once()
-    kwargs = mock_task.delay.call_args.kwargs
+    mock_task.apply_async.assert_called_once()
+    kwargs = mock_task.apply_async.call_args.kwargs["kwargs"]
     # The PDF was resolved to extracted text — not rejected as an unextracted file
     assert kwargs["text_content"] is not None
     assert "Extracted whitepaper body" in kwargs["text_content"]

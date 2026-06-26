@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -22,6 +23,7 @@ from ..services.distribution_target_service import (
     get_active_distribution_targets_for_project,
 )
 from ..tasks.podcast_generation import generate_podcast_task
+from ..tasks.callbacks import on_workflow_failure
 
 logger = logging.getLogger(__name__)
 
@@ -277,18 +279,28 @@ async def generate_podcast(
                 episode_id, episode.project_id,
             )
 
-    # Start Celery task
-    task = generate_podcast_task.delay(
-        episode_id=str(episode_id),
-        urls=urls if urls else None,
-        text_content="\n\n".join(text_content) if text_content else None,
-        enable_composition=use_composition,
-        enable_distribution=use_distribution,
-        **extra_kwargs,
+    # Start Celery task. apply_async (not .delay) so we can attach a link_error:
+    # if the task is hard-killed (time limit) or crashes before its own except
+    # handler runs, on_workflow_failure still flips the episode to 'failed' instead
+    # of leaving it stuck at 'queued' forever (issue #294).
+    task = generate_podcast_task.apply_async(
+        kwargs={
+            "episode_id": str(episode_id),
+            "urls": urls if urls else None,
+            "text_content": "\n\n".join(text_content) if text_content else None,
+            "enable_composition": use_composition,
+            "enable_distribution": use_distribution,
+            **extra_kwargs,
+        },
+        link_error=on_workflow_failure.s(
+            episode_id=str(episode_id), task_name="generate_podcast"
+        ),
     )
 
-    # Update episode status
+    # Update episode status. Stamp task_started_at so the beat reaper can detect a
+    # genuinely-stuck run by age (issue #294).
     episode.generation_status = "queued"
+    episode.task_started_at = datetime.now(timezone.utc)
     episode.generation_progress = {
         "stage": "queued",
         "progress": 0,

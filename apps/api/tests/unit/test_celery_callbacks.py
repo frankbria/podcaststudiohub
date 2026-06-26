@@ -31,10 +31,14 @@ def _mock_episode(episode_id: str) -> MagicMock:
 def _make_sync_session(episode: MagicMock):
 	"""
 	Return a mock that behaves like a SyncSessionLocal() context manager,
-	yielding a session whose .get() returns *episode*.
+	yielding a session whose locked fetch returns *episode*.
+
+	Callbacks fetch the episode via
+	``db.execute(select(...).with_for_update()).scalar_one_or_none()`` (issue
+	#276), so the mock resolves that chain to *episode*.
 	"""
 	mock_session = MagicMock()
-	mock_session.get.return_value = episode
+	mock_session.execute.return_value.scalar_one_or_none.return_value = episode
 	mock_ctx = MagicMock()
 	mock_ctx.__enter__ = MagicMock(return_value=mock_session)
 	mock_ctx.__exit__ = MagicMock(return_value=False)
@@ -264,6 +268,30 @@ class TestOnDistributionComplete:
 
 		assert "spotify" in episode.generation_progress["distribution"]
 		assert "apple_podcasts" in episode.generation_progress["distribution"]
+
+	def test_fetches_episode_with_row_lock(self):
+		"""The episode is fetched FOR UPDATE so concurrent platform callbacks
+		serialize instead of losing updates (issue #276)."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		mock_ctx, mock_session = _make_sync_session(episode)
+
+		result = {"status": "success", "platform": "spotify"}
+
+		from src.tasks.callbacks import on_distribution_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(
+				on_distribution_complete,
+				result=result,
+				episode_id=episode_id,
+				platform="spotify",
+			)
+
+		# Locked fetch, not a plain db.get(): the SELECT carries a FOR UPDATE clause.
+		stmt = mock_session.execute.call_args.args[0]
+		assert stmt._for_update_arg is not None
+		mock_session.get.assert_not_called()
 
 	def test_skips_update_on_failure_result(self):
 		"""No database update when result indicates failure."""
@@ -581,6 +609,22 @@ class TestUpdateEpisodeHelper:
 
 		assert result is False
 		mock_session.commit.assert_not_called()
+
+	def test_fetches_episode_with_row_lock(self):
+		"""_update_episode fetches FOR UPDATE so every callback sharing it
+		(upload/composition/workflow) is protected from lost updates (issue #276)."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		mock_ctx, mock_session = _make_sync_session(episode)
+
+		from src.tasks.callbacks import _update_episode
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_update_episode(episode_id, updates={"generation_status": "complete"})
+
+		stmt = mock_session.execute.call_args.args[0]
+		assert stmt._for_update_arg is not None
+		mock_session.get.assert_not_called()
 
 	def test_returns_false_on_db_exception(self):
 		"""Returns False (does not re-raise) when a DB exception occurs."""

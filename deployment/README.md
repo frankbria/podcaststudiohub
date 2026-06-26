@@ -339,6 +339,93 @@ one-time **administrative** action — run it from AWS CloudShell (admin identit
 deployment/scripts/enable-s3-versioning.sh podcaststudiohub-audio
 ```
 
+## Database Backup & Restore (DR) — issue #293
+
+All durable tenant state (accounts, projects, episodes, RSS feeds, distribution
+targets with encrypted OAuth tokens, Stripe billing) lives only in the VPS
+Postgres datadir. Host loss without an off-host copy = total, unrecoverable loss.
+These scripts give an automated nightly logical dump shipped to S3 with retention,
+plus a tested restore path.
+
+**Recovery targets:** **RPO ≤ 24h** (worst case: data written since the last
+nightly dump) and **RTO ≈ minutes** (download the dump + `pg_restore`). For a
+tighter RPO you'd move to continuous WAL archiving (pgBackRest/WAL-G); nightly
+logical dumps are the deliberate, lazy-correct choice for a single-VPS dev host.
+
+### What it does
+
+- `deployment/scripts/backup-db.sh` — `pg_dump -Fc` → timestamped object
+  at `s3://$DB_BACKUP_S3_BUCKET/$DB_BACKUP_S3_PREFIX`, then prunes objects older
+  than `DB_BACKUP_RETENTION_DAYS` (default 14).
+- `deployment/scripts/install-db-backup-timer.sh` — installs a systemd service +
+  nightly timer (`03:30` by default) that runs the backup as the non-root
+  `podcastfy` service account, reading DB/S3 settings from the API `.env`.
+- `deployment/scripts/restore-db.sh` — pulls a dump from S3 and `pg_restore`s it
+  (latest by default, or a named backup), guarded by a confirmation prompt.
+
+Settings (env, defaulting to the app's existing `AWS_*` / `DATABASE_URL`):
+
+| Var | Default | Meaning |
+|---|---|---|
+| `DB_BACKUP_S3_BUCKET` | `$AWS_S3_BUCKET` | bucket for dumps |
+| `DB_BACKUP_S3_PREFIX` | `db-backups/` | key prefix |
+| `DB_BACKUP_RETENTION_DAYS` | `14` | prune objects older than N days |
+| `ON_CALENDAR` (installer) | `*-*-* 03:30:00` | systemd nightly schedule |
+
+> **IAM:** the backup needs `s3:PutObject` + `s3:GetObject` + `s3:DeleteObject`
+> (retention prune) **and** `s3:ListBucket` (find latest / prune) on the backup
+> prefix. The app's audio IAM user intentionally lacks `ListBucket`, so use a
+> separate backup credential, or set `DB_BACKUP_S3_BUCKET` to a dedicated bucket
+> whose IAM policy grants those four actions on `arn:aws:s3:::<bucket>/db-backups/*`
+> plus `ListBucket` on the bucket.
+
+### Install (once, on the VPS)
+
+```bash
+ssh root@<SERVER_IP>
+cd /opt/podcaststudiohub && bash deployment/scripts/install-db-backup-timer.sh
+systemctl list-timers podcastfy-db-backup.timer   # confirm the next run
+```
+
+Trigger an immediate backup to verify the pipeline end-to-end:
+
+```bash
+systemctl start podcastfy-db-backup.service
+journalctl -u podcastfy-db-backup.service -n 50    # look for "Uploaded … to s3://…"
+aws s3 ls s3://$AWS_S3_BUCKET/db-backups/           # the dump object is present
+```
+
+### Restore runbook (tested)
+
+```bash
+ssh root@<SERVER_IP>
+cd /opt/podcaststudiohub
+
+# Make DB/S3 settings available (same as the app):
+set -a && . api/.env && set +a
+
+# Restore the latest backup (prompts before overwriting):
+bash deployment/scripts/restore-db.sh
+
+# …or a specific backup by name:
+aws s3 ls s3://$AWS_S3_BUCKET/db-backups/
+bash deployment/scripts/restore-db.sh podcastfy-20260601T033000Z.dump
+```
+
+**Test the restore without touching prod** (do this at least once, then quarterly):
+
+```bash
+# Restore the latest dump into a throwaway database and sanity-check row counts.
+createdb podcastfy_restore_test
+DATABASE_URL="postgresql://user:pass@localhost/podcastfy_restore_test" \
+  DB_RESTORE_FORCE=1 bash deployment/scripts/restore-db.sh
+psql podcastfy_restore_test -c "SELECT count(*) FROM users;"
+dropdb podcastfy_restore_test
+```
+
+A green restore-test is the only proof the backups are usable — an untested
+backup is not a backup.
+
 ## Nginx Configuration
 
 Nginx reverse proxy configuration is in `deployment/nginx/podcastfy.conf`.

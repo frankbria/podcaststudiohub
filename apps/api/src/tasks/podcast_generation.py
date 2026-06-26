@@ -17,10 +17,46 @@ from src.config import settings
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
 from src.tasks.callbacks import _update_episode, _utcnow_iso
+from src.tasks.idempotency import acquire_generation_lock, release_generation_lock
 from src.tasks.s3_upload import upload_to_s3_task
 from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
+
+# Active (non-terminal, non-queued) statuses. Seeing one of these at task entry
+# means a run is already in flight, so a fresh delivery is a duplicate (issue #295).
+_IN_PROGRESS_STATUSES = frozenset(
+    {"extracting", "generating", "synthesizing", "uploading", "composing", "distributing"}
+)
+
+
+def _load_generation_status(episode_id: str) -> Optional[str]:
+    """Read an episode's current generation_status. Returns None on missing row or
+    DB error so the idempotency guard fails open (proceeds) rather than wedging."""
+    try:
+        with SyncSessionLocal() as db:
+            episode = db.get(Episode, uuid_module.UUID(episode_id))
+            return episode.generation_status if episode is not None else None
+    except Exception as exc:
+        logger.warning(
+            "Could not read generation_status for episode %s; proceeding: %s",
+            episode_id, exc,
+        )
+        return None
+
+
+def _skipped_result(reason: str) -> Dict[str, Any]:
+    """Result for an idempotency short-circuit — no paid work was run (issue #295)."""
+    return {
+        "status": "skipped",
+        "skipped": True,
+        "reason": reason,
+        "audio_file_path": None,
+        "transcript_path": None,
+        "duration_seconds": 0,
+        "file_size_bytes": 0,
+        "error": None,
+    }
 
 
 def build_podcast_s3_key(user_id: str, episode_id: str) -> str:
@@ -106,6 +142,12 @@ def _upload_to_s3_with_retries(
     time_limit=settings.CELERY_TASK_TIME_LIMIT,
     soft_time_limit=settings.CELERY_TASK_SOFT_TIME_LIMIT,
     max_retries=3,
+    # Fail-fast override of the global at-least-once settings (worker.py:47-48):
+    # this task runs paid, non-idempotent LLM/TTS work, so a crashed worker must
+    # NOT re-queue and re-run it. Abrupt loss surfaces as a failed/stuck episode
+    # (handled by the #294 reaper) instead of duplicate billing (issue #295).
+    acks_late=False,
+    reject_on_worker_lost=False,
 )
 def generate_podcast_task(
     self: Task,
@@ -159,7 +201,35 @@ def generate_podcast_task(
             "error": Optional[str]
         }
     """
+    task_id = self.request.id or "unknown"
+    is_retry = (self.request.retries or 0) > 0
+    lock_held = False
+
     try:
+        # Idempotency guard (issue #295): short-circuit before any paid work so a
+        # broker-redelivered duplicate or double-dispatch cannot re-run the paid
+        # LLM/TTS pipeline. A genuine retry (same task_id) is allowed through.
+        status = _load_generation_status(episode_id)
+        if status == "complete":
+            logger.info("Episode %s already complete; skipping duplicate generation", episode_id)
+            return _skipped_result("already complete")
+        if status in _IN_PROGRESS_STATUSES and not is_retry:
+            logger.warning(
+                "Episode %s already in progress (status=%s); skipping duplicate run",
+                episode_id, status,
+            )
+            return _skipped_result(f"already in progress ({status})")
+        if not acquire_generation_lock(episode_id, task_id):
+            logger.warning(
+                "Episode %s generation lock held by another run; skipping concurrent duplicate",
+                episode_id,
+            )
+            return _skipped_result("concurrent run in progress")
+        lock_held = True
+        # Record in-progress state so subsequent deliveries observe in-flight work
+        # and the status no longer jumps straight from 'queued' to a terminal value.
+        _update_episode(episode_id, {"generation_status": "generating"})
+
         # Stage 1: Content Extraction (0-33%)
         self.update_state(
             state='PROGRESS',
@@ -297,6 +367,8 @@ def generate_podcast_task(
                     "resolved, refusing to upload outside the tenant prefix",
                     episode_id,
                 )
+                if lock_held:
+                    release_generation_lock(episode_id, task_id)
                 return generation_result
 
             # Trigger the full workflow: S3 upload → [composition] → [distribution]
@@ -351,6 +423,8 @@ def generate_podcast_task(
                         episode_id, sync_err,
                     )
 
+        if lock_held:
+            release_generation_lock(episode_id, task_id)
         return generation_result
 
     except SoftTimeLimitExceeded:
@@ -379,6 +453,8 @@ def generate_podcast_task(
                 'status': f'Generation failed: {msg}',
             },
         )
+        if lock_held:
+            release_generation_lock(episode_id, task_id)
         return {
             "status": "failed",
             "audio_file_path": None,
@@ -430,6 +506,8 @@ def generate_podcast_task(
                     'status': f'Generation failed: {str(e)}'
                 }
             )
+            if lock_held:
+                release_generation_lock(episode_id, task_id)
             return {
                 "status": "failed",
                 "audio_file_path": None,

@@ -43,9 +43,9 @@ podcaststudiohub/
 - Podcastfy v0.4.1 for podcast generation
 
 **Frontend (Next.js)**
-- Next.js 14 (App Router)
+- Next.js 15 (App Router)
 - TypeScript
-- React 18
+- React 19
 - Tailwind CSS + Shadcn/UI components
 - NextAuth.js for authentication
 - TanStack Query for data fetching

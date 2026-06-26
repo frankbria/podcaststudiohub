@@ -60,6 +60,22 @@ def test_init_sets_region(mock_boto3_client):
 	assert svc.region_name == "eu-west-1"
 
 
+def test_init_no_args_resolves_bucket_and_region_from_settings():
+	"""Regression for #291: a no-arg StorageService() must pick up AWS_S3_BUCKET
+	and AWS_REGION from settings, not the non-existent S3_BUCKET_NAME (which left
+	bucket_name=None and broke episode download + RSS upload)."""
+	with patch("src.services.storage_service.boto3.client") as mock_client, \
+		patch("src.services.storage_service.settings") as mock_settings:
+		mock_client.return_value = MagicMock()
+		mock_settings.AWS_ACCESS_KEY_ID = "key"
+		mock_settings.AWS_SECRET_ACCESS_KEY = "secret"
+		mock_settings.AWS_S3_BUCKET = "configured-bucket"
+		mock_settings.AWS_REGION = "eu-central-1"
+		svc = StorageService()
+	assert svc.bucket_name == "configured-bucket"
+	assert svc.region_name == "eu-central-1"
+
+
 # ===========================================================================
 # upload_file
 # ===========================================================================

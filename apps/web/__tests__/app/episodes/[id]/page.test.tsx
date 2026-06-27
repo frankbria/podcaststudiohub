@@ -61,6 +61,23 @@ function mockFetchRouter() {
   }) as jest.Mock
 }
 
+// Like mockFetchRouter, but returns a saved TTS config so the Saved
+// Configurations <Select> renders (the path that crashed in #299).
+function mockFetchRouterWithSavedConfig() {
+  return jest.fn((url: string) => {
+    if (url.includes('/content/episodes/')) {
+      return Promise.resolve({ ok: true, json: async () => ({ content_sources: [] }) })
+    }
+    if (url.includes('/tts-configs')) {
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ configs: [{ id: 'tts1', name: 'My Voice', provider: 'openai', is_default: true }] }),
+      })
+    }
+    return Promise.resolve({ ok: true, json: async () => draftEpisode })
+  }) as jest.Mock
+}
+
 describe('EpisodePage generate flow', () => {
   beforeEach(() => {
     jest.clearAllMocks()
@@ -93,5 +110,46 @@ describe('EpisodePage generate flow', () => {
     })
     expect(showSuccessToast).toHaveBeenCalledWith('Podcast generation started')
     expect(showErrorToast).not.toHaveBeenCalled()
+  })
+})
+
+describe('EpisodePage TTS config selector (#299)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  it('opens the saved-config Select and renders "Default (no override)" without crashing', async () => {
+    global.fetch = mockFetchRouterWithSavedConfig()
+    render(<EpisodePage />)
+
+    await screen.findByText('Test Episode')
+    await userEvent.click(screen.getByRole('button', { name: /tts settings/i }))
+    // Opening the Select renders the items; the default option previously threw
+    // at render via an empty-string SelectItem value (#299).
+    await userEvent.click(await screen.findByLabelText(/select a saved tts configuration/i))
+
+    expect(await screen.findByText('Default (no override)')).toBeInTheDocument()
+  })
+
+  it('applies the default option as tts_config_id: null', async () => {
+    const fetchMock = mockFetchRouterWithSavedConfig()
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+
+    await screen.findByText('Test Episode')
+    await userEvent.click(screen.getByRole('button', { name: /tts settings/i }))
+    await userEvent.click(await screen.findByLabelText(/select a saved tts configuration/i))
+    await userEvent.click(await screen.findByText('Default (no override)'))
+    await userEvent.click(screen.getByRole('button', { name: /apply to episode/i }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/proxy/episodes/ep1',
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({ tts_config_id: null }),
+        })
+      )
+    })
   })
 })

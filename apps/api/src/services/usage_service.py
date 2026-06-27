@@ -65,8 +65,12 @@ async def _get_user_tier(db: AsyncSession, user_id: UUID) -> str:
 	return sub.tier
 
 
-async def track_episode_creation(db: AsyncSession, user_id: UUID, tenant_id: UUID) -> None:
-	"""Increment episode count for current billing period."""
+async def track_episode_creation(
+	db: AsyncSession, user_id: UUID, tenant_id: UUID, count: int = 1
+) -> None:
+	"""Increment episode count for current billing period (by ``count``)."""
+	if count <= 0:
+		return
 	await _get_or_create_usage(db, user_id, tenant_id)
 	period_start, _ = _current_period_dates()
 	# Atomic server-side increment avoids lost updates under concurrency.
@@ -77,7 +81,7 @@ async def track_episode_creation(db: AsyncSession, user_id: UUID, tenant_id: UUI
 			BillingUsage.period_start == period_start,
 		)
 		.values(
-			episodes_created=BillingUsage.episodes_created + 1,
+			episodes_created=BillingUsage.episodes_created + count,
 			updated_at=datetime.utcnow(),
 		)
 	)
@@ -103,8 +107,8 @@ async def track_api_call(db: AsyncSession, user_id: UUID, tenant_id: UUID) -> No
 	await db.commit()
 
 
-async def check_episode_limit(db: AsyncSession, user_id: UUID) -> bool:
-	"""Return True if user can create another episode this period."""
+async def check_episode_quota(db: AsyncSession, user_id: UUID, count: int = 1) -> bool:
+	"""Return True if ``count`` more episodes fit within this period's limit."""
 	tier = await _get_user_tier(db, user_id)
 	if is_unlimited(tier, "episodes_per_month"):
 		return True
@@ -120,7 +124,12 @@ async def check_episode_limit(db: AsyncSession, user_id: UUID) -> bool:
 	)
 	usage = result.scalar_one_or_none()
 	current = usage.episodes_created if usage else 0
-	return current < limit
+	return current + count <= limit
+
+
+async def check_episode_limit(db: AsyncSession, user_id: UUID) -> bool:
+	"""Return True if user can create another episode this period."""
+	return await check_episode_quota(db, user_id, 1)
 
 
 async def check_api_limit(db: AsyncSession, user_id: UUID) -> bool:

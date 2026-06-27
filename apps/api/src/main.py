@@ -1,11 +1,12 @@
 """
 Main FastAPI application for Podcastfy GUI API
 """
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 import logging
 
 from src.config import settings
+from src.dependencies import meter_api_call
 from src.middleware.cors import setup_cors
 from src.middleware.tenant import TenantContextMiddleware
 
@@ -24,6 +25,9 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    # Boundary metering: count + enforce per-period API quota on every request
+    # (no-op for public/unauthenticated paths). See dependencies.meter_api_call.
+    dependencies=[Depends(meter_api_call)],
 )
 
 # Setup CORS middleware

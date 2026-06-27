@@ -111,7 +111,7 @@ async def client(test_db):
     Create an async HTTP client for testing FastAPI endpoints with test database.
     This fixture properly handles tenant context for RLS by accepting the Request parameter.
     """
-    from fastapi import Request
+    from fastapi import HTTPException, Request
     from src.database import set_tenant_context
 
     # Override the database dependency with proper tenant context support
@@ -123,6 +123,14 @@ async def client(test_db):
                 await set_tenant_context(test_db, str(request.state.tenant_id))
 
             yield test_db
+        except HTTPException:
+            # Expected control-flow responses (402/404/409, …) are NOT database
+            # failures. Production uses a session-per-request, so an HTTPException
+            # there never rolls back other requests' data. The test session is
+            # shared across all requests in a test, so rolling back here would
+            # wipe earlier writes (e.g. the registered user) and break any
+            # assertion made after a rejected request. Re-raise without rollback.
+            raise
         except Exception:
             await test_db.rollback()
             raise

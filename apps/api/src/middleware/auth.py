@@ -58,6 +58,29 @@ def get_tenant_id_from_token(token: str) -> Optional[str]:
     return payload.get("tenant_id")
 
 
+def get_user_id_from_token(token: str) -> Optional[str]:
+    """
+    Softly extract the user id (``sub`` claim) from a JWT **access** token.
+
+    Tolerant variant for boundary metering: returns None on any failure
+    (invalid/expired token, wrong token type, missing claim) instead of raising,
+    so it can run on every request without forcing authentication on public
+    routes. Uses ``verify_access_token`` (not ``verify_jwt_token``) so refresh /
+    verification tokens are not metered — they would be rejected with 401 by the
+    route's ``get_current_user``, and metering must not pre-empt that with a 402.
+
+    Args:
+        token: JWT token string
+
+    Returns:
+        User ID string, or None if the token is not a valid access token.
+    """
+    try:
+        return verify_access_token(token).get("sub")
+    except Exception:
+        return None
+
+
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
     db: AsyncSession = Depends(get_db)

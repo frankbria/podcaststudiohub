@@ -119,6 +119,19 @@ async def test_checkout_creates_session_for_pro(client):
 
 
 @pytest.mark.asyncio
+async def test_checkout_returns_503_in_production_without_stripe(client, monkeypatch):
+	"""In production with Stripe unconfigured, checkout must fail closed, not
+	return a dead mock URL (issue #298)."""
+	from src.config import settings
+
+	monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+	headers = await register_and_login(client)
+	response = await client.post("/billing/checkout", headers=headers, json={"tier": "pro"})
+	assert response.status_code == 503
+	assert "mock" not in response.text
+
+
+@pytest.mark.asyncio
 async def test_checkout_rejects_free_tier(client):
 	"""Free tier is not valid for checkout (it's the default)."""
 	headers = await register_and_login(client)

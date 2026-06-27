@@ -94,7 +94,14 @@ async def create_checkout_session(
 	sub = await get_or_create_subscription(db, user_id, tenant_id)
 
 	if not _stripe_enabled():
-		# Mock mode — return a placeholder URL so tests pass without Stripe credentials
+		# In production a mock URL would send paying users to a dead link, so
+		# signal billing is disabled instead. The mock URL is dev/test only (issue #298).
+		from ..config import settings  # type: ignore[import]
+		if settings.is_production:
+			raise HTTPException(
+				status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+				detail="Billing is not configured; upgrades are currently unavailable.",
+			)
 		mock_url = f"https://checkout.stripe.com/mock?tier={tier}&user={user_id}"
 		logger.info("Stripe not configured; returning mock checkout URL")
 		return {"checkout_url": mock_url}

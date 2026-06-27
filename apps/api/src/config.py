@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     APP_NAME: str = "Podcastfy API"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
+    # Fail-closed default: unset environments behave as production (no mock
+    # billing URLs, etc.). Dev/test must opt out explicitly (issue #298).
+    ENVIRONMENT: str = "production"
     # Bind loopback only: nginx reverse-proxies to 127.0.0.1 in prod and local
     # dev reaches it over localhost. Never default to 0.0.0.0 (issue #209).
     API_HOST: str = "127.0.0.1"
@@ -168,6 +171,11 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore"
     )
+
+    @property
+    def is_production(self) -> bool:
+        """True when ENVIRONMENT is production (case-insensitive)."""
+        return self.ENVIRONMENT.strip().lower() == "production"
 
     @property
     def celery_broker(self) -> str:

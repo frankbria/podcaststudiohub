@@ -12,6 +12,9 @@ from sqlalchemy.pool import NullPool
 # Disable rate limiting for all tests — the limiter uses Redis and would
 # throttle the many registration/login calls made across the test suite.
 os.environ.setdefault("RATE_LIMIT_ENABLED", "false")
+# Tests run as non-production so dev-only paths (e.g. mock billing) stay active
+# under the fail-closed ENVIRONMENT default (issue #298).
+os.environ.setdefault("ENVIRONMENT", "test")
 
 from src.main import app
 from src.database import get_db, get_streaming_session_factory

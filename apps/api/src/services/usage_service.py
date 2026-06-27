@@ -5,7 +5,8 @@ from decimal import Decimal
 from typing import Any, Dict
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.billing_subscription import BillingSubscription
@@ -29,25 +30,28 @@ async def _get_or_create_usage(db: AsyncSession, user_id: UUID, tenant_id: UUID)
 	"""Return usage record for the current period, creating one if needed."""
 	period_start, period_end = _current_period_dates()
 
+	# Concurrency-safe first-touch insert: ON CONFLICT DO NOTHING means two
+	# concurrent requests for the same (user_id, period_start) can never create
+	# duplicate rows. Metric columns rely on their DB defaults.
+	await db.execute(
+		pg_insert(BillingUsage)
+		.values(
+			user_id=user_id,
+			tenant_id=tenant_id,
+			period_start=period_start,
+			period_end=period_end,
+		)
+		.on_conflict_do_nothing(index_elements=["user_id", "period_start"])
+	)
+
+	# Re-select the guaranteed-present row (either ours or the concurrent winner's).
 	result = await db.execute(
 		select(BillingUsage).where(
 			BillingUsage.user_id == user_id,
 			BillingUsage.period_start == period_start,
 		)
 	)
-	usage = result.scalar_one_or_none()
-
-	if usage is None:
-		usage = BillingUsage(
-			user_id=user_id,
-			tenant_id=tenant_id,
-			period_start=period_start,
-			period_end=period_end,
-		)
-		db.add(usage)
-		await db.flush()
-
-	return usage
+	return result.scalar_one()
 
 
 async def _get_user_tier(db: AsyncSession, user_id: UUID) -> str:
@@ -63,17 +67,39 @@ async def _get_user_tier(db: AsyncSession, user_id: UUID) -> str:
 
 async def track_episode_creation(db: AsyncSession, user_id: UUID, tenant_id: UUID) -> None:
 	"""Increment episode count for current billing period."""
-	usage = await _get_or_create_usage(db, user_id, tenant_id)
-	usage.episodes_created += 1
-	usage.updated_at = datetime.utcnow()
+	await _get_or_create_usage(db, user_id, tenant_id)
+	period_start, _ = _current_period_dates()
+	# Atomic server-side increment avoids lost updates under concurrency.
+	await db.execute(
+		update(BillingUsage)
+		.where(
+			BillingUsage.user_id == user_id,
+			BillingUsage.period_start == period_start,
+		)
+		.values(
+			episodes_created=BillingUsage.episodes_created + 1,
+			updated_at=datetime.utcnow(),
+		)
+	)
 	await db.commit()
 
 
 async def track_api_call(db: AsyncSession, user_id: UUID, tenant_id: UUID) -> None:
 	"""Track an API call for the current billing period."""
-	usage = await _get_or_create_usage(db, user_id, tenant_id)
-	usage.api_calls += 1
-	usage.updated_at = datetime.utcnow()
+	await _get_or_create_usage(db, user_id, tenant_id)
+	period_start, _ = _current_period_dates()
+	# Atomic server-side increment avoids lost updates under concurrency.
+	await db.execute(
+		update(BillingUsage)
+		.where(
+			BillingUsage.user_id == user_id,
+			BillingUsage.period_start == period_start,
+		)
+		.values(
+			api_calls=BillingUsage.api_calls + 1,
+			updated_at=datetime.utcnow(),
+		)
+	)
 	await db.commit()
 
 

@@ -234,10 +234,12 @@ class TestGetUsageSummary:
 		db = _mock_db()
 		usage = _make_usage(episodes_created=2, api_calls=50, storage_bytes=1024)
 
-		# _get_user_tier call, _get_or_create_usage call (select), then flush if new
+		# _get_user_tier (select), then _get_or_create_usage:
+		# upsert insert (on_conflict_do_nothing) + re-select via scalar_one().
 		results = [
 			MagicMock(scalar_one_or_none=MagicMock(return_value=_make_subscription("free"))),
-			MagicMock(scalar_one_or_none=MagicMock(return_value=usage)),
+			MagicMock(),  # ON CONFLICT DO NOTHING insert
+			MagicMock(scalar_one=MagicMock(return_value=usage)),
 		]
 		db.execute.side_effect = results
 
@@ -257,7 +259,8 @@ class TestGetUsageSummary:
 
 		results = [
 			MagicMock(scalar_one_or_none=MagicMock(return_value=_make_subscription("free"))),
-			MagicMock(scalar_one_or_none=MagicMock(return_value=usage)),
+			MagicMock(),  # ON CONFLICT DO NOTHING insert
+			MagicMock(scalar_one=MagicMock(return_value=usage)),
 		]
 		db.execute.side_effect = results
 

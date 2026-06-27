@@ -40,7 +40,9 @@ _PODCASTFY_TTS_PROVIDER = {"gemini_multi": "geminimulti"}
 # distributing/…); starting a second run would race to write s3_url/s3_key/
 # generation_status and overwrite the in-progress celery_task_id in
 # generation_progress, so SSE would only track the newer task (issue #214).
-_RESTARTABLE_STATUSES = frozenset({"draft", "complete", "failed"})
+_RESTARTABLE_STATUSES = frozenset(
+    {"draft", "complete", "failed", "distribution_failed"}
+)
 
 
 def _podcastfy_tts_model(provider: str) -> str:
@@ -403,8 +405,12 @@ async def get_generation_progress_stream(
                 # Send SSE event
                 yield f"data: {json.dumps(progress_data)}\n\n"
 
-                # Check if generation is complete or failed
-                if current.generation_status in ["complete", "failed"]:
+                # Check if generation reached a terminal status
+                if current.generation_status in [
+                    "complete",
+                    "failed",
+                    "distribution_failed",
+                ]:
                     break
 
                 # Wait before next update (poll every 2 seconds)

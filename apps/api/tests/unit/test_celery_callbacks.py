@@ -386,6 +386,27 @@ class TestOnWorkflowComplete:
 		assert episode.generation_progress["failed_platforms"] == ["apple_podcasts"]
 		mock_session.commit.assert_called_once()
 
+	def test_clears_stale_failed_platforms_on_successful_retry(self):
+		"""A retried run that fully succeeds drops the prior failed_platforms (issue #300)."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		episode.generation_progress = {
+			"failed_platforms": ["apple_podcasts"],
+			"distribution": {
+				"spotify": {"status": "complete"},
+				"apple_podcasts": {"status": "complete"},
+			},
+		}
+		mock_ctx, mock_session = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		assert episode.generation_status == "complete"
+		assert "failed_platforms" not in episode.generation_progress
+
 	def test_handles_missing_episode(self):
 		"""Callback does not raise when episode is not found."""
 		episode_id = str(uuid.uuid4())

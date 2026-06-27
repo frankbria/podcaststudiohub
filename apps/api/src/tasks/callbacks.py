@@ -275,6 +275,9 @@ def on_workflow_complete(self: Task, result: Dict[str, Any], episode_id: str) ->
 			else:
 				episode.generation_status = "complete"
 				current_progress["status"] = "complete"
+				# Clear any stale marker from a prior distribution_failed run that
+				# has since been retried successfully (issue #300).
+				current_progress.pop("failed_platforms", None)
 			current_progress["completed_at"] = completed_at
 			episode.generation_progress = current_progress
 

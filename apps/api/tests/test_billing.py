@@ -77,13 +77,18 @@ async def test_get_subscription_new_user_defaults_to_free(client):
 
 @pytest.mark.asyncio
 async def test_get_subscription_usage_starts_at_zero(client):
-	"""New user's usage should be zero."""
+	"""New user has no episodes; api_calls reflect boundary metering (#297).
+
+	Since wiring up usage metering, every authenticated request is counted — so
+	this very `GET /billing/subscription` increments api_calls. episodes_created
+	stays 0 because no episode has been created.
+	"""
 	headers = await register_and_login(client)
 	response = await client.get("/billing/subscription", headers=headers)
 	assert response.status_code == 200
 	data = response.json()
 	assert data["usage"]["episodes_created"] == 0
-	assert data["usage"]["api_calls"] == 0
+	assert data["usage"]["api_calls"] >= 1
 
 
 @pytest.mark.asyncio

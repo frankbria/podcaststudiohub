@@ -36,6 +36,7 @@ from ..services.episode_service import (
 	VALID_SORT_ORDERS,
 )
 from ..services.storage_service import StorageService
+from ..services import usage_service
 from ..config import settings
 from ..utils.download_utils import (
 	get_episode_filename,
@@ -69,14 +70,23 @@ async def create_episode_endpoint(
 		Created episode with all fields
 
 	Raises:
+		HTTPException: 402 if the plan's monthly episode limit is reached
 		HTTPException: 404 if project not found
 	"""
+	# Quota gate before any write; tracking happens only after a successful create.
+	if not await usage_service.check_episode_limit(db, current_user.id):
+		raise HTTPException(
+			status_code=status.HTTP_402_PAYMENT_REQUIRED,
+			detail="Monthly episode limit reached for your plan. Please upgrade to create more episodes.",
+		)
+
 	episode = await create_episode(
 		db=db,
 		user_id=current_user.id,
 		tenant_id=current_user.tenant_id,
 		episode_data=episode_data
 	)
+	await usage_service.track_episode_creation(db, current_user.id, current_user.tenant_id)
 	return episode
 
 
@@ -193,12 +203,26 @@ async def batch_create_episodes_endpoint(
 
 	Returns:
 		Batch result with batch_id, status, counts, and per-episode results
+
+	Raises:
+		HTTPException: 402 if the batch would exceed the plan's monthly episode limit
 	"""
+	# Gate the whole batch up front (conservative: counts every requested episode),
+	# then track only those that actually succeeded.
+	if not await usage_service.check_episode_quota(db, current_user.id, len(batch_data.episodes)):
+		raise HTTPException(
+			status_code=status.HTTP_402_PAYMENT_REQUIRED,
+			detail="This batch would exceed your plan's monthly episode limit. Please upgrade.",
+		)
+
 	result = await batch_create_episodes(
 		db=db,
 		user_id=current_user.id,
 		tenant_id=current_user.tenant_id,
 		batch_data=batch_data
+	)
+	await usage_service.track_episode_creation(
+		db, current_user.id, current_user.tenant_id, count=result["created_count"]
 	)
 	return result
 

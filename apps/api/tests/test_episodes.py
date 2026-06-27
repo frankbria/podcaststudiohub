@@ -9,10 +9,19 @@ import pytest
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from src.models.billing_subscription import BillingSubscription
+from src.services.auth_service import verify_jwt_token
+
 
 @pytest.fixture
-async def project_and_auth(client):
-	"""Create user and project, return (project_id, auth_headers)."""
+async def project_and_auth(client, test_db):
+	"""Create user and project, return (project_id, auth_headers).
+
+	The user is seeded with an enterprise (unlimited) subscription so the
+	episode-quota gate (#297) never trips for the CRUD/pagination tests that
+	create many episodes. Quota enforcement itself is covered by
+	test_usage_enforcement.py with fresh free-tier users.
+	"""
 	# Register user
 	reg_response = await client.post("/auth/register", json={
 		"email": f"test_{uuid4()}@example.com",
@@ -22,6 +31,13 @@ async def project_and_auth(client):
 	assert reg_response.status_code == 201
 	token = reg_response.json()["access_token"]
 	headers = {"Authorization": f"Bearer {token}"}
+
+	# Seed an enterprise subscription (billing tables have no RLS).
+	claims = verify_jwt_token(token)
+	test_db.add(BillingSubscription(
+		user_id=claims["sub"], tenant_id=claims["tenant_id"], tier="enterprise",
+	))
+	await test_db.flush()
 
 	# Create project
 	proj_response = await client.post("/projects", headers=headers, json={

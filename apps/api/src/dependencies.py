@@ -5,15 +5,75 @@ This module provides authentication and tenant context dependencies.
 """
 import logging
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 # Re-export authentication dependencies from middleware
-from src.middleware.auth import get_current_user, get_active_user
+from src.middleware.auth import (
+	extract_token_from_header,
+	get_active_user,
+	get_current_user,
+	get_user_id_from_token,
+)
+from src.middleware.tenant import TenantContextMiddleware
+from src.services import usage_service
 
 # Database dependency
 from src.database import get_db
 
 logger = logging.getLogger(__name__)
+
+
+async def meter_api_call(
+	request: Request, db: AsyncSession = Depends(get_db)
+) -> None:
+	"""Global boundary hook: enforce and record the per-period API-call quota.
+
+	Runs on every route via the app-level dependency. It is a no-op for public
+	paths and unauthenticated requests, so it never forces auth. For authenticated
+	requests it reuses the RLS-aware, test-overridable ``get_db`` session to check
+	``check_api_limit`` (→ 402 when over) and then ``track_api_call``.
+
+	ponytail: depends on get_db so it opens a session even on public paths; kept
+	this way for test-overridability — swap to a lazy session if health-check DB
+	load ever matters.
+	"""
+	if request.url.path in TenantContextMiddleware.PUBLIC_PATHS:
+		return
+
+	token = await extract_token_from_header(request)
+	if not token:
+		return
+
+	user_id = get_user_id_from_token(token)
+	tenant_id = getattr(request.state, "tenant_id", None)
+	if not user_id or not tenant_id:
+		# Unauthenticated / unresolved tenant — let the route's auth handle it.
+		return
+
+	try:
+		uid = UUID(user_id)
+		tid = UUID(tenant_id)
+	except (ValueError, TypeError):
+		return
+
+	# Always meter the call. Enforce the cap everywhere EXCEPT the billing
+	# endpoints — otherwise an over-quota user is bricked: they could neither see
+	# their usage nor upgrade to escape the cap (the recovery path itself 402s).
+	try:
+		if not request.url.path.startswith("/billing"):
+			if not await usage_service.check_api_limit(db, uid):
+				raise HTTPException(
+					status_code=status.HTTP_402_PAYMENT_REQUIRED,
+					detail="Monthly API call limit reached for your plan. Please upgrade.",
+				)
+		await usage_service.track_api_call(db, uid, tid)
+	except IntegrityError:
+		# billing_usage's only FK is user_id, so this means the token's subject no
+		# longer exists (user deleted after token issue). That is an auth condition,
+		# not a billing failure — roll back and let get_current_user return 401.
+		await db.rollback()
 
 
 def create_rate_limit_dependency(key_prefix: str, max_requests: int, window_minutes: int):
@@ -144,4 +204,5 @@ __all__ = [
     "get_current_tenant",
     "get_current_tenant_from_user",
     "create_rate_limit_dependency",
+    "meter_api_call",
 ]

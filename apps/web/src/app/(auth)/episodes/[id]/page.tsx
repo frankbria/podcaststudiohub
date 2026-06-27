@@ -54,6 +54,10 @@ interface TTSConfig {
   is_default: boolean
 }
 
+// Radix <Select.Item> forbids empty-string values, so the "no override" option
+// uses a sentinel that maps back to null when applied (#299).
+const TTS_DEFAULT_SENTINEL = "__default__"
+
 const ACTIVE_STATUSES = ["queued", "extracting", "generating", "synthesizing", "uploading"]
 
 const STATUS_MESSAGES: Record<string, string> = {
@@ -90,7 +94,7 @@ export default function EpisodePage() {
   const [progressMessage, setProgressMessage] = useState("")
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting")
   const [ttsConfigs, setTtsConfigs] = useState<TTSConfig[]>([])
-  const [selectedTtsConfigId, setSelectedTtsConfigId] = useState<string>("")
+  const [selectedTtsConfigId, setSelectedTtsConfigId] = useState<string>(TTS_DEFAULT_SENTINEL)
   const [newTtsProvider, setNewTtsProvider] = useState<string>("openai")
   const [newTtsName, setNewTtsName] = useState<string>("")
   const [newTtsVoice1Id, setNewTtsVoice1Id] = useState<string>("")
@@ -426,7 +430,10 @@ export default function EpisodePage() {
       const response = await fetch(`/api/proxy/episodes/${params.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tts_config_id: selectedTtsConfigId || null }),
+        body: JSON.stringify({
+          tts_config_id:
+            selectedTtsConfigId === TTS_DEFAULT_SENTINEL ? null : selectedTtsConfigId,
+        }),
       })
       if (response.ok) {
         showSuccessToast("TTS settings applied")
@@ -743,7 +750,7 @@ export default function EpisodePage() {
                       <SelectValue placeholder="Select a configuration" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">Default (no override)</SelectItem>
+                      <SelectItem value={TTS_DEFAULT_SENTINEL}>Default (no override)</SelectItem>
                       {ttsConfigs.map((cfg) => (
                         <SelectItem key={cfg.id} value={cfg.id}>
                           {cfg.name} ({cfg.provider})

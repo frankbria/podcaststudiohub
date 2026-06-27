@@ -86,6 +86,14 @@ const Item = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement> & { value: string }
 >(({ children, className, value: itemValue, ...props }, ref) => {
+  // Mirror real @radix-ui/react-select: an empty-string Item value is forbidden
+  // and throws at render. Without this guard, the mock silently accepted "" and
+  // hid the production crash (#299).
+  if (itemValue === '') {
+    throw new Error(
+      'A <Select.Item /> must have a value prop that is not an empty string.'
+    )
+  }
   const { setValue, onValueChange, setOpen } = React.useContext(RootContext)
   return (
     <div

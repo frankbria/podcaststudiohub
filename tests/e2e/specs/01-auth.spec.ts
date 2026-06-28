@@ -122,22 +122,19 @@ test.describe('Authentication', () => {
       await expect(page).toHaveURL(/\/dashboard/);
     });
 
-    test.fixme('should protect dashboard route when not logged in', async ({ page }) => {
-      // FIXME: No logout button exists in the app yet
+    test('should protect dashboard route when not logged in', async ({ page }) => {
       await logout(page);
       await page.goto('/dashboard');
       await expect(page).toHaveURL(/\/login/);
     });
 
-    test.fixme('should protect project routes when not logged in', async ({ page }) => {
-      // FIXME: No logout button exists in the app yet
+    test('should protect project routes when not logged in', async ({ page }) => {
       await logout(page);
       await page.goto('/projects/test-id');
       await expect(page).toHaveURL(/\/login/);
     });
 
-    test.fixme('should protect episode routes when not logged in', async ({ page }) => {
-      // FIXME: No logout button exists in the app yet
+    test('should protect episode routes when not logged in', async ({ page }) => {
       await logout(page);
       await page.goto('/episodes/test-id');
       await expect(page).toHaveURL(/\/login/);

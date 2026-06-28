@@ -1,81 +1,77 @@
 import { test, expect } from '@playwright/test';
-import { generateTestUser, signUp, login } from '../utils/auth-helpers';
+import { generateTestUser, signUp, login, logout, createUserBContext } from '../utils/auth-helpers';
 import { createProject } from '../utils/project-helpers';
 import { createEpisode, addContentSource, generatePodcast, waitForGeneration, verifyAudioPlayer } from '../utils/episode-helpers';
 
-// FIXME: Test selectors don't match current UI — un-fixme as features are verified
-test.describe.fixme('End-to-End Integration Workflows', () => {
-	test.describe('Complete User Journey: Signup to Podcast Download', () => {
-		test('should complete full workflow from signup to generated podcast', async ({ page }) => {
-			test.setTimeout(360000); // 6 minutes for complete workflow
+// The headline journey and multi-tenant isolation specs below are written and
+// ready, but BLOCKED: project/episode creation is broken by the web<->API
+// contract mismatch (#337). They are fixme'd with that pointer and just need
+// un-fixme'ing once #337 lands. Remaining workflows target unverified UI or live
+// generation and stay individually fixme'd.
+test.describe('End-to-End Integration Workflows', () => {
+	test.describe.fixme('Complete User Journey: Signup to Ready-to-Generate', () => {
+		// The headline journey: signup -> login -> project -> episode -> content ->
+		// ready to generate. The actual generate -> wait -> download leg lives in the
+		// fixme'd "Generation and Download" suite below because live TTS generation
+		// depends on the (separately tracked) #313/#314 pipeline work and is too slow
+		// /flaky to gate every PR.
+		test('should complete signup through ready-to-generate', async ({ page }) => {
+			test.setTimeout(120000);
 
-			// 1. Sign up new user
+			// 1. Sign up + login a brand-new user
 			const user = generateTestUser();
 			await signUp(page, user);
-
-			// 2. Login
 			await login(page, user.email, user.password);
-
-			// Should be on dashboard
 			await expect(page).toHaveURL(/\/dashboard/);
 
-			// 3. Create project
+			// 2. Create project (navigates to the project page)
 			const project = { title: `Integration Test Project ${Date.now()}` };
 			const projectId = await createProject(page, project);
-
-			// Should navigate to project page
 			await expect(page).toHaveURL(`/projects/${projectId}`);
 
-			// 4. Create episode
+			// 3. Create episode (navigates to the episode page)
 			const episode = { title: `Integration Test Episode ${Date.now()}` };
 			const episodeId = await createEpisode(page, projectId, episode);
-
-			// Should navigate to episode page
 			await expect(page).toHaveURL(`/episodes/${episodeId}`);
 
-			// 5. Add content source
+			// 4. Add a content source
 			await addContentSource(page, episodeId, {
 				type: 'text',
-				value: 'This is a comprehensive integration test for the podcast generation platform. It tests the entire workflow from user signup through content creation to final podcast generation and playback.',
+				value: 'This is a comprehensive integration test for the podcast generation platform, covering signup through content creation.',
 			});
+			await expect(page.getByRole('list', { name: 'Content sources' })).toBeVisible();
 
-			// 6. Generate podcast
-			await generatePodcast(page, episodeId);
+			// 5. Episode is now ready to generate
+			await expect(page.getByRole('button', { name: 'Generate Podcast' })).toBeVisible();
 
-			// Should show generating status
-			await expect(page.locator('text=/generating|in progress/i')).toBeVisible({ timeout: 10000 });
-
-			// 7. Wait for completion
-			await waitForGeneration(page, episodeId, 300000); // 5 minutes
-
-			// 8. Verify audio player
-			await verifyAudioPlayer(page);
-
-			// 9. Verify download available
-			await expect(page.locator('button:has-text("Download"), a:has-text("Download")')).toBeVisible();
-
-			// 10. Navigate back to project
-			await page.goto(`/projects/${projectId}`);
-
-			// Episode should be listed
-			await expect(page.locator(`text=${episode.title}`)).toBeVisible();
-
-			// 11. Navigate back to dashboard
+			// 6. Back to dashboard, project listed, then logout
 			await page.goto('/dashboard');
-
-			// Project should be listed
-			await expect(page.locator(`text=${project.title}`)).toBeVisible();
-
-			// 12. Logout
-			const logoutButton = page.locator('button:has-text("Logout"), button:has-text("Sign out")').first();
-			await logoutButton.click();
-
-			// Should redirect to login
+			await expect(page.getByRole('button', { name: `Open project: ${project.title}` })).toBeVisible();
+			await logout(page);
 			await expect(page).toHaveURL(/\/login/);
 		});
 	});
 
-	test.describe('Multi-Project Multi-Episode Workflow', () => {
+	// Live generation + download — pending the generation pipeline work (#313/#314)
+	// and intentionally excluded from per-PR gating (slow, external-API dependent).
+	test.describe.fixme('Generation and Download', () => {
+		test('should generate and download a podcast', async ({ page }) => {
+			test.setTimeout(360000);
+			const user = generateTestUser();
+			await signUp(page, user);
+			await login(page, user.email, user.password);
+
+			const projectId = await createProject(page, { title: `Gen Project ${Date.now()}` });
+			const episodeId = await createEpisode(page, projectId, { title: `Gen Episode ${Date.now()}` });
+			await addContentSource(page, episodeId, { type: 'text', value: 'Generate a podcast from this content.' });
+
+			await generatePodcast(page, episodeId);
+			await waitForGeneration(page, episodeId, 300000);
+			await verifyAudioPlayer(page);
+		});
+	});
+
+	test.describe.fixme('Multi-Project Multi-Episode Workflow', () => {
 		test('should handle multiple projects with multiple episodes', async ({ page }) => {
 			await test.step('Setup: Login', async () => {
 				const user = generateTestUser();
@@ -122,7 +118,7 @@ test.describe.fixme('End-to-End Integration Workflows', () => {
 		});
 	});
 
-	test.describe('Content Source Variety Workflow', () => {
+	test.describe.fixme('Content Source Variety Workflow', () => {
 		test('should handle mixed content sources in single episode', async ({ page }) => {
 			const user = generateTestUser();
 			await signUp(page, user);
@@ -159,7 +155,7 @@ test.describe.fixme('End-to-End Integration Workflows', () => {
 		});
 	});
 
-	test.describe('Edit and Update Workflow', () => {
+	test.describe.fixme('Edit and Update Workflow', () => {
 		test('should allow editing project, episode, and content', async ({ page }) => {
 			const user = generateTestUser();
 			await signUp(page, user);
@@ -221,7 +217,7 @@ test.describe.fixme('End-to-End Integration Workflows', () => {
 		});
 	});
 
-	test.describe('Delete Workflow', () => {
+	test.describe.fixme('Delete Workflow', () => {
 		test('should cascade delete from project to episodes', async ({ page }) => {
 			const user = generateTestUser();
 			await signUp(page, user);
@@ -254,7 +250,7 @@ test.describe.fixme('End-to-End Integration Workflows', () => {
 		});
 	});
 
-	test.describe('Session Persistence Workflow', () => {
+	test.describe.fixme('Session Persistence Workflow', () => {
 		test('should maintain session across page refreshes', async ({ page }) => {
 			const user = generateTestUser();
 			await signUp(page, user);
@@ -304,7 +300,7 @@ test.describe.fixme('End-to-End Integration Workflows', () => {
 		});
 	});
 
-	test.describe('Error Recovery Workflow', () => {
+	test.describe.fixme('Error Recovery Workflow', () => {
 		test('should recover from failed API calls', async ({ page }) => {
 			const user = generateTestUser();
 			await signUp(page, user);
@@ -322,47 +318,37 @@ test.describe.fixme('End-to-End Integration Workflows', () => {
 		});
 	});
 
-	test.describe('Concurrent User Workflow', () => {
-		test('should handle data isolation between users', async ({ page }) => {
-			// User 1
-			const user1 = generateTestUser();
-			await signUp(page, user1);
-			await login(page, user1.email, user1.password);
+	// Two genuinely independent sessions (User A shared session + User B persistent
+	// context) prove data isolation. Ready to run, but BLOCKED on project creation
+	// (#337). Un-fixme once #337 lands.
+	test.describe.fixme('Concurrent User Workflow', () => {
+		test('should isolate data between two independent users', async ({ page, browser }) => {
+			// User A (shared session) creates a project.
+			const userAProject = { title: `User A Project ${Date.now()}` };
+			const userAProjectId = await createProject(page, userAProject);
 
-			const user1Project = { title: `User 1 Project ${Date.now()}` };
-			const user1ProjectId = await createProject(page, user1Project);
+			// User B — an independent authenticated context.
+			const userBContext = await createUserBContext(browser);
+			try {
+				const userBPage = await userBContext.newPage();
 
-			// Logout
-			await page.goto('/dashboard');
-			const logoutButton = page.locator('button:has-text("Logout"), button:has-text("Sign out")').first();
-			await logoutButton.click();
+				// User B's dashboard must not list User A's project.
+				await userBPage.goto('/dashboard');
+				await expect(
+					userBPage.getByRole('button', { name: `Open project: ${userAProject.title}` })
+				).toHaveCount(0);
 
-			// User 2
-			const user2 = generateTestUser();
-			await signUp(page, user2);
-			await login(page, user2.email, user2.password);
-
-			const user2Project = { title: `User 2 Project ${Date.now()}` };
-			const user2ProjectId = await createProject(page, user2Project);
-
-			// Go to dashboard
-			await page.goto('/dashboard');
-
-			// Should only see User 2's project
-			await expect(page.locator(`text=${user2Project.title}`)).toBeVisible();
-			await expect(page.locator(`text=${user1Project.title}`)).not.toBeVisible();
-
-			// Try to access User 1's project directly
-			await page.goto(`/projects/${user1ProjectId}`);
-
-			// Should show error or redirect
-			await expect(
-				page.locator('text=/not found|access denied|unauthorized|forbidden/i')
-			).toBeVisible({ timeout: 5000 });
+				// User B cannot open User A's project directly.
+				await userBPage.goto(`/projects/${userAProjectId}`);
+				await expect(userBPage.getByRole('heading', { name: userAProject.title })).toHaveCount(0);
+				await expect(userBPage.getByText('Failed to load project')).toBeVisible({ timeout: 5000 });
+			} finally {
+				await userBContext.close();
+			}
 		});
 	});
 
-	test.describe('Mobile Integration Workflow', () => {
+	test.describe.fixme('Mobile Integration Workflow', () => {
 		test('should complete workflow on mobile device', async ({ page }) => {
 			// Set mobile viewport
 			await page.setViewportSize({ width: 375, height: 667 });
@@ -388,7 +374,7 @@ test.describe.fixme('End-to-End Integration Workflows', () => {
 		});
 	});
 
-	test.describe('Performance Under Load', () => {
+	test.describe.fixme('Performance Under Load', () => {
 		test('should handle user with many projects efficiently', async ({ page }) => {
 			const user = generateTestUser();
 			await signUp(page, user);
@@ -417,7 +403,7 @@ test.describe.fixme('End-to-End Integration Workflows', () => {
 		});
 	});
 
-	test.describe('Browser Compatibility Workflow', () => {
+	test.describe.fixme('Browser Compatibility Workflow', () => {
 		test('should work across different browser back/forward behaviors', async ({ page }) => {
 			const user = generateTestUser();
 			await signUp(page, user);
@@ -453,7 +439,7 @@ test.describe.fixme('End-to-End Integration Workflows', () => {
 		});
 	});
 
-	test.describe('Complete Feature Coverage', () => {
+	test.describe.fixme('Complete Feature Coverage', () => {
 		test('should exercise all major features in single workflow', async ({ page }) => {
 			test.setTimeout(420000); // 7 minutes
 

@@ -102,6 +102,43 @@ jobs:
           E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
 
+      # Restore real signal: a suite that silently skips its coverage must not
+      # report green. Parses the JSON report and enforces a floor of really-run
+      # tests plus a ceiling on skips. Runs even when tests fail so the counts
+      # are always surfaced.
+      - name: Enforce test signal (skip-count gate)
+        if: ${{ always() && github.event_name != 'workflow_dispatch' }}
+        run: |
+          REPORT=playwright-report/results.json
+          if [ ! -f "$REPORT" ]; then
+            echo "::error::Playwright JSON report not found at $REPORT — cannot verify test signal."
+            exit 1
+          fi
+          # Floor of real tests that must actually run + pass. Guards against the
+          # historical false-green where 9/10 specs were fixme'd and CI still
+          # exited 0. The auth suite (~15 tests) is the current active baseline;
+          # raise this as the #337-blocked isolation/journey specs are un-fixme'd.
+          MIN_PASSED=10
+          # Ceiling on skipped tests. Initial value sits above the current
+          # intentional fixme count; tighten to (observed + small buffer) once
+          # the first green run reports the real number.
+          MAX_SKIPPED=400
+          PASSED=$(jq '.stats.expected // 0' "$REPORT")
+          FAILED=$(jq '.stats.unexpected // 0' "$REPORT")
+          FLAKY=$(jq '.stats.flaky // 0' "$REPORT")
+          SKIPPED=$(jq '.stats.skipped // 0' "$REPORT")
+          echo "::notice title=Playwright signal::passed=$PASSED failed=$FAILED flaky=$FLAKY skipped=$SKIPPED"
+          STATUS=0
+          if [ "$PASSED" -lt "$MIN_PASSED" ]; then
+            echo "::error::Only $PASSED tests passed (min $MIN_PASSED). The suite is silently skipping real coverage."
+            STATUS=1
+          fi
+          if [ "$SKIPPED" -gt "$MAX_SKIPPED" ]; then
+            echo "::error::$SKIPPED tests skipped (max $MAX_SKIPPED). Re-enable coverage or justify the increase."
+            STATUS=1
+          fi
+          exit $STATUS
+
       - name: Upload test results
         uses: actions/upload-artifact@v7
         if: always()

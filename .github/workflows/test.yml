@@ -191,11 +191,21 @@ jobs:
         run: |
           export ENCRYPTION_KEY="$(printf 'x%.0s' {1..32})"
           export JWT_SECRET_KEY=ci
-          if uv run alembic upgrade head; then
+          set +e
+          out="$(uv run alembic upgrade head 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -eq 0 ]; then
             echo "::error::Migrations succeeded under a non-BYPASSRLS role — the row_security guard is not working (issue #301)."
             exit 1
           fi
-          echo "Confirmed: migrations failed loudly under the non-privileged role (expected)."
+          # The failure must be the RLS guard, not an unrelated error.
+          if ! echo "$out" | grep -qi "row.level security\|row_security"; then
+            echo "::error::Migrations failed under the non-privileged role, but not via the row_security guard (issue #301)."
+            exit 1
+          fi
+          echo "Confirmed: migrations failed loudly via the row-level-security guard (expected)."
 
   test-frontend:
     name: Frontend Tests (Next.js/Jest)

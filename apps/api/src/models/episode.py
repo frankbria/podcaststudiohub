@@ -49,7 +49,10 @@ class Episode(Base):
 
     # Generation status tracking
     # Values: 'draft', 'queued', 'extracting', 'generating', 'synthesizing',
-    #         'uploading', 'composing', 'distributing', 'complete', 'failed'
+    #         'uploading', 'composing', 'distributing', 'complete', 'failed',
+    #         'distribution_failed'
+    # 'distribution_failed' is terminal: the episode generated and uploaded, but
+    # one or more platform distributions failed (issue #300).
     generation_status = Column(Text, nullable=False, default='draft', index=True)
 
     # Generation progress tracking

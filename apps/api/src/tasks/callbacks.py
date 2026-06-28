@@ -181,14 +181,19 @@ def on_distribution_complete(
 		episode_id: UUID string of the episode.
 		platform: Platform name (e.g. 'spotify', 'apple_podcasts', 'webhook').
 	"""
-	if result.get("status") != "success":
+	failed = result.get("status") != "success"
+	if failed:
+		# Permanently-failed distribution tasks return {status: failed} rather than
+		# raising (to keep per-platform distribution independent), so record the
+		# failure here instead of dropping it. The whole-episode generation_status
+		# is left untouched — on_workflow_complete derives the terminal state from
+		# the recorded per-platform outcomes (issue #300).
 		logger.error(
 			"Distribution to %s for episode %s indicates failure: %s",
 			platform,
 			episode_id,
 			result.get("error"),
 		)
-		return
 
 	try:
 		with SyncSessionLocal() as db:
@@ -199,24 +204,33 @@ def on_distribution_complete(
 
 			current_progress = dict(episode.generation_progress or {})
 			distribution = dict(current_progress.get("distribution", {}))
-			distribution[platform] = {
-				"status": "complete",
-				"platform_episode_id": result.get("platform_episode_id"),
-				"platform_url": result.get("platform_url"),
-				"distributed_at": _utcnow_iso(),
-			}
+			if failed:
+				distribution[platform] = {
+					"status": "failed",
+					"error": result.get("error"),
+					"failed_at": _utcnow_iso(),
+				}
+			else:
+				distribution[platform] = {
+					"status": "complete",
+					"platform_episode_id": result.get("platform_episode_id"),
+					"platform_url": result.get("platform_url"),
+					"distributed_at": _utcnow_iso(),
+				}
 			current_progress["distribution"] = distribution
 			episode.generation_progress = current_progress
-			episode.generation_status = "distributing"
+			if not failed:
+				episode.generation_status = "distributing"
 
 			db.commit()
 
-		logger.info(
-			"Episode %s distributed to %s: platform_id=%s",
-			episode_id,
-			platform,
-			result.get("platform_episode_id"),
-		)
+		if not failed:
+			logger.info(
+				"Episode %s distributed to %s: platform_id=%s",
+				episode_id,
+				platform,
+				result.get("platform_episode_id"),
+			)
 	except Exception as exc:
 		logger.error(
 			"Failed to update episode %s after distribution to %s: %s",
@@ -232,23 +246,55 @@ def on_workflow_complete(self: Task, result: Dict[str, Any], episode_id: str) ->
 	"""
 	Callback fired when the entire podcast workflow completes successfully.
 
-	Sets Episode.generation_status = 'complete'.
-
-	Args:
-		self: Celery task instance.
-		result: Final result from the last task in the workflow chain.
-		episode_id: UUID string of the episode.
+	Sets Episode.generation_status to 'complete' when every distributed platform
+	succeeded, or 'distribution_failed' when any platform's recorded outcome is
+	non-success — so a partially-failed run is not reported as fully published
+	(issue #300). The locked read is done inline (not via _update_episode) because
+	the final status depends on the per-platform outcomes already in the row.
 	"""
-	updated = _update_episode(
-		episode_id,
-		updates={"generation_status": "complete"},
-		progress_updates={
-			"status": "complete",
-			"completed_at": _utcnow_iso(),
-		},
-	)
-	if updated:
-		logger.info("Episode %s workflow completed successfully", episode_id)
+	try:
+		with SyncSessionLocal() as db:
+			episode = _get_episode_for_update(db, episode_id)
+			if episode is None:
+				logger.error("Episode %s not found in database", episode_id)
+				return
+
+			current_progress = dict(episode.generation_progress or {})
+			distribution = current_progress.get("distribution", {})
+			failed_platforms = [
+				platform
+				for platform, entry in distribution.items()
+				if (entry or {}).get("status") != "complete"
+			]
+
+			completed_at = _utcnow_iso()
+			if failed_platforms:
+				episode.generation_status = "distribution_failed"
+				current_progress["status"] = "distribution_failed"
+				current_progress["failed_platforms"] = failed_platforms
+			else:
+				episode.generation_status = "complete"
+				current_progress["status"] = "complete"
+				# Clear any stale marker from a prior distribution_failed run that
+				# has since been retried successfully (issue #300).
+				current_progress.pop("failed_platforms", None)
+			current_progress["completed_at"] = completed_at
+			episode.generation_progress = current_progress
+
+			db.commit()
+
+		if failed_platforms:
+			logger.error(
+				"Episode %s workflow completed with failed distributions: %s",
+				episode_id,
+				", ".join(failed_platforms),
+			)
+		else:
+			logger.info("Episode %s workflow completed successfully", episode_id)
+	except Exception as exc:
+		logger.error(
+			"Failed to finalize episode %s: %s", episode_id, exc, exc_info=True
+		)
 
 
 # ---------------------------------------------------------------------------

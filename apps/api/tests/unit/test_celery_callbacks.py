@@ -293,8 +293,8 @@ class TestOnDistributionComplete:
 		assert stmt._for_update_arg is not None
 		mock_session.get.assert_not_called()
 
-	def test_skips_update_on_failure_result(self):
-		"""No database update when result indicates failure."""
+	def test_persists_failure_on_failure_result(self):
+		"""A non-success result is recorded in generation_progress, not dropped (issue #300)."""
 		episode_id = str(uuid.uuid4())
 		episode = _mock_episode(episode_id)
 		mock_ctx, mock_session = _make_sync_session(episode)
@@ -311,7 +311,14 @@ class TestOnDistributionComplete:
 				platform="spotify",
 			)
 
-		mock_ctx.__enter__.assert_not_called()
+		spotify_entry = episode.generation_progress["distribution"]["spotify"]
+		assert spotify_entry["status"] == "failed"
+		assert spotify_entry["error"] == "auth failed"
+		assert "failed_at" in spotify_entry
+		# Per-platform failure must not flip the episode-level status; the final
+		# workflow callback owns that decision.
+		assert episode.generation_status == "generating"
+		mock_session.commit.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +344,68 @@ class TestOnWorkflowComplete:
 		assert progress.get("status") == "complete"
 		assert "completed_at" in progress
 		mock_session.commit.assert_called_once()
+
+	def test_stays_complete_when_all_distributions_succeeded(self):
+		"""All-success distribution keeps the terminal status 'complete' (issue #300)."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		episode.generation_progress = {
+			"distribution": {
+				"spotify": {"status": "complete"},
+				"apple_podcasts": {"status": "complete"},
+			}
+		}
+		mock_ctx, mock_session = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		assert episode.generation_status == "complete"
+		mock_session.commit.assert_called_once()
+
+	def test_marks_distribution_failed_when_a_platform_failed(self):
+		"""A failed platform yields the distinguishable 'distribution_failed' status (issue #300)."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		episode.generation_progress = {
+			"distribution": {
+				"spotify": {"status": "complete"},
+				"apple_podcasts": {"status": "failed", "error": "auth failed"},
+			}
+		}
+		mock_ctx, mock_session = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		assert episode.generation_status == "distribution_failed"
+		assert episode.generation_progress["failed_platforms"] == ["apple_podcasts"]
+		mock_session.commit.assert_called_once()
+
+	def test_clears_stale_failed_platforms_on_successful_retry(self):
+		"""A retried run that fully succeeds drops the prior failed_platforms (issue #300)."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		episode.generation_progress = {
+			"failed_platforms": ["apple_podcasts"],
+			"distribution": {
+				"spotify": {"status": "complete"},
+				"apple_podcasts": {"status": "complete"},
+			},
+		}
+		mock_ctx, mock_session = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		assert episode.generation_status == "complete"
+		assert "failed_platforms" not in episode.generation_progress
 
 	def test_handles_missing_episode(self):
 		"""Callback does not raise when episode is not found."""

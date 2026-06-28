@@ -24,6 +24,10 @@ class Settings(BaseSettings):
 
     # Database
     DATABASE_URL: str
+    # Privileged (superuser/BYPASSRLS owner) URL used ONLY by Alembic so RLS-affected
+    # backfills apply to all rows. Falls back to DATABASE_URL when unset (issue #301).
+    # Same optional-override convention as CELERY_BROKER_URL.
+    MIGRATION_DATABASE_URL: Optional[str] = None
     DATABASE_POOL_SIZE: int = 10
     DATABASE_MAX_OVERFLOW: int = 20
 

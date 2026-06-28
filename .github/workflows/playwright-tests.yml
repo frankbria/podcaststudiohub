@@ -119,10 +119,11 @@ jobs:
           # exited 0. The auth suite (~15 tests) is the current active baseline;
           # raise this as the #337-blocked isolation/journey specs are un-fixme'd.
           MIN_PASSED=10
-          # Ceiling on skipped tests. Initial value sits above the current
-          # intentional fixme count; tighten to (observed + small buffer) once
-          # the first green run reports the real number.
-          MAX_SKIPPED=400
+          # Ceiling on skipped tests. Observed baseline is 204 fixme'd tests
+          # (first green run); 210 leaves a small buffer. Adding more skips must
+          # be deliberate (bump this); as #337-blocked specs are un-fixme'd this
+          # count drops, so the ceiling won't false-fail.
+          MAX_SKIPPED=210
           PASSED=$(jq '.stats.expected // 0' "$REPORT")
           FAILED=$(jq '.stats.unexpected // 0' "$REPORT")
           FLAKY=$(jq '.stats.flaky // 0' "$REPORT")

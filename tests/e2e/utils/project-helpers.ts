@@ -10,38 +10,38 @@ export interface ProjectData {
 }
 
 /**
- * Create a new project
+ * Create a new project and return its id.
+ *
+ * The dashboard "Create Project" trigger and the dialog submit share the same
+ * label, so both selectors are scoped (trigger by role, submit inside the
+ * dialog) to avoid Playwright strict-mode ambiguity.
  */
 export async function createProject(page: Page, project: ProjectData): Promise<string> {
-  // Navigate to dashboard first
   await page.goto('/dashboard');
 
-  // Click create project button
-  await page.click('button:has-text("Create Project")');
+  // Open the create dialog (header trigger; .first() guards the empty-state CTA)
+  await page.getByRole('button', { name: 'Create Project' }).first().click();
 
-  // Fill in project details
-  await page.fill('input[placeholder*="title" i], input[placeholder*="project" i]', project.title);
-
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('#project-title').fill(project.title);
   if (project.description) {
-    const descField = page.locator('input[placeholder*="description" i], textarea').first();
-    await descField.fill(project.description);
+    await dialog.locator('#project-description').fill(project.description);
   }
 
-  // Submit form
-  await page.click('button:has-text("Create Project")');
+  // Submit (scoped to the dialog to disambiguate from the page trigger)
+  await dialog.locator('button[type="submit"]').click();
+  await expect(dialog).toBeHidden({ timeout: 10000 });
 
-  // Wait for project to appear in list
-  await expect(page.locator(`text=${project.title}`)).toBeVisible({ timeout: 10000 });
+  // The new project appears as a clickable card; navigate via it.
+  const card = page.getByRole('button', { name: `Open project: ${project.title}` });
+  await expect(card).toBeVisible({ timeout: 10000 });
+  await card.click();
 
-  // Extract project ID from URL after clicking the project
-  await page.click(`text=${project.title}`);
   await expect(page).toHaveURL(/\/projects\/[a-f0-9-]+/);
-
   const projectId = page.url().match(/\/projects\/([a-f0-9-]+)/)?.[1];
   if (!projectId) {
     throw new Error('Failed to extract project ID');
   }
-
   return projectId;
 }
 

@@ -4,64 +4,49 @@ Automated end-to-end tests using Playwright.
 
 ## Test Coverage
 
-**Total: 270 automated tests** covering all major functionality
+The repo contains a large speculative spec set, but **most of it is `fixme`'d** —
+many specs were written against UI that didn't exist yet, so they were disabled.
+A disabled (`test.describe.fixme` / `test.fixme`) block is reported by Playwright
+as *skipped*, not passed. The CI `notify` job and a dedicated **skip-count gate**
+(`.github/workflows/playwright-tests.yml`) surface skip counts and fail the build
+if real coverage drops, so a mostly-skipped suite can no longer report green.
 
-### ✅ Implemented Test Suites
+### Active (executing) coverage
 
-- **`01-auth.spec.ts`** (15 tests) - Authentication
-  - Signup, login, session management
-  - Route protection, navigation links
-  - Password validation, duplicate email handling
+- **`01-auth.spec.ts`** — Authentication: signup, login, session persistence,
+  route protection (logged-out → `/login`), navigation links. This is the
+  current real-signal baseline (the CI gate's `MIN_PASSED` floor).
 
-- **`02-projects.spec.ts`** (28 tests) - Project Management
-  - CRUD operations (create, read, update, delete)
-  - Project list, access control, navigation
-  - Form validation, confirmation dialogs
+### Written and ready, but BLOCKED on #337
 
-- **`03-episodes.spec.ts`** (26 tests) - Episode Management
-  - Episode CRUD, status tracking
-  - Episode list, access control
-  - Navigation, breadcrumbs
+The multi-tenant isolation and headline-journey specs are fully written against
+the real UI (with correct selectors and a true two-session pattern) but are
+`fixme`'d because **project/episode creation is currently broken by a web↔API
+contract mismatch** (web sends `title`; backend requires `name` / `*_metadata`)
+— see #337. Un-`fixme` them once #337 lands:
 
-- **`04-content.spec.ts`** (32 tests) - Content Source Management
-  - Add/edit/delete URL and text sources
-  - Mixed content types, validation
-  - Content display, duplicate prevention
+- `02-projects.spec.ts → Project Access Control (isolation)`
+- `03-episodes.spec.ts → Episode Access Control (isolation)`
+- `10-integration.spec.ts → Complete User Journey` and `Concurrent User Workflow`
 
-- **`05-generation.spec.ts`** (26 tests) - Podcast Generation
-  - Start generation, progress tracking
-  - Completion handling, error recovery
-  - Audio player controls, download functionality
-  - Regeneration support
+### Disabled (`fixme`) — not yet verified against the current UI
 
-- **`06-navigation.spec.ts`** (35 tests) - Navigation & UX
-  - Main navigation, breadcrumbs
-  - Browser back/forward, deep linking
-  - Loading states, empty states, error pages
-  - Keyboard navigation, mobile menu
+`04-content`, `05-generation`, `06-navigation`, `07-responsive`,
+`08-performance`, `09-accessibility`, the CRUD/edit/delete/nav sub-suites of
+`02`/`03`, and the heavier `10-integration` workflows remain `fixme`'d. Live
+generation + download (`10-integration → Generation and Download`) is `fixme`'d
+because it depends on the generation pipeline work tracked in #313/#314 and is
+too slow / external-API dependent to gate every PR. Un-`fixme` these as the
+corresponding UI is verified, and raise `MIN_PASSED` in the CI gate accordingly.
 
-- **`07-responsive.spec.ts`** (43 tests) - Responsive Design
-  - Mobile (375x667), Tablet (768x1024), Desktop (1920x1080)
-  - Viewport breakpoints, orientation changes
-  - Touch targets, text scaling, content wrapping
+### Two-session isolation
 
-- **`08-performance.spec.ts`** (18 tests) - Performance
-  - Page load times, navigation speed
-  - Form interaction performance
-  - List rendering, memory usage
-  - Network optimization, bundle size
-
-- **`09-accessibility.spec.ts`** (31 tests) - Accessibility
-  - Keyboard navigation, ARIA labels
-  - Focus management, screen reader support
-  - Form accessibility, color contrast
-  - Zoom support, motion preferences
-
-- **`10-integration.spec.ts`** (16 tests) - End-to-End Workflows
-  - Complete user journeys (signup to podcast)
-  - Multi-project/episode scenarios
-  - Edit/delete workflows, session persistence
-  - Concurrent users, mobile integration
+Multi-tenant tests use two genuinely independent authenticated contexts. **User A**
+is the shared `storageState` (`.auth/user.json`); **User B** is a second tenant
+provisioned once by `global-setup` (`.auth/user-b.json`, a deterministic
+plus-addressed account derived from `E2E_TEST_EMAIL`). Provisioning User B once —
+rather than signing up a fresh user per test — keeps the suite within the dev
+registration rate limit (3/hr/IP).
 
 ## Running Tests
 
@@ -166,20 +151,21 @@ test.describe('Feature Name', () => {
 - `generateTestUser()` - Create unique test user
 - `signUp(page, user)` - Register new user
 - `login(page, email, password)` - Login existing user
-- `logout(page)` - Logout current user
+- `logout(page)` - Logout via the MainNav user-menu dropdown (`User menu` → `Logout`)
 - `signUpAndLogin(page)` - Combined signup and login
+- `createUserBContext(browser)` - Open a second independent context as User B (for isolation tests)
 
 ### Projects
-- `createProject(page, data)` - Create new project
+- `createProject(page, data)` - Create a project via the dashboard dialog; returns its id (navigates via the `Open project: <title>` card)
 - `navigateToProject(page, id)` - Go to project page
 - `verifyProjectExists(page, title)` - Check project in dashboard
 
 ### Episodes
-- `createEpisode(page, projectId, data)` - Create new episode
-- `addContentSource(page, episodeId, source)` - Add URL/text content
-- `generatePodcast(page, episodeId)` - Start generation
-- `waitForGeneration(page, episodeId)` - Wait for completion
-- `verifyAudioPlayer(page)` - Check audio player exists
+- `createEpisode(page, projectId, data)` - Create an episode (`#episode-title`); returns its id
+- `addContentSource(page, episodeId, source)` - Add URL/text content via the URL/Text toggle + `#content-url`/`#content-text`
+- `generatePodcast(page, episodeId)` - Click "Generate Podcast", assert status `Status: queued`
+- `waitForGeneration(page, episodeId)` - Wait for the `Status: complete` badge
+- `verifyAudioPlayer(page)` - Assert the native `<audio controls>` element and the `Download MP3` button
 
 ## Best Practices
 

@@ -26,6 +26,10 @@ export default defineConfig({
   reporter: [
     ['html'],
     ['list'],
+    // Machine-readable report consumed by the CI skip-count gate (see
+    // .github/workflows/playwright-tests.yml). Keeps an all-skipped suite from
+    // ever reporting green again.
+    ['json', { outputFile: 'playwright-report/results.json' }],
     process.env.CI ? ['github'] : ['list'],
   ],
 

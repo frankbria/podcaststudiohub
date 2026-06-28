@@ -1,4 +1,4 @@
-import { Page, expect } from '@playwright/test';
+import { Page, Browser, BrowserContext, expect } from '@playwright/test';
 
 /**
  * Auth helper functions for E2E tests
@@ -9,6 +9,12 @@ export interface TestUser {
   password: string;
   fullName?: string;
 }
+
+/** Pre-authenticated storage states produced by global-setup. */
+export const USER_A_AUTH_PATH = 'tests/e2e/.auth/user.json';
+export const USER_B_AUTH_PATH = 'tests/e2e/.auth/user-b.json';
+
+const BASE_URL = process.env.BASE_URL || 'https://dev.podcaststudiohub.me';
 
 /**
  * Generate a unique test user email
@@ -54,15 +60,22 @@ export async function login(page: Page, email: string, password: string) {
 }
 
 /**
- * Logout current user
+ * Logout current user via the MainNav user-menu dropdown.
  */
 export async function logout(page: Page) {
-  // Look for logout button (adjust selector based on your UI)
-  const logoutButton = page.locator('button:has-text("Logout"), button:has-text("Log out"), a:has-text("Logout")').first();
+  await page.getByRole('button', { name: 'User menu' }).click();
+  await page.getByRole('menuitem', { name: 'Logout' }).click();
+  await page.waitForURL(/\/login/, { timeout: 10000 });
+}
 
-  if (await logoutButton.isVisible({ timeout: 1000 }).catch(() => false)) {
-    await logoutButton.click();
-  }
+/**
+ * Open a second, independently-authenticated browser context as User B.
+ * User B is provisioned once by global-setup and persisted to USER_B_AUTH_PATH,
+ * which keeps isolation tests within the dev registration rate limit (3/hr/IP).
+ * Caller owns the returned context and must close() it (e.g. in a finally block).
+ */
+export async function createUserBContext(browser: Browser): Promise<BrowserContext> {
+  return browser.newContext({ storageState: USER_B_AUTH_PATH, baseURL: BASE_URL });
 }
 
 /**

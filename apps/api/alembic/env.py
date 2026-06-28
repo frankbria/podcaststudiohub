@@ -27,8 +27,10 @@ config = context.config
 # Override sqlalchemy.url from environment variable
 from src.config import settings
 
-# Convert async database URL to sync for Alembic migrations
-database_url = settings.DATABASE_URL
+# Convert async database URL to sync for Alembic migrations.
+# Prefer the dedicated privileged migration URL when set so RLS-affected backfills
+# apply to all rows; fall back to DATABASE_URL otherwise (issue #301).
+database_url = settings.MIGRATION_DATABASE_URL or settings.DATABASE_URL
 if database_url.startswith("postgresql+asyncpg://"):
     # Replace asyncpg with psycopg for synchronous migrations
     database_url = database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")

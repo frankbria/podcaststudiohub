@@ -19,6 +19,7 @@
 | POSTGRES_PASSWORD | ✅ | ❌ | Missing | Critical |
 | POSTGRES_DB | ✅ | ❌ | Missing | Critical |
 | DATABASE_URL | ✅ | ✅ | **Present** | Critical |
+| MIGRATION_DATABASE_URL | ✅ | ⚠️ optional | Alembic-only privileged URL; falls back to DATABASE_URL (issue #301) | High |
 
 ### Redis Configuration (Critical)
 | Variable | Expected | Present | Status | Priority |

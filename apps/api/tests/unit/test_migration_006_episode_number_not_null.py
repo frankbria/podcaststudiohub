@@ -155,6 +155,26 @@ def test_upgrade_executes_backfill_sql():
 	assert mock_conn.execute.called
 
 
+def test_upgrade_disables_row_security_before_backfill():
+	"""upgrade() must `SET LOCAL row_security = off` before the backfill (issue #301).
+
+	This makes a non-BYPASSRLS migration run fail loudly instead of silently
+	no-oping the backfill and then building constraints over un-backfilled data.
+	"""
+	mod = _load_migration()
+	mock_conn = MagicMock()
+	with patch('alembic.op.get_bind', return_value=mock_conn), \
+	     patch('alembic.op.alter_column'), \
+	     patch('alembic.op.create_unique_constraint'), \
+	     patch('alembic.op.create_index'):
+		mod.upgrade()
+	executed = [str(c.args[0]) for c in mock_conn.execute.call_args_list]
+	assert executed, "upgrade() executed no SQL"
+	assert executed[0].strip().lower() == "set local row_security = off"
+	# The backfill (an UPDATE) must come after the guard.
+	assert any("update episodes" in sql.lower() for sql in executed[1:])
+
+
 # ============================================================================
 # DOWNGRADE TESTS
 # ============================================================================

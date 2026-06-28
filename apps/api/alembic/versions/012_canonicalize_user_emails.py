@@ -25,6 +25,15 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
 	bind = op.get_bind()
 
+	# Fail loudly if run under a role subject to RLS (issue #301). 003 applies
+	# FORCE ROW LEVEL SECURITY to users; under an RLS-subject role the collision
+	# SELECT can be silently filtered and the lowercase UPDATE no-ops, then the
+	# unique lower(email) index builds over still-mixed-case data. With
+	# row_security=off, a no-bypass role errors instead of corrupting data; for a
+	# superuser/BYPASSRLS migration role this is a harmless no-op. SET LOCAL is
+	# transaction-scoped, so this one statement covers both the SELECT and UPDATE.
+	bind.execute(sa.text("SET LOCAL row_security = off"))
+
 	# Abort loudly on case-variant collisions — merging accounts is not safe to
 	# automate (it would orphan owned resources / drop credentials). Operator
 	# must dedupe manually before this migration can proceed.

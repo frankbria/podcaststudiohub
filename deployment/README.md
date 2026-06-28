@@ -93,6 +93,11 @@ rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
 ssh root@<SERVER_IP> << 'EOF'
 cd /opt/podcaststudiohub/api
 uv sync
+# Migrations MUST run under the privileged role (issue #301): MIGRATION_DATABASE_URL
+# (set in .env) points Alembic at the superuser/BYPASSRLS owner so RLS-affected
+# backfills apply to all rows. The app keeps connecting as the non-privileged
+# podcastfy_app via DATABASE_URL. Without it, migrations fail loudly rather than
+# silently no-op the backfills.
 uv run alembic upgrade head
 
 # Clear Python cache
@@ -254,7 +259,12 @@ Configure in **Settings** → **Environments** → **development**:
 
 **API (`/opt/podcaststudiohub/api/.env`):**
 ```bash
-DATABASE_URL=postgresql://user:pass@localhost/podcastfy
+# App role: non-privileged podcastfy_app (FORCE RLS enforced). The app requires
+# the asyncpg driver prefix (see apps/api/src/database.py).
+DATABASE_URL=postgresql+asyncpg://podcastfy_app:pass@localhost/podcastfy
+# Alembic-only privileged role (superuser/BYPASSRLS owner) — required so RLS-affected
+# backfills apply to all rows (issue #301). Falls back to DATABASE_URL when unset.
+MIGRATION_DATABASE_URL=postgresql+asyncpg://podcastfy:pass@localhost/podcastfy
 REDIS_URL=redis://localhost:6379/0
 JWT_SECRET_KEY=<generate-with-openssl-rand-hex-32>
 JWT_ALGORITHM=HS256

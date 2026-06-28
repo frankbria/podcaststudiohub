@@ -25,6 +25,14 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
 	connection = op.get_bind()
 
+	# Step 0: Fail loudly if this migration is run under a role subject to RLS
+	# (issue #301). 003 applies FORCE ROW LEVEL SECURITY to episodes; under an
+	# RLS-subject role the backfill below silently matches zero rows, then the
+	# NOT NULL / unique constraints build over un-backfilled data. With
+	# row_security=off, a no-bypass role errors here instead of corrupting data;
+	# for a superuser/BYPASSRLS migration role this is a harmless no-op.
+	connection.execute(text("SET LOCAL row_security = off"))
+
 	# Step 1: Backfill NULL episode_numbers.
 	# For each project, assign sequential numbers starting from
 	# MAX(existing episode_number) + 1 for NULL rows, ordered by created_at.

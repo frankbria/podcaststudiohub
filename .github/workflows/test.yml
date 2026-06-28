@@ -106,6 +106,12 @@ jobs:
   # non-CREATEROLE server role, leaving the schema 9 versions behind.) This job
   # mirrors the server's least-privilege model so that class of failure fails
   # the PR instead.
+  #
+  # It also locks in issue #301's two-role model: migrations run via a dedicated
+  # MIGRATION_DATABASE_URL pointing at a privileged (BYPASSRLS) owner role, so
+  # RLS-affected backfills (006/012) apply to all rows. The negative step proves
+  # the fail-loud guard: running migrations under a non-BYPASSRLS owner must
+  # error at the guarded backfill instead of silently no-oping.
   migrate-as-non-superuser:
     name: Migrations run under dev privilege model
     runs-on: ubuntu-latest
@@ -143,25 +149,31 @@ jobs:
         working-directory: apps/api
         run: uv sync
 
-      - name: Provision dev-parity roles and database
+      - name: Provision dev-parity roles and databases
         env:
           PGPASSWORD: postgres
         run: |
-          # Mirror the dev server: a non-superuser, non-CREATEROLE role owns the
-          # database and runs migrations; the podcastfy_app role is provisioned
-          # out-of-band (as a DBA would). Migrations must NOT require any privilege
-          # beyond what this owner role has. Throwaway CI credentials reuse the
-          # ubiquitous postgres/postgres service password (no real secret here).
+          # Mirror the dev server's least-privilege model. The migration owner is
+          # NOSUPERUSER/NOCREATEDB/NOCREATEROLE (migrations must not need those),
+          # but carries BYPASSRLS so the documented two-role model (issue #301)
+          # lets RLS-affected backfills apply to all rows. podcastfy_app is
+          # provisioned out-of-band (as a DBA would). A second database owned by a
+          # role WITHOUT BYPASSRLS exercises the fail-loud guard. Throwaway CI
+          # credentials reuse the postgres/postgres service password (no secret).
           psql -h localhost -U postgres -v ON_ERROR_STOP=1 <<'SQL'
-          CREATE ROLE podcastfy_user LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+          CREATE ROLE podcastfy_user LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS;
           CREATE DATABASE podcastfy OWNER podcastfy_user;
           CREATE ROLE podcastfy_app LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE ROLE podcastfy_norls LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+          CREATE DATABASE podcastfy_norls OWNER podcastfy_norls;
           SQL
 
-      - name: Run migrations as the non-superuser owner
+      - name: Run migrations via the privileged MIGRATION_DATABASE_URL (must succeed)
         working-directory: apps/api
         env:
-          DATABASE_URL: postgresql+asyncpg://podcastfy_user:postgres@localhost:5432/podcastfy
+          # App connects as the non-privileged role; Alembic uses the privileged one.
+          DATABASE_URL: postgresql+asyncpg://podcastfy_app:postgres@localhost:5432/podcastfy
+          MIGRATION_DATABASE_URL: postgresql+asyncpg://podcastfy_user:postgres@localhost:5432/podcastfy
         run: |
           # config.py requires these at import; generate ephemeral values at
           # runtime so no secret-looking literal sits in the workflow file.
@@ -169,6 +181,31 @@ jobs:
           export ENCRYPTION_KEY="$(printf 'x%.0s' {1..32})"
           export JWT_SECRET_KEY=ci
           uv run alembic upgrade head
+
+      - name: Migrations under a non-BYPASSRLS role must fail loudly (issue #301)
+        working-directory: apps/api
+        env:
+          # Owner role WITHOUT BYPASSRLS — backfills are RLS-subject and must error.
+          MIGRATION_DATABASE_URL: postgresql+asyncpg://podcastfy_norls:postgres@localhost:5432/podcastfy_norls
+          DATABASE_URL: postgresql+asyncpg://podcastfy_norls:postgres@localhost:5432/podcastfy_norls
+        run: |
+          export ENCRYPTION_KEY="$(printf 'x%.0s' {1..32})"
+          export JWT_SECRET_KEY=ci
+          set +e
+          out="$(uv run alembic upgrade head 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::Migrations succeeded under a non-BYPASSRLS role — the row_security guard is not working (issue #301)."
+            exit 1
+          fi
+          # The failure must be the RLS guard, not an unrelated error.
+          if ! echo "$out" | grep -qi "row.level security\|row_security"; then
+            echo "::error::Migrations failed under the non-privileged role, but not via the row_security guard (issue #301)."
+            exit 1
+          fi
+          echo "Confirmed: migrations failed loudly via the row-level-security guard (expected)."
 
   test-frontend:
     name: Frontend Tests (Next.js/Jest)

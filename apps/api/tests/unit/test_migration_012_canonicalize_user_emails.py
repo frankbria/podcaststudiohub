@@ -64,18 +64,40 @@ def test_migration_depends_on_none():
 # ============================================================================
 
 def test_upgrade_disables_row_security_first():
-	"""upgrade() must `SET LOCAL row_security = off` before any table access (issue #301)."""
+	"""upgrade() must `SET LOCAL row_security = off` before any table access (issue #301).
+
+	Records SQL across BOTH execution paths (bind.execute for the collision SELECT,
+	op.execute for the lowercase UPDATE) so the test proves the guard precedes the
+	UPDATE — not merely that it precedes other bind.execute calls.
+	"""
 	mod = _load_migration()
-	bind = _bind_with_collisions([])
+	calls = []
+
+	def rec_bind(stmt, *args, **kwargs):
+		calls.append(str(stmt))
+		result = MagicMock()
+		result.fetchall.return_value = []  # no collisions
+		return result
+
+	def rec_op(stmt, *args, **kwargs):
+		calls.append(str(stmt))
+
+	bind = MagicMock()
+	bind.execute.side_effect = rec_bind
 	with patch('alembic.op.get_bind', return_value=bind), \
-	     patch('alembic.op.execute'), \
+	     patch('alembic.op.execute', side_effect=rec_op), \
 	     patch('alembic.op.create_index'):
 		mod.upgrade()
-	executed = [str(c.args[0]) for c in bind.execute.call_args_list]
-	assert executed, "upgrade() executed no SQL via the bind"
-	assert executed[0].strip().lower() == "set local row_security = off"
-	# The collision SELECT must come after the guard.
-	assert any("from users" in sql.lower() for sql in executed[1:])
+
+	assert calls, "upgrade() executed no SQL"
+	assert calls[0].strip().lower() == "set local row_security = off"
+	lowered = [c.lower() for c in calls]
+	guard_idx = next(i for i, c in enumerate(lowered) if "row_security" in c)
+	update_idx = next(
+		i for i, c in enumerate(lowered)
+		if "update users set email = lower(email)" in c
+	)
+	assert guard_idx < update_idx, "row_security guard must precede the email UPDATE"
 
 
 def test_upgrade_lowercases_and_creates_unique_index_when_clean():

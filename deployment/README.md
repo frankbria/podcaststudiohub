@@ -259,11 +259,12 @@ Configure in **Settings** → **Environments** → **development**:
 
 **API (`/opt/podcaststudiohub/api/.env`):**
 ```bash
-# App role: non-privileged podcastfy_app (FORCE RLS enforced).
-DATABASE_URL=postgresql://podcastfy_app:pass@localhost/podcastfy
+# App role: non-privileged podcastfy_app (FORCE RLS enforced). The app requires
+# the asyncpg driver prefix (see apps/api/src/database.py).
+DATABASE_URL=postgresql+asyncpg://podcastfy_app:pass@localhost/podcastfy
 # Alembic-only privileged role (superuser/BYPASSRLS owner) — required so RLS-affected
 # backfills apply to all rows (issue #301). Falls back to DATABASE_URL when unset.
-MIGRATION_DATABASE_URL=postgresql://podcastfy:pass@localhost/podcastfy
+MIGRATION_DATABASE_URL=postgresql+asyncpg://podcastfy:pass@localhost/podcastfy
 REDIS_URL=redis://localhost:6379/0
 JWT_SECRET_KEY=<generate-with-openssl-rand-hex-32>
 JWT_ALGORITHM=HS256

@@ -178,3 +178,6 @@ usage/examples.ipynb
 demo.md
 demo_*.md
 demo_*_runner.py
+
+# Local assistant memory artifacts
+apps/*/.claude/

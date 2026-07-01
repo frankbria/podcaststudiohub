@@ -39,22 +39,17 @@ class ProjectCreate(BaseModel):
 	@field_validator('podcast_metadata')
 	@classmethod
 	def validate_podcast_metadata(cls, v: dict) -> dict:
-		"""Validate required keys in podcast_metadata."""
-		required_keys = {'show_title', 'author', 'description'}
-		missing_keys = required_keys - set(v.keys())
+		"""Validate podcast_metadata (issue #337).
 
-		if missing_keys:
-			raise ValueError(
-				f"podcast_metadata missing required keys: {', '.join(missing_keys)}"
-			)
-
-		# Validate types of required fields
-		if not isinstance(v['show_title'], str) or not v['show_title'].strip():
-			raise ValueError("podcast_metadata.show_title must be a non-empty string")
-		if not isinstance(v['author'], str) or not v['author'].strip():
-			raise ValueError("podcast_metadata.author must be a non-empty string")
-		if not isinstance(v['description'], str) or not v['description'].strip():
-			raise ValueError("podcast_metadata.description must be a non-empty string")
+		Create is lightweight: the UI only collects a title/description at this
+		stage, so show_title/author/description are NOT required here. show_title
+		is defaulted from the project name in the service layer, and completeness
+		(REQUIRED_METADATA_FIELDS) is enforced later at distribution time by
+		rss_generation_service. We still reject an empty string for any of these
+		keys when it *is* present, to catch obviously-bad input."""
+		for key in ('show_title', 'author', 'description'):
+			if key in v and (not isinstance(v[key], str) or not v[key].strip()):
+				raise ValueError(f"podcast_metadata.{key} must be a non-empty string")
 
 		return v
 
@@ -92,25 +87,16 @@ class ProjectUpdate(BaseModel):
 	@field_validator('podcast_metadata')
 	@classmethod
 	def validate_podcast_metadata(cls, v: Optional[dict]) -> Optional[dict]:
-		"""Validate required keys in podcast_metadata if provided."""
+		"""Validate podcast_metadata if provided (issue #337).
+
+		Mirrors ProjectCreate: keys are not required, but an empty string for a
+		known field is rejected. Completeness is enforced at distribution time."""
 		if v is None:
 			return v
 
-		required_keys = {'show_title', 'author', 'description'}
-		missing_keys = required_keys - set(v.keys())
-
-		if missing_keys:
-			raise ValueError(
-				f"podcast_metadata missing required keys: {', '.join(missing_keys)}"
-			)
-
-		# Validate types of required fields
-		if not isinstance(v['show_title'], str) or not v['show_title'].strip():
-			raise ValueError("podcast_metadata.show_title must be a non-empty string")
-		if not isinstance(v['author'], str) or not v['author'].strip():
-			raise ValueError("podcast_metadata.author must be a non-empty string")
-		if not isinstance(v['description'], str) or not v['description'].strip():
-			raise ValueError("podcast_metadata.description must be a non-empty string")
+		for key in ('show_title', 'author', 'description'):
+			if key in v and (not isinstance(v[key], str) or not v[key].strip()):
+				raise ValueError(f"podcast_metadata.{key} must be a non-empty string")
 
 		return v
 

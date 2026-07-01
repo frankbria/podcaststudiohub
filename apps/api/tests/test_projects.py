@@ -488,17 +488,34 @@ async def test_list_only_shows_own_tenant_projects(client):
 # ============================================================================
 
 @pytest.mark.asyncio
-async def test_validation_missing_required_metadata_fields(client, auth_headers):
-	"""Test validation for missing required podcast_metadata keys."""
+async def test_create_project_minimal_metadata(client, auth_headers):
+	"""author/description are NOT required in podcast_metadata at create (issue #337).
+
+	The create UI only collects a title/description; completeness is enforced later
+	at distribution time. This previously asserted 422 for missing author/description."""
 	response = await client.post("/projects", headers=auth_headers, json={
-		"name": "Invalid Project",
+		"name": "Minimal Metadata Project",
 		"podcast_metadata": {
-			"show_title": "Show"
-			# Missing 'author' and 'description'
+			"language": "en",
+			"explicit": False,
+			# no show_title / author / description
 		}
 	})
-	assert response.status_code == 422  # Validation error
-	assert "podcast_metadata" in response.text.lower()
+	assert response.status_code == 201
+	data = response.json()
+	# show_title defaults to the project name so RSS has a sensible value.
+	assert data["podcast_metadata"]["show_title"] == "Minimal Metadata Project"
+
+
+@pytest.mark.asyncio
+async def test_create_project_preserves_provided_show_title(client, auth_headers):
+	"""An explicitly provided show_title is not overwritten by the name default."""
+	response = await client.post("/projects", headers=auth_headers, json={
+		"name": "Project Name",
+		"podcast_metadata": {"show_title": "Custom Show"},
+	})
+	assert response.status_code == 201
+	assert response.json()["podcast_metadata"]["show_title"] == "Custom Show"
 
 
 @pytest.mark.asyncio

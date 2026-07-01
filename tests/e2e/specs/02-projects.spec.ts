@@ -286,7 +286,7 @@ test.describe.fixme('Project Management', () => {
 // global-setup). Ready to run, but BLOCKED: project creation is broken by the
 // web<->API contract mismatch (web sends `title`, backend requires
 // `name`/`podcast_metadata`). Un-fixme once #337 lands.
-test.describe.fixme('Project Access Control (isolation)', () => {
+test.describe('Project Access Control (isolation)', () => {
 	test('User B cannot access User A project', async ({ page, browser }) => {
 		// User A (default shared session) creates a private project.
 		const title = `Private Project ${Date.now()}`;

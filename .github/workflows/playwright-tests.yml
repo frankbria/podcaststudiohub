@@ -177,7 +177,7 @@ jobs:
         run: npm ci
 
       - name: Download all reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: all-reports/
           pattern: playwright-report-*

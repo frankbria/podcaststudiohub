@@ -143,11 +143,15 @@ jobs:
             apps/api/src/ \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/api/src/
 
-          # Sync API config files
+          # Sync API config files.
+          # README.md is required: pyproject sets readme = "README.md" and the
+          # hatchling build validates it exists, so `uv sync` on the server fails
+          # with OSError on a from-scratch box if it isn't synced.
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
             apps/api/pyproject.toml \
             apps/api/uv.lock \
             apps/api/alembic.ini \
+            apps/api/README.md \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/api/
 
           # Sync migrations

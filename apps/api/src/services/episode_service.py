@@ -265,7 +265,9 @@ async def update_episode(
 			# Never mass-assign system-managed fields, even if a future schema
 			# change re-adds one to EpisodeUpdate.
 			continue
-		if field == "episode_metadata" and value is not None:
+		if field == "episode_metadata":
+			if value is None:
+				continue  # can't null a NOT NULL JSONB column; treat as no-op
 			# Shallow-merge into existing JSONB so a partial update (e.g. title
 			# only, from the edit dialog) doesn't drop other keys like
 			# description/format/explicit/tags (issue #337).

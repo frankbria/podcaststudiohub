@@ -270,6 +270,29 @@ async def test_update_episode_title_only_preserves_other_metadata(client, projec
 
 
 @pytest.mark.asyncio
+async def test_update_episode_explicit_null_metadata_is_noop(client, project_and_auth):
+	"""An explicit episode_metadata: null must not crash (NOT NULL column) — treat
+	as no-op and still apply other fields (issue #337, CodeRabbit)."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Keep", "description": "Keep"},
+	})
+	episode_id = create_response.json()["id"]
+
+	response = await client.put(f"/episodes/{episode_id}", headers=headers, json={
+		"episode_number": 2,
+		"episode_metadata": None,
+	})
+	assert response.status_code == 200  # not a 500
+	data = response.json()
+	assert data["episode_number"] == 2
+	assert data["episode_metadata"]["title"] == "Keep"  # preserved
+
+
+@pytest.mark.asyncio
 async def test_update_episode_number(client, project_and_auth):
 	"""Test updating episode number."""
 	project_id, headers = project_and_auth

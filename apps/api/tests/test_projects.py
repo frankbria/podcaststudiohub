@@ -202,6 +202,26 @@ async def test_update_project_multiple_fields(client, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_update_project_explicit_null_metadata_is_noop(client, auth_headers):
+	"""An explicit podcast_metadata: null must not crash (NOT NULL column) — treat
+	as no-op and still apply other fields (issue #337, CodeRabbit)."""
+	create_response = await client.post("/projects", headers=auth_headers, json={
+		"name": "Orig",
+		"podcast_metadata": {"show_title": "Show", "author": "Author", "description": "Desc"},
+	})
+	project_id = create_response.json()["id"]
+
+	response = await client.put(f"/projects/{project_id}", headers=auth_headers, json={
+		"name": "Renamed",
+		"podcast_metadata": None,
+	})
+	assert response.status_code == 200  # not a 500
+	data = response.json()
+	assert data["name"] == "Renamed"
+	assert data["podcast_metadata"]["show_title"] == "Show"  # preserved
+
+
+@pytest.mark.asyncio
 async def test_update_project_ignores_ownership_fields(client, auth_headers):
 	"""A PUT carrying ownership/system fields must not reassign them
 	(mass-assignment guard); user-editable fields in the same request still apply."""

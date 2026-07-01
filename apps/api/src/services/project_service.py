@@ -153,7 +153,9 @@ async def update_project(
 	for field, value in update_dict.items():
 		if field not in PROJECT_USER_EDITABLE_FIELDS:
 			continue  # never mass-assign non-user-editable fields
-		if field == "podcast_metadata" and value is not None:
+		if field == "podcast_metadata":
+			if value is None:
+				continue  # can't null a NOT NULL JSONB column; treat as no-op
 			# Shallow-merge into existing JSONB so a partial update doesn't drop
 			# other podcast_metadata keys (issue #337).
 			value = {**(project.podcast_metadata or {}), **value}

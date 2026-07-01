@@ -9,7 +9,7 @@ import { createEpisode, addContentSource, generatePodcast, waitForGeneration, ve
 // un-fixme'ing once #337 lands. Remaining workflows target unverified UI or live
 // generation and stay individually fixme'd.
 test.describe('End-to-End Integration Workflows', () => {
-	test.describe.fixme('Complete User Journey: Signup to Ready-to-Generate', () => {
+	test.describe('Complete User Journey: Signup to Ready-to-Generate', () => {
 		// The headline journey: signup -> login -> project -> episode -> content ->
 		// ready to generate. The actual generate -> wait -> download leg lives in the
 		// fixme'd "Generation and Download" suite below because live TTS generation
@@ -321,7 +321,7 @@ test.describe('End-to-End Integration Workflows', () => {
 	// Two genuinely independent sessions (User A shared session + User B persistent
 	// context) prove data isolation. Ready to run, but BLOCKED on project creation
 	// (#337). Un-fixme once #337 lands.
-	test.describe.fixme('Concurrent User Workflow', () => {
+	test.describe('Concurrent User Workflow', () => {
 		test('should isolate data between two independent users', async ({ page, browser }) => {
 			// User A (shared session) creates a project.
 			const userAProject = { title: `User A Project ${Date.now()}` };

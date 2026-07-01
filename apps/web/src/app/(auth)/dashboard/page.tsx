@@ -54,8 +54,20 @@ export default function DashboardPage() {
       const response = await fetch(`/api/proxy/projects`)
 
       if (response.ok) {
-        const data = await response.json() as { items?: Project[] }
-        setProjects(data.items ?? [])
+        // API is the contract source of truth: it returns {projects: [...]} where
+        // each row uses `name`. Map to this view-model's `title` (issue #337).
+        const data = await response.json() as {
+          projects?: Array<{ id: string; name: string; description: string | null; episode_count?: number; created_at: string }>
+        }
+        setProjects(
+          (data.projects ?? []).map((p) => ({
+            id: p.id,
+            title: p.name,
+            description: p.description,
+            episode_count: p.episode_count ?? 0,
+            created_at: p.created_at,
+          }))
+        )
       } else {
         showErrorToast("Failed to load projects")
       }
@@ -83,7 +95,9 @@ export default function DashboardPage() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          title: data.title.trim(),
+          // API canonical field is `name`; show_title is defaulted from it
+          // server-side (issue #337).
+          name: data.title.trim(),
           description: data.description?.trim() || null,
           podcast_metadata: {
             language: "en",
@@ -118,12 +132,12 @@ export default function DashboardPage() {
       const response = await fetch(
         `/api/proxy/projects/${updated.id}`,
         {
-          method: "PATCH",
+          method: "PUT",  // API exposes PUT for project update (issue #337)
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            title: updated.title,
+            name: updated.title,
             description: updated.description,
           }),
         }

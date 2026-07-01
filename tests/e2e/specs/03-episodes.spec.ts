@@ -338,7 +338,7 @@ test.describe.fixme('Episode Management', () => {
 // Multi-tenant isolation (User A = shared storageState; User B = persistent
 // second tenant from global-setup). Ready to run, but BLOCKED: project/episode
 // creation is broken by the web<->API contract mismatch. Un-fixme once #337 lands.
-test.describe.fixme('Episode Access Control (isolation)', () => {
+test.describe('Episode Access Control (isolation)', () => {
 	test('User B cannot access User A episode', async ({ page, browser }) => {
 		// User A (default shared session) creates a private episode.
 		const episodeTitle = `Private Episode ${Date.now()}`;

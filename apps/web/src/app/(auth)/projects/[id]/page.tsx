@@ -65,8 +65,9 @@ export default function ProjectPage() {
         `/api/proxy/projects/${params.id}`
       )
       if (response.ok) {
-        const data = await response.json() as Project
-        setProject(data)
+        // API returns `name`; map to this view-model's `title` (issue #337).
+        const data = await response.json() as { id: string; name: string; description: string | null }
+        setProject({ id: data.id, title: data.name, description: data.description })
       } else {
         showErrorToast("Failed to load project")
       }
@@ -81,11 +82,28 @@ export default function ProjectPage() {
   const loadEpisodes = useCallback(async () => {
     try {
       const response = await fetch(
-        `/api/proxy/episodes/projects/${params.id}/episodes`
+        `/api/proxy/episodes?project_id=${params.id}`
       )
       if (response.ok) {
-        const data = await response.json() as { items?: Episode[] }
-        setEpisodes(data.items ?? [])
+        // API returns {episodes: [...]} with nested episode_metadata; flatten to
+        // this view-model's title/description (issue #337).
+        const data = await response.json() as {
+          episodes?: Array<{
+            id: string
+            episode_metadata?: { title?: string; description?: string | null }
+            generation_status: string
+            created_at: string
+          }>
+        }
+        setEpisodes(
+          (data.episodes ?? []).map((e) => ({
+            id: e.id,
+            title: e.episode_metadata?.title ?? "",
+            description: e.episode_metadata?.description ?? null,
+            generation_status: e.generation_status,
+            created_at: e.created_at,
+          }))
+        )
       } else {
         showErrorToast("Failed to load episodes")
       }
@@ -105,15 +123,16 @@ export default function ProjectPage() {
   const onSubmit = async (data: EpisodeFormData) => {
     try {
       const response = await fetch(
-        `/api/proxy/episodes/projects/${params.id}/episodes`,
+        `/api/proxy/episodes`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
+            // API stores episode fields under nested episode_metadata (issue #337).
             project_id: params.id,
-            title: data.title.trim(),
+            episode_metadata: { title: data.title.trim() },
           }),
         }
       )
@@ -145,12 +164,12 @@ export default function ProjectPage() {
       const response = await fetch(
         `/api/proxy/projects/${updated.id}`,
         {
-          method: "PATCH",
+          method: "PUT",  // API exposes PUT for project update (issue #337)
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            title: updated.title,
+            name: updated.title,
             description: updated.description,
           }),
         }
@@ -174,11 +193,11 @@ export default function ProjectPage() {
       const response = await fetch(
         `/api/proxy/episodes/${updated.id}`,
         {
-          method: "PATCH",
+          method: "PUT",  // API exposes PUT for episode update (issue #337)
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ title: updated.title }),
+          body: JSON.stringify({ episode_metadata: { title: updated.title } }),
         }
       )
 

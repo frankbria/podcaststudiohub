@@ -37,19 +37,15 @@ class EpisodeCreate(BaseModel):
 	@field_validator('episode_metadata')
 	@classmethod
 	def validate_episode_metadata(cls, v: dict) -> dict:
-		"""Validate required keys in episode_metadata."""
-		required_keys = {'title', 'description'}
-		missing_keys = required_keys - set(v.keys())
+		"""Validate episode_metadata (issue #337).
 
-		if missing_keys:
-			raise ValueError(
-				f"episode_metadata missing required keys: {', '.join(missing_keys)}"
-			)
-
-		# Validate types of required fields
+		title is required; description is optional at create (the UI only collects
+		a title). An empty string is still rejected for either key when present."""
+		if 'title' not in v:
+			raise ValueError("episode_metadata missing required key: title")
 		if not isinstance(v['title'], str) or not v['title'].strip():
 			raise ValueError("episode_metadata.title must be a non-empty string")
-		if not isinstance(v['description'], str) or not v['description'].strip():
+		if 'description' in v and (not isinstance(v['description'], str) or not v['description'].strip()):
 			raise ValueError("episode_metadata.description must be a non-empty string")
 
 		return v
@@ -88,22 +84,17 @@ class EpisodeUpdate(BaseModel):
 	@field_validator('episode_metadata')
 	@classmethod
 	def validate_episode_metadata(cls, v: Optional[dict]) -> Optional[dict]:
-		"""Validate required keys in episode_metadata if provided."""
+		"""Validate episode_metadata if provided (issue #337).
+
+		Mirrors EpisodeCreate: title required (non-empty), description optional."""
 		if v is None:
 			return v
 
-		required_keys = {'title', 'description'}
-		missing_keys = required_keys - set(v.keys())
-
-		if missing_keys:
-			raise ValueError(
-				f"episode_metadata missing required keys: {', '.join(missing_keys)}"
-			)
-
-		# Validate types of required fields
+		if 'title' not in v:
+			raise ValueError("episode_metadata missing required key: title")
 		if not isinstance(v['title'], str) or not v['title'].strip():
 			raise ValueError("episode_metadata.title must be a non-empty string")
-		if not isinstance(v['description'], str) or not v['description'].strip():
+		if 'description' in v and (not isinstance(v['description'], str) or not v['description'].strip()):
 			raise ValueError("episode_metadata.description must be a non-empty string")
 
 		return v

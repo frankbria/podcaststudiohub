@@ -47,10 +47,16 @@ async def create_project(
 	Returns:
 		Created Project instance
 	"""
+	# Default show_title to the project name so RSS/distribution has a sensible
+	# value even though the create UI doesn't collect it (issue #337).
+	podcast_metadata = dict(project_data.podcast_metadata or {})
+	if not podcast_metadata.get("show_title"):
+		podcast_metadata["show_title"] = project_data.name
+
 	project = Project(
 		name=project_data.name,
 		description=project_data.description,
-		podcast_metadata=project_data.podcast_metadata,
+		podcast_metadata=podcast_metadata,
 		user_id=user_id,
 		tenant_id=tenant_id,
 		is_archived=False
@@ -89,7 +95,9 @@ async def get_projects(
 	# Get total count (before pagination)
 	count_query = select(func.count()).select_from(query.subquery())
 	total_result = await db.execute(count_query)
-	total = total_result.scalar()
+	# COUNT never returns NULL, but guard anyway: a None here would make the
+	# router's total_pages arithmetic raise a TypeError -> HTTP 500 (issue #337).
+	total = total_result.scalar() or 0
 
 	# Get paginated results, ordered by most recent first
 	query = query.offset(skip).limit(limit).order_by(Project.created_at.desc())
@@ -145,6 +153,12 @@ async def update_project(
 	for field, value in update_dict.items():
 		if field not in PROJECT_USER_EDITABLE_FIELDS:
 			continue  # never mass-assign non-user-editable fields
+		if field == "podcast_metadata":
+			if value is None:
+				continue  # can't null a NOT NULL JSONB column; treat as no-op
+			# Shallow-merge into existing JSONB so a partial update doesn't drop
+			# other podcast_metadata keys (issue #337).
+			value = {**(project.podcast_metadata or {}), **value}
 		setattr(project, field, value)
 
 	await db.commit()

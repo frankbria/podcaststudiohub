@@ -1,44 +1,67 @@
-# Issue #302 [P2.4] — Re-enable E2E suite & restore real CI signal
+# Issue #337 — [P2.4a] Web↔API contract broken (project/episode create + GET /projects 500)
 
-**Branch:** `fix/302-e2e-test-trust`
-**Goal:** Stop CI false-green: fix broken helper selectors, provision real two-session isolation tests, selectively re-enable headline + isolation specs, add a skip-count CI gate, correct the README.
+**Branch:** `fix/337-web-api-contract`
+**Blocks:** #302 (E2E un-fixme). PLAN_SOURCE: self-authored.
 
-## SCOPE NARROWED (user decision 2026-06-28)
-Re-enabling the isolation/journey specs uncovered a real app bug: **project/episode
-creation is broken** by a web<->API contract mismatch (web sends `title`; backend
-requires `name`/`*_metadata`) + `GET /projects` 500s. Filed as **#337 (P2.4a)**.
-Per user: ship test-trust infra now; keep isolation/journey specs written but
-`fixme`'d behind #337; re-enable only auth/route-protection (passes today).
+## Canonical decision (the architectural fork, resolved with a safe default)
 
-## Acceptance criteria (from issue)
-- [x] Fix selectors to current UI (helpers repaired + tsc-clean)
-- [x] Provision two independent authenticated sessions (User B in global-setup) + negative assertions written
-- [~] Re-enable headline journey + isolation specs — written & ready, `fixme`'d behind #337; auth route-protection re-enabled & passing
-- [x] CI fails on skip-count above threshold (skip-gate, self-tested)
-- [x] Correct README coverage claims
+The **API is the source of truth**; the DB column is `name` and episodes store nested
+`episode_metadata`. So:
 
-## Plan adaptations (verified against code — not in the issue's plan)
-1. **User B via global-setup, not per-test signup.** Dev registration is rate-limited 3/hr/IP (`01-auth.spec.ts:8`). Self-provisioning fresh users per isolation test = 4-5 regs/run -> flaky. Provision one deterministic, idempotent User B in `global-setup`, persist `user-b.json`, reuse across isolation tests. User A = existing shared `user.json`.
-2. **Headline journey stops before live generation.** Re-enable signup->project->episode->content->assert "Generate Podcast" visible. Keep the real generate->wait->download flow `fixme` (depends on #313/#314; 5-min live TTS is flaky/costly in CI).
+1. **Projects use `name`** (not `title`) end-to-end; the web app conforms (UI copy can still
+   say "Title", but the data field / payload is `name`).
+2. **Episodes use nested `episode_metadata.{title,description}`** end-to-end; the web app reads
+   nested and sends nested.
+3. **Create-time metadata is lightweight.** Relax `ProjectCreate`/`EpisodeCreate` validators so
+   they don't demand fields the product doesn't collect at create (`show_title`, `author`,
+   episode `description`). Server auto-defaults `podcast_metadata.show_title = name` when absent so
+   RSS has a sensible value. The existing **distribution-time** gate
+   (`rss_generation_service.REQUIRED_METADATA_FIELDS`) is untouched — completeness is enforced
+   where it actually matters.
 
-## Steps
+Rationale for not stopping: DB/RLS/all other consumers already use `name`; changing the DB is
+high-risk and pointless. This is the lower-risk, single-source-of-truth direction.
 
-### Phase 1 — Repair shared helpers (selectors -> real UI)
-- [ ] `episode-helpers.ts`: createEpisode (#episode-title, dialog-scoped submit, nav /episodes/{id}); addContentSource (URL/Text toggle aria-pressed, #content-url/#content-text, scoped submit); generatePodcast (Generate Podcast, valid `Status: queued` locator); waitForGeneration (valid `Status: complete`, long timeout); verifyAudioPlayer (audio[controls] + Download MP3 aria-label); deleteContentSource (aria-label="Delete content source" + ConfirmDeleteDialog).
-- [ ] `project-helpers.ts`: createProject (#project-title/#project-description, dialog-scoped submit — trigger&submit share "Create Project" text = strict-mode trap; nav via card `[role=button][aria-label="Open project: <t>"]`); deleteProject (aria-label="Delete <t>" + ConfirmDeleteDialog).
-- [ ] `auth-helpers.ts`: logout via `[aria-label="User menu"]` -> Logout; add User B context loader.
+## Steps (TDD: RED → GREEN per step)
 
-### Phase 2 — Two-session isolation + selective re-enable
-- [ ] `global-setup.ts`: register + browser-login User B (deterministic email from User A, idempotent), save `tests/e2e/.auth/user-b.json`.
-- [ ] `02-projects.spec.ts`: drop top-level fixme; keep CRUD/validation/nav sub-describes fixme; rewrite "Project Access Control" — User A creates, User B (separate context) blocked + negative assertion.
-- [ ] `03-episodes.spec.ts`: same pattern for "Episode Access Control".
-- [ ] `10-integration.spec.ts`: drop top-level fixme; re-enable trimmed "Complete User Journey" (stop at Generate visible) + "Concurrent User Workflow" isolation (two contexts); re-fixme generation/download/counts/edit/perf/mobile sub-describes targeting unverified UI.
-- [ ] `01-auth.spec.ts`: re-enable the 3 route-protection test.fixme cases using real logout.
+### Backend
+- [ ] **B1. Fix `GET /projects` 500.** Write a failing integration test that seeds one project for
+      an authed user and calls `GET /projects`; read the real traceback. Candidates: count-subquery
+      `select(func.count()).select_from(query.subquery())`, ORM serialization after
+      `commit()` (missing `refresh`/`expire_on_commit`), or RLS GUC unset on the async session.
+      Fix the actual root cause. Add the regression test. (`services/project_service.py`,
+      `routers/projects.py`, tests)
+- [ ] **B2. Relax `ProjectCreate.validate_podcast_metadata`** — only type-check keys that are
+      present; drop the "required + non-empty" demand for `show_title`/`author`/`description`.
+      Default `show_title` to `name` in `create_project` when absent. Keep `ProjectUpdate` in sync.
+      Tests for: minimal metadata create succeeds; show_title defaulted.
+- [ ] **B3. Relax `EpisodeCreate.validate_episode_metadata`** — require `title` (non-empty),
+      make `description` optional. Keep `EpisodeUpdate` in sync. Tests.
 
-### Phase 3 — CI skip-gate + docs
-- [ ] `playwright.config.ts`: add json reporter -> `playwright-report/results.json`.
-- [ ] `playwright-tests.yml`: after test run (test job, `if: always()`), parse `.stats.skipped`, emit GitHub notice (passed/failed/skipped), fail if skipped > THRESHOLD (documented; tuned from first CI run).
-- [ ] `tests/e2e/README.md`: replace "270 tests / Implemented" with active-vs-fixme reality; fix helper descriptions.
+### Frontend
+- [ ] **F1. Project `title` → `name`.** Update web `Project` interfaces + all read sites
+      (`dashboard/page.tsx` 205/217/219/226/234, `projects/[id]/page.tsx` 267/268,
+      `EditProjectDialog.tsx`), create payload (`dashboard/page.tsx:85`), update payloads
+      (`dashboard/page.tsx:118`, `projects/[id]/page.tsx:145`). Send
+      `podcast_metadata:{show_title:name, language, explicit}`. Keep form input id `#project-title`
+      + "Title" UI label so E2E selectors still resolve.
+- [ ] **F2. Episode nested metadata.** In `projects/[id]/page.tsx`: Episode interface + list reads
+      (304/316/317/324/332) → `episode.episode_metadata.title/description`; create payload
+      (114) → `{project_id, episode_metadata:{title}}`; edit payload (174) →
+      `{episode_metadata:{title}}`. (`episodes/[id]/page.tsx` already correct.)
+- [ ] **F3. Update web unit tests + `lib/validation.ts` only if shape assertions break.** Jest.
 
-### Quality gate
-- [ ] playwright `--list` parses (valid fixme structure); skip-gate self-tested on sample JSON; CI Playwright run green — tune THRESHOLD from actual count.
+### E2E (un-fixme the handed-off specs)
+- [ ] **E1.** Remove `.fixme` from: `02-projects.spec.ts:289` (Project isolation),
+      `03-episodes.spec.ts:341` (Episode isolation), `10-integration.spec.ts:12` (Complete Journey)
+      + `:324` (Concurrent Workflow). Helpers already use two independent sessions (PR #338) and
+      fill `#project-title`/`#episode-title` — no helper change expected.
+
+### Verify / gates
+- [ ] Backend `uv run pytest` green; web `npm run test` + typecheck green; lint.
+- [ ] Demo the create→list→display round-trip (Phase 11 hard gate) — projects + episodes.
+- [ ] E2E specs green (or documented dev-env dependency if they need the deployed target).
+
+## Acceptance criteria mapping
+- AC1 (align contract) → F1/F2/B2/B3. AC2 (GET /projects 500 + test) → B1.
+- AC3 (round-trip verify) → demo. AC4 (un-fixme 4 specs) → E1.

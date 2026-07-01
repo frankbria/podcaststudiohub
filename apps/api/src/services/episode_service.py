@@ -195,7 +195,7 @@ async def get_episodes(
 	# Get total count (before pagination)
 	count_query = select(func.count()).select_from(query.subquery())
 	total_result = await db.execute(count_query)
-	total = total_result.scalar()
+	total = total_result.scalar() or 0  # guard None -> total_pages TypeError (issue #337)
 
 	# Apply sort order
 	sort_column = {
@@ -265,6 +265,13 @@ async def update_episode(
 			# Never mass-assign system-managed fields, even if a future schema
 			# change re-adds one to EpisodeUpdate.
 			continue
+		if field == "episode_metadata":
+			if value is None:
+				continue  # can't null a NOT NULL JSONB column; treat as no-op
+			# Shallow-merge into existing JSONB so a partial update (e.g. title
+			# only, from the edit dialog) doesn't drop other keys like
+			# description/format/explicit/tags (issue #337).
+			value = {**(episode.episode_metadata or {}), **value}
 		setattr(episode, field, value)
 
 	await db.commit()

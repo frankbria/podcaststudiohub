@@ -240,6 +240,59 @@ async def test_update_episode(client, project_and_auth):
 
 
 @pytest.mark.asyncio
+async def test_update_episode_title_only_preserves_other_metadata(client, project_and_auth):
+	"""A partial episode_metadata update must not drop other keys (issue #337).
+
+	The edit dialog sends only {title}; description/format/explicit must survive."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_metadata": {
+			"title": "Original Title",
+			"description": "Keep me",
+			"format": "full",
+			"explicit": True,
+		}
+	})
+	assert create_response.status_code == 201
+	episode_id = create_response.json()["id"]
+
+	response = await client.put(f"/episodes/{episode_id}", headers=headers, json={
+		"episode_metadata": {"title": "New Title"}
+	})
+	assert response.status_code == 200
+	meta = response.json()["episode_metadata"]
+	assert meta["title"] == "New Title"
+	assert meta["description"] == "Keep me"  # not dropped
+	assert meta["format"] == "full"
+	assert meta["explicit"] is True
+
+
+@pytest.mark.asyncio
+async def test_update_episode_explicit_null_metadata_is_noop(client, project_and_auth):
+	"""An explicit episode_metadata: null must not crash (NOT NULL column) — treat
+	as no-op and still apply other fields (issue #337, CodeRabbit)."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Keep", "description": "Keep"},
+	})
+	episode_id = create_response.json()["id"]
+
+	response = await client.put(f"/episodes/{episode_id}", headers=headers, json={
+		"episode_number": 2,
+		"episode_metadata": None,
+	})
+	assert response.status_code == 200  # not a 500
+	data = response.json()
+	assert data["episode_number"] == 2
+	assert data["episode_metadata"]["title"] == "Keep"  # preserved
+
+
+@pytest.mark.asyncio
 async def test_update_episode_number(client, project_and_auth):
 	"""Test updating episode number."""
 	project_id, headers = project_and_auth
@@ -446,8 +499,11 @@ async def test_validation_missing_title(client, project_and_auth):
 
 
 @pytest.mark.asyncio
-async def test_validation_missing_description(client, project_and_auth):
-	"""Test validation for missing episode_metadata.description."""
+async def test_create_episode_title_only_metadata(client, project_and_auth):
+	"""description is optional in episode_metadata at create (issue #337).
+
+	The create UI only collects a title. This previously asserted 422 for a
+	missing description."""
 	project_id, headers = project_and_auth
 
 	response = await client.post("/episodes", headers=headers, json={
@@ -455,8 +511,8 @@ async def test_validation_missing_description(client, project_and_auth):
 		"episode_number": 1,
 		"episode_metadata": {"title": "Title only"}
 	})
-	assert response.status_code == 422
-	assert "description" in response.text.lower()
+	assert response.status_code == 201
+	assert response.json()["episode_metadata"]["title"] == "Title only"
 
 
 @pytest.mark.asyncio
@@ -1360,14 +1416,16 @@ async def test_batch_create_returns_unique_batch_ids(client, project_and_auth):
 
 @pytest.mark.asyncio
 async def test_batch_create_invalid_metadata(client, project_and_auth):
-	"""Test that episode with missing required metadata returns 422."""
+	"""Test that episode with missing required metadata (title) returns 422.
+
+	description is optional at create (issue #337); title is still required."""
 	project_id, headers = project_and_auth
 
 	response = await client.post("/episodes/batch", headers=headers, json={
 		"episodes": [
 			{
 				"project_id": project_id,
-				"episode_metadata": {"title": "Missing description only"}
+				"episode_metadata": {"description": "Missing title only"}
 			}
 		]
 	})

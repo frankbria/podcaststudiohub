@@ -26,9 +26,10 @@ describe('DashboardPage', () => {
   it('renders projects on successful load', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
+      // Real API contract: {projects: [...]} with `name` (issue #337).
       json: async () => ({
-        items: [
-          { id: '1', title: 'My First Podcast', description: null, episode_count: 2, created_at: '2026-01-01' },
+        projects: [
+          { id: '1', name: 'My First Podcast', description: null, episode_count: 2, created_at: '2026-01-01' },
         ],
       }),
     }) as jest.Mock

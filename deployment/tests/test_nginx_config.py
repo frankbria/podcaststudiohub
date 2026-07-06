@@ -150,6 +150,70 @@ def test_acme_challenge_webroot_for_renewal(server_blocks: list[str]):
 	)
 
 
+# ── /api/* routing contract: Next.js vs FastAPI ownership ───────────────────
+#
+# The Next.js app owns /api/auth/* (NextAuth csrf/callback/session/error) and
+# /api/proxy/* (server-side JWT proxy + SSE). FastAPI owns the rest of /api/,
+# plus two carve-outs the app calls directly at ${NEXT_PUBLIC_API_URL}/auth/…:
+# /api/auth/login (NextAuth authorize()) and /api/auth/register (signup page,
+# E2E global-setup). Routing all of /api/ to FastAPI breaks browser login with
+# a redirect to /api/auth/error that itself 404s in FastAPI (#302).
+
+
+def _location_block(server_block: str, path: str) -> str:
+	"""Return the body of ``location <path> { ... }`` inside a server block."""
+	m = re.search(rf"location\s+{re.escape(path)}\s*\{{", server_block)
+	assert m, f"location {path} missing from the 443 server block"
+	start = m.end()
+	depth = 1
+	i = start
+	while i < len(server_block) and depth > 0:
+		if server_block[i] == "{":
+			depth += 1
+		elif server_block[i] == "}":
+			depth -= 1
+		i += 1
+	return server_block[start : i - 1]
+
+
+def test_frontend_location_is_pure_reverse_proxy(server_blocks: list[str]):
+	"""root/try_files inside the proxy location short-circuits proxy_pass and
+	500s on an internal redirection cycle for every non-file URI (e.g. /login)."""
+	https_block = _block_matching(server_blocks, "listen 443 ssl")
+	loc = _location_block(https_block, "/")
+	assert "proxy_pass" in loc, "location / must reverse-proxy to Next.js"
+	assert "try_files" not in loc, "try_files must not appear in the Next.js proxy location"
+	assert re.search(r"\broot\b", loc) is None, "root must not appear in the Next.js proxy location"
+
+
+def test_nextauth_routes_go_to_frontend(server_blocks: list[str]):
+	https_block = _block_matching(server_blocks, "listen 443 ssl")
+	loc = _location_block(https_block, "/api/auth/")
+	assert "127.0.0.1:3010" in loc, "/api/auth/ (NextAuth) must proxy to the Next.js app"
+	assert "podcastfy_api" not in loc
+
+
+def test_jwt_proxy_routes_go_to_frontend_with_sse(server_blocks: list[str]):
+	https_block = _block_matching(server_blocks, "listen 443 ssl")
+	loc = _location_block(https_block, "/api/proxy/")
+	assert "127.0.0.1:3010" in loc, "/api/proxy/ (JWT proxy + SSE) must proxy to the Next.js app"
+	assert "proxy_buffering off" in loc, "SSE through /api/proxy/ requires proxy_buffering off"
+
+
+def test_fastapi_auth_carveouts_reach_backend(server_blocks: list[str]):
+	https_block = _block_matching(server_blocks, "listen 443 ssl")
+	for path in ("/api/auth/login", "/api/auth/register"):
+		loc = _location_block(https_block, path)
+		assert "podcastfy_api" in loc, f"{path} must reach the FastAPI backend"
+		assert "rewrite ^/api/(.*) /$1 break" in loc, f"{path} must strip the /api prefix"
+
+
+def test_api_catchall_still_reaches_backend(server_blocks: list[str]):
+	https_block = _block_matching(server_blocks, "listen 443 ssl")
+	loc = _location_block(https_block, "/api/")
+	assert "podcastfy_api" in loc
+
+
 # ── Real nginx syntax validation (Docker) ──────────────────────────────────
 
 

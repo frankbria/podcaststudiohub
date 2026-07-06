@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     SPOTIFY_CLIENT_SECRET: Optional[str] = None
     SPOTIFY_REDIRECT_URI: Optional[str] = None
 
+    # Billing quota ENFORCEMENT (metering always records). Off on dev/staging
+    # so persistent E2E users can't 402 themselves by exhausting the free tier.
+    BILLING_ENFORCEMENT_ENABLED: bool = True
+
     # Rate Limiting
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_LOGIN_REQUESTS: int = 5

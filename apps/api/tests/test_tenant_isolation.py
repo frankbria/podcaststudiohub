@@ -46,6 +46,47 @@ async def test_rls_context_set_in_session(test_db: AsyncSession):
     assert current_tenant == tenant_id
 
 
+@pytest.mark.asyncio
+async def test_rls_context_survives_mid_request_commit(test_db: AsyncSession):
+    """SET LOCAL dies at transaction end, so a mid-request commit (the global
+    usage-metering dependency commits on every authed request) left the custom
+    GUC defined-but-empty (''), and every later RLS policy evaluation in the
+    request raised `invalid input syntax for type uuid: ""` -> HTTP 500 on any
+    RLS-filtered SELECT (issue #302: dev GET /projects). arm_tenant_context
+    re-establishes the GUC on every transaction begin of the session.
+    """
+    from src.database import arm_tenant_context
+
+    tenant_id = str(uuid.uuid4())
+    arm_tenant_context(test_db, tenant_id)
+
+    # First transaction: context present.
+    result = await test_db.execute(
+        text("SELECT current_setting('app.tenant_id', true)")
+    )
+    assert result.scalar() == tenant_id
+
+    # Mid-request commit (what track_api_call does on every authed request).
+    await test_db.commit()
+
+    # A new transaction on the same session must STILL carry the tenant GUC —
+    # this is exactly what broke: current_setting returned '' here.
+    result = await test_db.execute(
+        text("SELECT current_setting('app.tenant_id', true)")
+    )
+    assert result.scalar() == tenant_id
+
+
+@pytest.mark.asyncio
+async def test_arm_tenant_context_validates_uuid(test_db: AsyncSession):
+    """arm_tenant_context interpolates into SET LOCAL (no bind params), so it
+    must reject non-UUID input outright."""
+    from src.database import arm_tenant_context
+
+    with pytest.raises(ValueError):
+        arm_tenant_context(test_db, "'; DROP TABLE projects; --")
+
+
 @pytest.mark.skip(reason="Test fixture transaction handling interferes with RLS context. API-level tests verify RLS works.")
 @pytest.mark.asyncio
 async def test_rls_filters_users_by_tenant(test_db: AsyncSession):

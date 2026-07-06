@@ -93,9 +93,14 @@ async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]
     """
     async with AsyncSessionLocal() as session:
         try:
-            # Set tenant context for RLS if available
+            # Arm tenant context for RLS if available. Armed (event-based), not
+            # a one-shot SET LOCAL: mid-request commits (e.g. the global
+            # usage-metering dependency) end the transaction, which reverts the
+            # custom GUC to defined-but-empty ('') and makes every later RLS
+            # policy evaluation raise `invalid input syntax for type uuid: ""`
+            # (issue #302). The event re-issues SET LOCAL on every begin.
             if hasattr(request.state, 'tenant_id') and request.state.tenant_id:
-                await set_tenant_context(session, str(request.state.tenant_id))
+                arm_tenant_context(session, str(request.state.tenant_id))
 
             yield session
             await session.commit()
@@ -136,6 +141,41 @@ def get_streaming_session_factory() -> async_sessionmaker[AsyncSession]:
     across pytest's per-test event loops.
     """
     return AsyncSessionLocal
+
+
+def arm_tenant_context(db: AsyncSession, tenant_id: str) -> None:
+    """
+    Keep ``app.tenant_id`` set for EVERY transaction of this session.
+
+    ``SET LOCAL`` only lives until the current transaction ends, and any
+    mid-request commit leaves the custom GUC defined-but-empty (``''``) on the
+    pooled connection — after which RLS policies raise
+    ``invalid input syntax for type uuid: ""`` on every filtered SELECT
+    (issue #302). Registering an ``after_begin`` listener re-issues SET LOCAL
+    at the start of each transaction, so tenant context survives commits for
+    the life of the request session. The listener dies with the session.
+
+    Args:
+        db: Async database session (request-scoped)
+        tenant_id: UUID of the tenant (as string)
+
+    Raises:
+        ValueError: If tenant_id is not a valid UUID format
+    """
+    from uuid import UUID
+
+    from sqlalchemy import event
+
+    # Validate tenant_id is a valid UUID to prevent SQL injection
+    # (SET LOCAL cannot take bind parameters).
+    try:
+        UUID(tenant_id)
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid tenant_id format: {tenant_id}")
+
+    @event.listens_for(db.sync_session, "after_begin")
+    def _set_tenant(sync_session, transaction, connection) -> None:
+        connection.exec_driver_sql(f"SET LOCAL app.tenant_id = '{tenant_id}'")
 
 
 async def set_tenant_context(db: AsyncSession, tenant_id: str) -> None:

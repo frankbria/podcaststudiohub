@@ -216,13 +216,10 @@ async def set_tenant_context(db: AsyncSession, tenant_id: str) -> None:
     except (ValueError, TypeError):
         raise ValueError(f"Invalid tenant_id format: {tenant_id}")
 
-    # Arm future transactions too, so a later commit on this session cannot
-    # silently strip RLS context (#302) — one-shot and armed behavior stay
-    # uniform by construction.
-    arm_tenant_context(db, parsed)
-
-    # And set the CURRENT transaction: callers invoke this mid-transaction
-    # (e.g. auth register flow), where after_begin has already fired.
+    # One-shot by design: SET LOCAL lives only until the current transaction
+    # ends, so callers MUST NOT commit between this call and their RLS-filtered
+    # statements (re-call it after any commit). Request-scoped sessions get the
+    # commit-safe variant instead — get_db_session arms via arm_tenant_context.
     # PostgreSQL SET LOCAL doesn't support bind parameters; parsed is a
     # canonical UUID string.
     await db.execute(text(f"SET LOCAL app.tenant_id = '{parsed}'"))

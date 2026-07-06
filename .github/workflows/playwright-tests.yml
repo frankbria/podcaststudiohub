@@ -130,8 +130,12 @@ jobs:
           SKIPPED=$(jq '.stats.skipped // 0' "$REPORT")
           echo "::notice title=Playwright signal::passed=$PASSED failed=$FAILED flaky=$FLAKY skipped=$SKIPPED"
           STATUS=0
-          if [ "$PASSED" -lt "$MIN_PASSED" ]; then
-            echo "::error::Only $PASSED tests passed (min $MIN_PASSED). The suite is silently skipping real coverage."
+          # Flaky-but-ultimately-passing tests land in stats.flaky, not
+          # stats.expected — count them toward the floor so a retry-rescued
+          # run doesn't false-trip the "silently skipping coverage" check.
+          REALLY_PASSED=$((PASSED + FLAKY))
+          if [ "$REALLY_PASSED" -lt "$MIN_PASSED" ]; then
+            echo "::error::Only $REALLY_PASSED tests ran and passed (min $MIN_PASSED). The suite is silently skipping real coverage."
             STATUS=1
           fi
           if [ "$SKIPPED" -gt "$MAX_SKIPPED" ]; then

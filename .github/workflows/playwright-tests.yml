@@ -116,14 +116,14 @@ jobs:
           fi
           # Floor of real tests that must actually run + pass. Guards against the
           # historical false-green where 9/10 specs were fixme'd and CI still
-          # exited 0. The auth suite (~15 tests) is the current active baseline;
-          # raise this as the #337-blocked isolation/journey specs are un-fixme'd.
-          MIN_PASSED=10
-          # Ceiling on skipped tests. Observed baseline is 204 fixme'd tests
-          # (first green run); 210 leaves a small buffer. Adding more skips must
-          # be deliberate (bump this); as #337-blocked specs are un-fixme'd this
-          # count drops, so the ceiling won't false-fail.
-          MAX_SKIPPED=210
+          # exited 0. Active baseline: auth (~15) + the un-fixme'd isolation/
+          # journey specs (4) = 19; 18 leaves a 1-test flaky buffer. Raise as
+          # more suites are re-enabled.
+          MIN_PASSED=18
+          # Ceiling on skipped tests. Observed baseline is 200 fixme'd tests
+          # (after the #337-blocked specs were re-enabled); 205 leaves a small
+          # buffer. Adding more skips must be deliberate (bump this).
+          MAX_SKIPPED=205
           PASSED=$(jq '.stats.expected // 0' "$REPORT")
           FAILED=$(jq '.stats.unexpected // 0' "$REPORT")
           FLAKY=$(jq '.stats.flaky // 0' "$REPORT")

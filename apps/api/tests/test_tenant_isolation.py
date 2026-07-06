@@ -103,6 +103,26 @@ async def test_arm_tenant_context_normalizes_uuid_forms(test_db: AsyncSession):
     assert result.scalar() == str(tid)
 
 
+@pytest.mark.asyncio
+async def test_arm_tenant_context_rearm_replaces_listener(test_db: AsyncSession):
+    """Re-arming with a different tenant must replace the old listener, not
+    stack on it — otherwise later transactions run competing SET LOCALs whose
+    winner depends on registration order."""
+    from src.database import arm_tenant_context
+
+    tenant_a, tenant_b = str(uuid.uuid4()), str(uuid.uuid4())
+    arm_tenant_context(test_db, tenant_a)
+    await test_db.execute(text("SELECT 1"))
+    arm_tenant_context(test_db, tenant_b)
+    await test_db.commit()  # next statement begins a fresh transaction
+
+    result = await test_db.execute(
+        text("SELECT current_setting('app.tenant_id', true)")
+    )
+    assert result.scalar() == tenant_b
+    assert test_db.sync_session.info["armed_tenant_id"] == tenant_b
+
+
 @pytest.mark.skip(reason="Test fixture transaction handling interferes with RLS context. API-level tests verify RLS works.")
 @pytest.mark.asyncio
 async def test_rls_filters_users_by_tenant(test_db: AsyncSession):

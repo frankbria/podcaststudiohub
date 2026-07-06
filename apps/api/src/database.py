@@ -177,18 +177,26 @@ def arm_tenant_context(db: AsyncSession, tenant_id: str) -> None:
     except (ValueError, TypeError):
         raise ValueError(f"Invalid tenant_id format: {tenant_id}")
 
-    # Re-arming the same session must not stack duplicate listeners.
-    if db.sync_session.info.get("armed_tenant_id") == parsed:
+    # Re-arming: same tenant is a no-op; a different tenant must REPLACE the
+    # old listener, not stack on it — stacked listeners would issue competing
+    # SET LOCALs whose outcome depends on registration order.
+    info = db.sync_session.info
+    if info.get("armed_tenant_id") == parsed:
         return
-    db.sync_session.info["armed_tenant_id"] = parsed
+    old_listener = info.get("armed_tenant_listener")
+    if old_listener is not None:
+        event.remove(db.sync_session, "after_begin", old_listener)
 
     # Sync listener on the sync_session is intentional: after_begin fires
     # inside the AsyncSession greenlet bridge, where exec_driver_sql on the
     # (sync) Connection is the supported SQLAlchemy 2.0 pattern — do not
     # convert this to an await.
-    @event.listens_for(db.sync_session, "after_begin")
     def _set_tenant(sync_session, transaction, connection) -> None:
         connection.exec_driver_sql(f"SET LOCAL app.tenant_id = '{parsed}'")
+
+    event.listen(db.sync_session, "after_begin", _set_tenant)
+    info["armed_tenant_id"] = parsed
+    info["armed_tenant_listener"] = _set_tenant
 
 
 async def set_tenant_context(db: AsyncSession, tenant_id: str) -> None:

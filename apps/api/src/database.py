@@ -93,9 +93,14 @@ async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]
     """
     async with AsyncSessionLocal() as session:
         try:
-            # Set tenant context for RLS if available
+            # Arm tenant context for RLS if available. Armed (event-based), not
+            # a one-shot SET LOCAL: mid-request commits (e.g. the global
+            # usage-metering dependency) end the transaction, which reverts the
+            # custom GUC to defined-but-empty ('') and makes every later RLS
+            # policy evaluation raise `invalid input syntax for type uuid: ""`
+            # (issue #302). The event re-issues SET LOCAL on every begin.
             if hasattr(request.state, 'tenant_id') and request.state.tenant_id:
-                await set_tenant_context(session, str(request.state.tenant_id))
+                arm_tenant_context(session, str(request.state.tenant_id))
 
             yield session
             await session.commit()
@@ -138,6 +143,62 @@ def get_streaming_session_factory() -> async_sessionmaker[AsyncSession]:
     return AsyncSessionLocal
 
 
+def arm_tenant_context(db: AsyncSession, tenant_id: str) -> None:
+    """
+    Keep ``app.tenant_id`` set for EVERY transaction of this session.
+
+    ``SET LOCAL`` only lives until the current transaction ends, and any
+    mid-request commit leaves the custom GUC defined-but-empty (``''``) on the
+    pooled connection — after which RLS policies raise
+    ``invalid input syntax for type uuid: ""`` on every filtered SELECT
+    (issue #302). Registering an ``after_begin`` listener re-issues SET LOCAL
+    at the start of each transaction, so tenant context survives commits for
+    the life of the request session. The listener dies with the session.
+
+    Args:
+        db: Async database session (request-scoped)
+        tenant_id: UUID of the tenant (as string)
+
+    Raises:
+        ValueError: If tenant_id is not a valid UUID format
+    """
+    from uuid import UUID
+
+    from sqlalchemy import event
+
+    # Validate AND normalize: UUID() accepts forms Postgres' ::uuid cast
+    # rejects (urn:uuid: prefix, surrounding whitespace) — interpolating the
+    # raw input would make every later RLS evaluation raise the exact
+    # `invalid input syntax for type uuid` this helper exists to prevent.
+    # str(parsed) is always the canonical hex-with-dashes form, which also
+    # closes SQL injection (SET LOCAL cannot take bind parameters).
+    try:
+        parsed = str(UUID(tenant_id))
+    except (ValueError, TypeError):
+        raise ValueError(f"Invalid tenant_id format: {tenant_id}")
+
+    # Re-arming: same tenant is a no-op; a different tenant must REPLACE the
+    # old listener, not stack on it — stacked listeners would issue competing
+    # SET LOCALs whose outcome depends on registration order.
+    info = db.sync_session.info
+    if info.get("armed_tenant_id") == parsed:
+        return
+    old_listener = info.get("armed_tenant_listener")
+    if old_listener is not None:
+        event.remove(db.sync_session, "after_begin", old_listener)
+
+    # Sync listener on the sync_session is intentional: after_begin fires
+    # inside the AsyncSession greenlet bridge, where exec_driver_sql on the
+    # (sync) Connection is the supported SQLAlchemy 2.0 pattern — do not
+    # convert this to an await.
+    def _set_tenant(sync_session, transaction, connection) -> None:
+        connection.exec_driver_sql(f"SET LOCAL app.tenant_id = '{parsed}'")
+
+    event.listen(db.sync_session, "after_begin", _set_tenant)
+    info["armed_tenant_id"] = parsed
+    info["armed_tenant_listener"] = _set_tenant
+
+
 async def set_tenant_context(db: AsyncSession, tenant_id: str) -> None:
     """
     Manually set the tenant_id in PostgreSQL session for Row-Level Security.
@@ -157,12 +218,16 @@ async def set_tenant_context(db: AsyncSession, tenant_id: str) -> None:
     """
     from uuid import UUID
 
-    # Validate tenant_id is a valid UUID to prevent SQL injection
+    # Validate and normalize (see arm_tenant_context for why str(UUID(...))).
     try:
-        UUID(tenant_id)
+        parsed = str(UUID(tenant_id))
     except (ValueError, TypeError):
         raise ValueError(f"Invalid tenant_id format: {tenant_id}")
 
-    # PostgreSQL SET LOCAL doesn't support bind parameters
-    # Safe to use format since we validated it's a UUID
-    await db.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
+    # One-shot by design: SET LOCAL lives only until the current transaction
+    # ends, so callers MUST NOT commit between this call and their RLS-filtered
+    # statements (re-call it after any commit). Request-scoped sessions get the
+    # commit-safe variant instead — get_db_session arms via arm_tenant_context.
+    # PostgreSQL SET LOCAL doesn't support bind parameters; parsed is a
+    # canonical UUID string.
+    await db.execute(text(f"SET LOCAL app.tenant_id = '{parsed}'"))

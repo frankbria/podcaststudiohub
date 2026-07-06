@@ -253,3 +253,31 @@ async def test_batch_creation_increments_counter(client):
 
 	usage = await client.get("/billing/usage", headers=headers)
 	assert usage.json()["usage"]["episodes"]["count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Enforcement kill-switch (dev/staging environments)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_enforcement_disabled_allows_over_limit(client, monkeypatch):
+	"""With BILLING_ENFORCEMENT_ENABLED=false (dev/staging), quota checks pass
+	even over the tier limit — persistent E2E users must not 402 themselves by
+	exhausting the free tier (issue #302). Metering still records."""
+	from src.config import settings
+
+	monkeypatch.setattr(settings, "BILLING_ENFORCEMENT_ENABLED", False)
+
+	headers, _, _ = await register(client)
+	project_id = await make_project(client, headers)
+	free_limit = get_tier_limit("free", "episodes_per_month")
+
+	# One past the free limit — would 402 with enforcement on.
+	for i in range(1, free_limit + 2):
+		resp = await create_episode(client, headers, project_id, i)
+		assert resp.status_code == 201, resp.text
+
+	# Metering still recorded every creation.
+	usage = await client.get("/billing/usage", headers=headers)
+	assert usage.json()["usage"]["episodes"]["count"] == free_limit + 1

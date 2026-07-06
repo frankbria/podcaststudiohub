@@ -47,7 +47,7 @@ function mockFetchRouter() {
     if (url.includes('/generate')) {
       return Promise.resolve({ ok: true, json: async () => ({}) })
     }
-    if (url.includes('/content/episodes/')) {
+    if (/\/api\/proxy\/episodes\/[^/]+\/content(\?|$)/.test(url)) {
       return Promise.resolve({
         ok: true,
         json: async () => ({ content_sources: [{ id: 'c1', source_type: 'url', source_data: {}, extraction_status: 'complete' }] }),
@@ -65,7 +65,7 @@ function mockFetchRouter() {
 // Configurations <Select> renders (the path that crashed in #299).
 function mockFetchRouterWithSavedConfig() {
   return jest.fn((url: string) => {
-    if (url.includes('/content/episodes/')) {
+    if (/\/api\/proxy\/episodes\/[^/]+\/content(\?|$)/.test(url)) {
       return Promise.resolve({ ok: true, json: async () => ({ content_sources: [] }) })
     }
     if (url.includes('/tts-configs')) {

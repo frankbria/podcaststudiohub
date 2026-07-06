@@ -109,6 +109,9 @@ async def track_api_call(db: AsyncSession, user_id: UUID, tenant_id: UUID) -> No
 
 async def check_episode_quota(db: AsyncSession, user_id: UUID, count: int = 1) -> bool:
 	"""Return True if ``count`` more episodes fit within this period's limit."""
+	from ..config import settings
+	if not settings.BILLING_ENFORCEMENT_ENABLED:
+		return True
 	tier = await _get_user_tier(db, user_id)
 	if is_unlimited(tier, "episodes_per_month"):
 		return True
@@ -134,6 +137,9 @@ async def check_episode_limit(db: AsyncSession, user_id: UUID) -> bool:
 
 async def check_api_limit(db: AsyncSession, user_id: UUID) -> bool:
 	"""Return True if user is within API call limits this period."""
+	from ..config import settings
+	if not settings.BILLING_ENFORCEMENT_ENABLED:
+		return True
 	tier = await _get_user_tier(db, user_id)
 	if is_unlimited(tier, "api_calls_per_month"):
 		return True

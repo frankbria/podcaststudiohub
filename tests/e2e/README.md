@@ -14,20 +14,18 @@ if real coverage drops, so a mostly-skipped suite can no longer report green.
 ### Active (executing) coverage
 
 - **`01-auth.spec.ts`** — Authentication: signup, login, session persistence,
-  route protection (logged-out → `/login`), navigation links. This is the
-  current real-signal baseline (the CI gate's `MIN_PASSED` floor).
+  route protection (logged-out → `/login`), navigation links.
+- **`02-projects.spec.ts → Project Access Control (isolation)`** — User B
+  cannot open User A's project (two independent sessions, negative assertions).
+- **`03-episodes.spec.ts → Episode Access Control (isolation)`** — the same
+  two-session pattern for episodes.
+- **`10-integration.spec.ts → Complete User Journey`** — the headline path:
+  signup → project → episode → content → ready-to-generate → logout.
+- **`10-integration.spec.ts → Concurrent User Workflow`** — dashboard listing
+  and direct-URL data isolation between two independent users.
 
-### Written and ready, but BLOCKED on #337
-
-The multi-tenant isolation and headline-journey specs are fully written against
-the real UI (with correct selectors and a true two-session pattern) but are
-`fixme`'d because **project/episode creation is currently broken by a web↔API
-contract mismatch** (web sends `title`; backend requires `name` / `*_metadata`)
-— see #337. Un-`fixme` them once #337 lands:
-
-- `02-projects.spec.ts → Project Access Control (isolation)`
-- `03-episodes.spec.ts → Episode Access Control (isolation)`
-- `10-integration.spec.ts → Complete User Journey` and `Concurrent User Workflow`
+The isolation/journey specs were un-`fixme`'d once the web↔API contract fix
+(#337, PR #340) landed. This active set is the CI gate's `MIN_PASSED` floor.
 
 ### Disabled (`fixme`) — not yet verified against the current UI
 

@@ -143,7 +143,7 @@ export default function EpisodePage() {
   const loadContentSources = useCallback(async () => {
     try {
       const response = await fetch(
-        `/api/proxy/content/episodes/${params.id}/content`
+        `/api/proxy/episodes/${params.id}/content`
       )
       if (response.ok) {
         const data = await response.json() as { content_sources?: ContentSource[] } | ContentSource[]
@@ -301,7 +301,7 @@ export default function EpisodePage() {
           }
 
       const response = await fetch(
-        `/api/proxy/content/episodes/${params.id}/content`,
+        `/api/proxy/episodes/${params.id}/content`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

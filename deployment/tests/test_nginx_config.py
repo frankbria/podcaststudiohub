@@ -162,7 +162,7 @@ def test_acme_challenge_webroot_for_renewal(server_blocks: list[str]):
 
 def _location_block(server_block: str, path: str) -> str:
 	"""Return the body of ``location <path> { ... }`` inside a server block."""
-	m = re.search(rf"location\s+{re.escape(path)}\s*\{{", server_block)
+	m = re.search(rf"location\s+(=\s+)?{re.escape(path)}\s*\{{", server_block)
 	assert m, f"location {path} missing from the 443 server block"
 	start = m.end()
 	depth = 1

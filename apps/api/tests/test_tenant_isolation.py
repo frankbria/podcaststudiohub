@@ -87,6 +87,22 @@ async def test_arm_tenant_context_validates_uuid(test_db: AsyncSession):
         arm_tenant_context(test_db, "'; DROP TABLE projects; --")
 
 
+@pytest.mark.asyncio
+async def test_arm_tenant_context_normalizes_uuid_forms(test_db: AsyncSession):
+    """Python's UUID() accepts forms Postgres' ::uuid cast rejects (urn:uuid:
+    prefix, whitespace). The GUC must always receive the canonical form, or the
+    next RLS policy evaluation raises invalid-input-syntax — the very failure
+    this helper prevents."""
+    from src.database import arm_tenant_context
+
+    tid = uuid.uuid4()
+    arm_tenant_context(test_db, f"urn:uuid:{tid}")
+    result = await test_db.execute(
+        text("SELECT current_setting('app.tenant_id', true)")
+    )
+    assert result.scalar() == str(tid)
+
+
 @pytest.mark.skip(reason="Test fixture transaction handling interferes with RLS context. API-level tests verify RLS works.")
 @pytest.mark.asyncio
 async def test_rls_filters_users_by_tenant(test_db: AsyncSession):

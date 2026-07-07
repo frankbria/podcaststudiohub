@@ -14,6 +14,8 @@ Tests cover:
 import pytest
 from uuid import uuid4
 
+from src.routers.quality_metrics import _overall_score
+
 
 # ============================================================================
 # FIXTURES
@@ -213,6 +215,59 @@ async def test_get_episode_quality_metrics_not_found(client, user_project_episod
 
 
 @pytest.mark.asyncio
+async def test_get_episode_quality_metrics_malformed_data(client, user_project_episode, set_system_fields):
+	"""Test 422 when stored quality_metrics is missing required fields."""
+	project_id, episode_id, headers = user_project_episode
+
+	await set_system_fields(
+		episode_id,
+		generation_status="complete",
+		generation_progress={
+			"stage": "complete",
+			"progress": 100,
+			# Missing required fields (total_words, coherence_score, etc.)
+			"quality_metrics": {"tone": "casual"},
+		},
+	)
+
+	response = await client.get(
+		f"/quality-metrics/episodes/{episode_id}",
+		headers=headers,
+	)
+	assert response.status_code == 422
+	assert str(episode_id) in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_get_episode_quality_metrics_uses_stored_calculated_at(
+	client, user_project_episode, set_system_fields
+):
+	"""Test that a stored `calculated_at` ISO string is parsed and returned
+	rather than falling back to the episode's updated_at."""
+	project_id, episode_id, headers = user_project_episode
+	stored_calculated_at = "2025-01-15T10:30:00"
+
+	await set_system_fields(
+		episode_id,
+		generation_status="complete",
+		generation_progress={
+			"stage": "complete",
+			"progress": 100,
+			"calculated_at": stored_calculated_at,
+			"quality_metrics": SAMPLE_QUALITY_METRICS,
+		},
+	)
+
+	response = await client.get(
+		f"/quality-metrics/episodes/{episode_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["calculated_at"].startswith("2025-01-15T10:30:00")
+
+
+@pytest.mark.asyncio
 async def test_get_episode_quality_metrics_unauthorized(client, episode_with_metrics):
 	"""Test 401 without authentication."""
 	project_id, episode_id, headers = episode_with_metrics
@@ -338,6 +393,74 @@ async def test_get_project_quality_metrics_multiple_episodes(client, user_projec
 
 
 @pytest.mark.asyncio
+async def test_get_project_quality_metrics_trend_improving(client, user_project_episode, set_system_fields):
+	"""Test trend direction is 'improving' when the later episode scores higher."""
+	project_id, episode_id, headers = user_project_episode
+
+	# First (older) episode has poor metrics
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": POOR_QUALITY_METRICS,
+	})
+
+	# Second (recent) episode has good metrics
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {
+			"title": "Improved Episode",
+			"description": "Improved quality",
+		},
+	})
+	await set_system_fields(ep2.json()["id"], generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	assert response.json()["trend"]["direction"] == "improving"
+
+
+@pytest.mark.asyncio
+async def test_get_project_quality_metrics_trend_stable_with_two_episodes(
+	client, user_project_episode, set_system_fields
+):
+	"""Test trend direction is 'stable' when both episodes score identically."""
+	project_id, episode_id, headers = user_project_episode
+
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {
+			"title": "Identical Episode",
+			"description": "Same quality",
+		},
+	})
+	await set_system_fields(ep2.json()["id"], generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["trend"]["direction"] == "stable"
+	assert data["trend"]["trend_score"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_get_project_quality_metrics_not_found(client, user_project_episode):
 	"""Test 404 for non-existent project."""
 	project_id, episode_id, headers = user_project_episode
@@ -348,6 +471,23 @@ async def test_get_project_quality_metrics_not_found(client, user_project_episod
 		headers=headers,
 	)
 	assert response.status_code == 404
+
+
+# ============================================================================
+# _overall_score helper (pure function, unit-level)
+# ============================================================================
+
+def test_overall_score_returns_zero_when_no_overall_dimension_present():
+	"""_overall_score should default to 0.0 if the list has no 'overall' entry."""
+	from src.schemas.quality_metrics import QualityScore
+
+	scores = [QualityScore(dimension="coherence", score=0.9, rating="excellent")]
+
+	assert _overall_score(scores) == 0.0
+
+
+def test_overall_score_returns_zero_for_empty_list():
+	assert _overall_score([]) == 0.0
 
 
 # ============================================================================

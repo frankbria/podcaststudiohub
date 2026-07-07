@@ -91,7 +91,7 @@ jobs:
           uv run pytest tests/ \
             --cov=src \
             --cov-report=term-missing \
-            --cov-fail-under=0 \
+            --cov-fail-under=85 \
             -v
 
       - name: Install frontend dependencies

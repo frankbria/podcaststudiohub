@@ -7,6 +7,7 @@ export const ArrowDown01Icon = mockIcon
 export const ArrowUp01Icon = mockIcon
 export const FolderOpenIcon = mockIcon
 export const Inbox01Icon = mockIcon
+export const InboxIcon = mockIcon
 export const FileEditIcon = mockIcon
 export const MusicNote01Icon = mockIcon
 export const Alert02Icon = mockIcon

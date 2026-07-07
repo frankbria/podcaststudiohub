@@ -1,5 +1,7 @@
 [run]
-concurrency = greenlet
+# greenlet: trace async SQLAlchemy code after await db.execute()/commit()
+# thread: keep tracing code run in Starlette's threadpool (sync deps)
+concurrency = greenlet, thread
 source = src
 omit =
     */tests/*

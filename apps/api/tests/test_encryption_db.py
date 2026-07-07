@@ -9,6 +9,7 @@ a real database rather than mocked.
 """
 
 import pytest
+from sqlalchemy.exc import DBAPIError
 
 from src.database import SyncSessionLocal
 from src.utils.encryption import (
@@ -141,3 +142,21 @@ async def test_decrypt_credential_sync_round_trips_value_from_sync_session(test_
 		sync_db.close()
 
 	assert decrypted == plaintext
+
+
+# ============================================================================
+# Negative path: corrupt/invalid ciphertext
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_decrypt_credential_raises_on_corrupt_ciphertext(test_db):
+	"""decrypt_credential must not silently return garbage or None for
+	corrupt input — it should fail loudly. `decode(encrypted_credential,
+	'base64')` in the SQL function rejects non-base64 input at the database
+	level, and that failure propagates up through asyncpg/SQLAlchemy as a
+	DBAPIError rather than being swallowed."""
+	with pytest.raises(DBAPIError) as exc_info:
+		await decrypt_credential(test_db, "not-valid-base64-ciphertext!!!")
+
+	assert "invalid symbol" in str(exc_info.value).lower()

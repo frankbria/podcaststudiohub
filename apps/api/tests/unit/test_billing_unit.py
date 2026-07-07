@@ -444,12 +444,29 @@ class TestHandleSubscriptionUpdatedDirect:
 		assert sub.status == SubscriptionStatus.PAST_DUE
 
 	@pytest.mark.asyncio
-	async def test_no_matching_subscription_is_a_noop(self, test_db) -> None:
-		from src.services.billing_service import _handle_subscription_updated
+	async def test_no_matching_subscription_is_a_noop(self, test_db, client) -> None:
+		from src.models.billing_subscription import SubscriptionStatus
+		from src.services.billing_service import (
+			_handle_subscription_updated,
+			get_or_create_subscription,
+		)
+		# Seed an existing subscription in a state distinct from what a match
+		# would produce, so a false match would be visible below.
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		sub = await get_or_create_subscription(test_db, user_id, uuid4())
+		sub.stripe_customer_id = "cus_unrelated"
+		sub.status = SubscriptionStatus.PAST_DUE
+		sub.stripe_subscription_id = "sub_preexisting"
+		await test_db.commit()
+
 		# Should return quietly; no subscription has this customer id.
 		await _handle_subscription_updated(
 			test_db, {"id": "sub_x", "customer": "cus_does_not_exist", "status": "active"}
 		)
+
+		await test_db.refresh(sub)
+		assert sub.status == SubscriptionStatus.PAST_DUE
+		assert sub.stripe_subscription_id == "sub_preexisting"
 
 
 class TestHandleSubscriptionDeletedDirect:
@@ -476,9 +493,28 @@ class TestHandleSubscriptionDeletedDirect:
 		assert sub.canceled_at is not None
 
 	@pytest.mark.asyncio
-	async def test_no_matching_subscription_is_a_noop(self, test_db) -> None:
-		from src.services.billing_service import _handle_subscription_deleted
+	async def test_no_matching_subscription_is_a_noop(self, test_db, client) -> None:
+		from src.models.billing_subscription import SubscriptionStatus, SubscriptionTier
+		from src.services.billing_service import (
+			_handle_subscription_deleted,
+			get_or_create_subscription,
+			update_subscription_tier,
+		)
+		# Seed an existing paid subscription; a false match here would cancel
+		# and downgrade it, which the assertions below would catch.
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		tenant_id = uuid4()
+		sub = await get_or_create_subscription(test_db, user_id, tenant_id)
+		await update_subscription_tier(test_db, user_id, tenant_id, "pro")
+		sub.stripe_customer_id = "cus_unrelated_2"
+		await test_db.commit()
+
 		await _handle_subscription_deleted(test_db, {"customer": "cus_does_not_exist_either"})
+
+		await test_db.refresh(sub)
+		assert sub.tier == SubscriptionTier.PRO
+		assert sub.status == SubscriptionStatus.ACTIVE
+		assert sub.canceled_at is None
 
 
 # ---------------------------------------------------------------------------

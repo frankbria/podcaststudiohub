@@ -1522,6 +1522,9 @@ async def test_batch_create_episodes_quota_exceeded(client, test_db):
 	await test_db.flush()
 
 	# A batch of 3 would exceed the single remaining slot → rejected before any write.
+	before = await client.get(f"/episodes?project_id={project_id}", headers=headers)
+	episodes_before = before.json()["total"]
+
 	response = await client.post("/episodes/batch", headers=headers, json={
 		"episodes": [
 			{"project_id": project_id, "episode_metadata": {"title": f"B{n}", "description": "d"}}
@@ -1530,6 +1533,11 @@ async def test_batch_create_episodes_quota_exceeded(client, test_db):
 	})
 	assert response.status_code == 402
 	assert "limit" in response.json()["detail"].lower()
+
+	# Confirm the rejection actually happened before any write — no partial
+	# batch episodes were persisted.
+	after = await client.get(f"/episodes?project_id={project_id}", headers=headers)
+	assert after.json()["total"] == episodes_before
 
 
 # ============================================================================

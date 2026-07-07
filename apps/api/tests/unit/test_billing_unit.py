@@ -6,9 +6,12 @@ These tests do not require a database connection.
 import types
 from typing import Any, Callable
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+
+from tests.unit.conftest import _register_user
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +112,7 @@ class TestStripeEnabled:
 		"""When stripe module is unavailable, _stripe_enabled should be False."""
 		import src.services.billing_service as bs
 		monkeypatch.setattr(bs, "_STRIPE_AVAILABLE", False)
-		monkeypatch.setattr(bs, "_get_stripe_key", lambda: "sk_test_fake")
+		monkeypatch.setattr(bs, "_get_stripe_key", lambda: "fake-stripe-key")
 		assert bs._stripe_enabled() is False
 
 
@@ -210,7 +213,7 @@ def _enable_stripe(
 	fake.error = types.SimpleNamespace(SignatureVerificationError=_SigError)
 	monkeypatch.setattr(bs, "_STRIPE_AVAILABLE", True)
 	monkeypatch.setattr(bs, "_stripe_module", fake)
-	monkeypatch.setattr(bs, "_get_stripe_key", lambda: "sk_test_fake")
+	monkeypatch.setattr(bs, "_get_stripe_key", lambda: "fake-stripe-key")
 	return bs, _SigError
 
 
@@ -272,3 +275,255 @@ class TestStripeSettings:
 		from src.config import settings
 		assert hasattr(settings, "STRIPE_SECRET_KEY")
 		assert hasattr(settings, "STRIPE_WEBHOOK_SECRET")
+
+
+# ---------------------------------------------------------------------------
+# _get_stripe_key (real body, not monkeypatched)
+# ---------------------------------------------------------------------------
+
+
+class TestGetStripeKeyReal:
+	def test_returns_none_when_unconfigured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		from src.config import settings
+		from src.services.billing_service import _get_stripe_key
+		monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", None, raising=False)
+		assert _get_stripe_key() is None
+
+	def test_returns_configured_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+		from src.config import settings
+		from src.services.billing_service import _get_stripe_key
+		monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "fake-stripe-key", raising=False)
+		assert _get_stripe_key() == "fake-stripe-key"
+
+
+# ---------------------------------------------------------------------------
+# get_subscription (plain lookup, not the get-or-create variant)
+# ---------------------------------------------------------------------------
+
+
+class TestGetSubscriptionPlain:
+	@pytest.mark.asyncio
+	async def test_returns_none_when_absent(self, test_db) -> None:
+		from uuid import uuid4
+		from src.services.billing_service import get_subscription
+		assert await get_subscription(test_db, uuid4()) is None
+
+	@pytest.mark.asyncio
+	async def test_returns_existing_subscription(self, test_db, client) -> None:
+		from src.services.billing_service import get_or_create_subscription, get_subscription
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		tenant_id = uuid4()
+		created = await get_or_create_subscription(test_db, user_id, tenant_id)
+		fetched = await get_subscription(test_db, user_id)
+		assert fetched is not None
+		assert fetched.id == created.id
+
+
+# ---------------------------------------------------------------------------
+# create_checkout_session — invalid tier and real-Stripe branches
+# ---------------------------------------------------------------------------
+
+
+class TestCreateCheckoutInvalidTier:
+	@pytest.mark.asyncio
+	async def test_invalid_tier_raises_400(self, test_db) -> None:
+		from uuid import uuid4
+		from src.services.billing_service import create_checkout_session
+		with pytest.raises(HTTPException) as exc:
+			await create_checkout_session(test_db, uuid4(), uuid4(), "invalid_tier")
+		assert exc.value.status_code == 400
+
+
+def _enable_fake_stripe_sdk(monkeypatch: pytest.MonkeyPatch):
+	"""Enable billing_service's real-Stripe code path with a fake stripe SDK.
+
+	The real `stripe` package isn't installed in this environment, so the
+	Customer/Session creation calls are faked to exercise create_checkout_session's
+	Stripe-enabled branch (lines otherwise unreachable in mock mode).
+	"""
+	import src.services.billing_service as bs
+
+	fake_customer = types.SimpleNamespace(id="cus_fake123")
+	fake_session = types.SimpleNamespace(url="https://checkout.stripe.com/session/test")
+	fake = types.SimpleNamespace(
+		api_key=None,
+		Customer=types.SimpleNamespace(create=lambda **kwargs: fake_customer),
+		checkout=types.SimpleNamespace(
+			Session=types.SimpleNamespace(create=lambda **kwargs: fake_session)
+		),
+	)
+	monkeypatch.setattr(bs, "_STRIPE_AVAILABLE", True)
+	monkeypatch.setattr(bs, "_stripe_module", fake)
+	monkeypatch.setattr(bs, "_get_stripe_key", lambda: "fake-stripe-key")
+	return bs
+
+
+class TestCreateCheckoutStripeEnabled:
+	@pytest.mark.asyncio
+	async def test_creates_stripe_session_for_new_customer(
+		self, test_db, client, monkeypatch: pytest.MonkeyPatch
+	) -> None:
+		bs = _enable_fake_stripe_sdk(monkeypatch)
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		tenant_id = uuid4()
+
+		result = await bs.create_checkout_session(test_db, user_id, tenant_id, "pro")
+
+		assert result["checkout_url"] == "https://checkout.stripe.com/session/test"
+		sub = await bs.get_subscription(test_db, user_id)
+		assert sub.stripe_customer_id == "cus_fake123"
+
+	@pytest.mark.asyncio
+	async def test_reuses_existing_stripe_customer(
+		self, test_db, client, monkeypatch: pytest.MonkeyPatch
+	) -> None:
+		bs = _enable_fake_stripe_sdk(monkeypatch)
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		tenant_id = uuid4()
+		sub = await bs.get_or_create_subscription(test_db, user_id, tenant_id)
+		sub.stripe_customer_id = "cus_existing"
+		await test_db.commit()
+
+		result = await bs.create_checkout_session(test_db, user_id, tenant_id, "pro")
+
+		assert result["checkout_url"] == "https://checkout.stripe.com/session/test"
+		await test_db.refresh(sub)
+		assert sub.stripe_customer_id == "cus_existing"
+
+	@pytest.mark.asyncio
+	async def test_enterprise_requires_custom_pricing(
+		self, test_db, client, monkeypatch: pytest.MonkeyPatch
+	) -> None:
+		bs = _enable_fake_stripe_sdk(monkeypatch)
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		with pytest.raises(HTTPException) as exc:
+			await bs.create_checkout_session(test_db, user_id, uuid4(), "enterprise")
+		assert exc.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# update_subscription_tier — unknown tier branch
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateSubscriptionTierUnknown:
+	@pytest.mark.asyncio
+	async def test_unknown_tier_raises_400(self, test_db) -> None:
+		from uuid import uuid4
+		from src.services.billing_service import update_subscription_tier
+		with pytest.raises(HTTPException) as exc:
+			await update_subscription_tier(test_db, uuid4(), uuid4(), "bogus_tier")
+		assert exc.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# _handle_subscription_updated / _handle_subscription_deleted (direct calls)
+# ---------------------------------------------------------------------------
+
+
+class TestHandleSubscriptionUpdatedDirect:
+	@pytest.mark.asyncio
+	async def test_updates_matching_subscription(self, test_db, client) -> None:
+		from src.models.billing_subscription import SubscriptionStatus
+		from src.services.billing_service import (
+			_handle_subscription_updated,
+			get_or_create_subscription,
+		)
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		tenant_id = uuid4()
+		sub = await get_or_create_subscription(test_db, user_id, tenant_id)
+		sub.stripe_customer_id = "cus_matched"
+		await test_db.commit()
+
+		await _handle_subscription_updated(
+			test_db, {"id": "sub_123", "customer": "cus_matched", "status": "past_due"}
+		)
+
+		await test_db.refresh(sub)
+		assert sub.stripe_subscription_id == "sub_123"
+		assert sub.status == SubscriptionStatus.PAST_DUE
+
+	@pytest.mark.asyncio
+	async def test_no_matching_subscription_is_a_noop(self, test_db) -> None:
+		from src.services.billing_service import _handle_subscription_updated
+		# Should return quietly; no subscription has this customer id.
+		await _handle_subscription_updated(
+			test_db, {"id": "sub_x", "customer": "cus_does_not_exist", "status": "active"}
+		)
+
+
+class TestHandleSubscriptionDeletedDirect:
+	@pytest.mark.asyncio
+	async def test_cancels_and_downgrades_matching_subscription(self, test_db, client) -> None:
+		from src.models.billing_subscription import SubscriptionStatus, SubscriptionTier
+		from src.services.billing_service import (
+			_handle_subscription_deleted,
+			get_or_create_subscription,
+			update_subscription_tier,
+		)
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		tenant_id = uuid4()
+		sub = await get_or_create_subscription(test_db, user_id, tenant_id)
+		await update_subscription_tier(test_db, user_id, tenant_id, "pro")
+		sub.stripe_customer_id = "cus_deleted"
+		await test_db.commit()
+
+		await _handle_subscription_deleted(test_db, {"customer": "cus_deleted"})
+
+		await test_db.refresh(sub)
+		assert sub.status == SubscriptionStatus.CANCELED
+		assert sub.tier == SubscriptionTier.FREE
+		assert sub.canceled_at is not None
+
+	@pytest.mark.asyncio
+	async def test_no_matching_subscription_is_a_noop(self, test_db) -> None:
+		from src.services.billing_service import _handle_subscription_deleted
+		await _handle_subscription_deleted(test_db, {"customer": "cus_does_not_exist_either"})
+
+
+# ---------------------------------------------------------------------------
+# process_webhook — full dispatch to the subscription handlers (real db)
+# ---------------------------------------------------------------------------
+
+
+class TestProcessWebhookDispatchesToHandlers:
+	@pytest.mark.asyncio
+	async def test_subscription_updated_event_updates_db(
+		self, test_db, client, monkeypatch: pytest.MonkeyPatch
+	) -> None:
+		construct_event = MagicMock(return_value={
+			"type": "customer.subscription.updated",
+			"data": {"object": {"id": "sub_new", "customer": "cus_dispatch", "status": "active"}},
+		})
+		bs, _ = _enable_stripe(monkeypatch, construct_event)
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		sub = await bs.get_or_create_subscription(test_db, user_id, uuid4())
+		sub.stripe_customer_id = "cus_dispatch"
+		await test_db.commit()
+
+		result = await bs.process_webhook(test_db, b"{}", "sig", "whsec_test")
+
+		assert result["event_type"] == "customer.subscription.updated"
+		await test_db.refresh(sub)
+		assert sub.stripe_subscription_id == "sub_new"
+
+	@pytest.mark.asyncio
+	async def test_subscription_deleted_event_updates_db(
+		self, test_db, client, monkeypatch: pytest.MonkeyPatch
+	) -> None:
+		from src.models.billing_subscription import SubscriptionStatus
+		construct_event = MagicMock(return_value={
+			"type": "customer.subscription.deleted",
+			"data": {"object": {"customer": "cus_dispatch2"}},
+		})
+		bs, _ = _enable_stripe(monkeypatch, construct_event)
+		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		sub = await bs.get_or_create_subscription(test_db, user_id, uuid4())
+		sub.stripe_customer_id = "cus_dispatch2"
+		await test_db.commit()
+
+		result = await bs.process_webhook(test_db, b"{}", "sig", "whsec_test")
+
+		assert result["event_type"] == "customer.subscription.deleted"
+		await test_db.refresh(sub)
+		assert sub.status == SubscriptionStatus.CANCELED

@@ -800,7 +800,11 @@ async def test_download_url_no_s3_config(client, auth_headers):
 	snippet_id = create_response.json()["id"]
 
 	# Try to get download URL - s3_key is set but no bucket configured
-	with patch("src.services.audio_snippet_service.generate_download_url") as mock_gen:
+	# Patch the name as bound in the router module (it's imported via
+	# `from ..services.audio_snippet_service import generate_download_url`),
+	# not the service module — patching the latter doesn't affect the
+	# router's already-bound reference.
+	with patch("src.routers.audio_snippets.generate_download_url") as mock_gen:
 		from fastapi import HTTPException, status as http_status
 		mock_gen.side_effect = HTTPException(
 			status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,

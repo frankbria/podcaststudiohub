@@ -9,6 +9,9 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+from src.routers.rss_feed import _fetch_rss_from_s3, get_rss_service
+from src.services.rss_generation_service import RSSGenerationService
+
 
 # ============================================================================
 # SHARED FIXTURES
@@ -317,6 +320,28 @@ async def test_update_rss_feed_requires_auth(client, project_with_metadata):
 
 
 @pytest.mark.asyncio
+async def test_update_rss_feed_invalid_metadata(client, project_with_metadata):
+	"""Test 422 when regeneration fails because merged metadata is missing required fields."""
+	project_id, headers = project_with_metadata
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.generate_rss_for_project.side_effect = ValueError(
+			"podcast_metadata missing required field: 'author'"
+		)
+		MockService.return_value = mock_instance
+
+		response = await client.put(
+			f"/projects/{project_id}/rss-feed",
+			headers=headers,
+			json={"podcast_metadata": {"show_title": "New Title"}},
+		)
+
+	assert response.status_code == 422
+	assert "author" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_update_rss_feed_internal_error_hides_details(client, project_with_metadata):
 	"""500 during regeneration returns a generic message, not exception internals."""
 	project_id, headers = project_with_metadata
@@ -458,3 +483,40 @@ async def test_public_feed_accessible_without_jwt(client, project_with_metadata)
 
 	# Should succeed without auth
 	assert response.status_code == 200
+
+
+# ============================================================================
+# Dependency provider / internal helper unit tests
+#
+# get_rss_service is a *synchronous* FastAPI dependency, so when it is
+# resolved through a live HTTP request it runs inside Starlette's
+# threadpool executor and is invisible to coverage (.coveragerc only
+# configures `concurrency = greenlet`, not `thread`). Call it directly here
+# so it executes on the main test thread.
+# ============================================================================
+
+def test_get_rss_service_returns_service_instance():
+	"""get_rss_service() should construct a fresh RSSGenerationService."""
+	service = get_rss_service()
+
+	assert isinstance(service, RSSGenerationService)
+
+
+@pytest.mark.asyncio
+async def test_fetch_rss_from_s3_downloads_and_reads_file():
+	"""_fetch_rss_from_s3 should download the S3 object to a temp file, read
+	its bytes, and clean up the temp file afterwards."""
+	xml_bytes = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'
+
+	async def fake_download_file(s3_key, local_path):
+		with open(local_path, "wb") as f:
+			f.write(xml_bytes)
+		return local_path
+
+	rss_service = MagicMock()
+	rss_service.storage.download_file = AsyncMock(side_effect=fake_download_file)
+
+	result = await _fetch_rss_from_s3(rss_service, "rss-feeds/some-project/feed.xml")
+
+	assert result == xml_bytes
+	rss_service.storage.download_file.assert_awaited_once()

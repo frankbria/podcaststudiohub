@@ -5,7 +5,6 @@ Provides CRUD operations for episodes with project validation, pagination,
 status filtering, and generation status management. RLS ensures tenant isolation.
 """
 
-import json
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, cast, or_
@@ -178,7 +177,7 @@ async def get_episodes(
 	if tags:
 		for tag in tags:
 			query = query.where(
-				Episode.episode_metadata['tags'].op('@>')(cast(json.dumps([tag]), JSONB))
+				Episode.episode_metadata['tags'].op('@>')(cast([tag], JSONB))
 			)
 
 	# TTS config filter

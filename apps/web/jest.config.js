@@ -32,7 +32,7 @@ const config = {
     '!src/**/__tests__/**',
     '!src/**/*.test.{js,jsx,ts,tsx}',
     '!src/**/*.spec.{js,jsx,ts,tsx}',
-    '!src/app/**', // Exclude Next.js app directory (layout, page files)
+    '!src/app/**/layout.tsx', // layout boilerplate only — pages and route handlers stay under coverage
     '!src/types/**', // Exclude type definitions
   ],
 

@@ -1305,3 +1305,204 @@ async def test_upload_pdf_episode_not_found(client, authenticated_headers):
         )
 
     assert response.status_code == 404
+
+
+# ============================================================================
+# BROKER-UNAVAILABLE TESTS (auto-extract dispatch failure must not fail creation)
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_create_content_source_broker_unavailable(client, episode_and_auth):
+    """If queuing the extraction task raises, creation still succeeds (logged, not fatal)."""
+    episode_id, headers = episode_and_auth
+
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "url",
+        "source_data": {
+            "url": "https://example.com/article",
+            "title": "Test Article"
+        }
+    }
+
+    mock_client = _mock_http_200()
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=mock_client,
+    ), patch(
+        "src.tasks.content_extraction.extract_content_task"
+    ) as mock_task:
+        mock_task.delay.side_effect = Exception("broker unavailable")
+        response = await client.post(
+            f"/episodes/{episode_id}/content",
+            headers=headers,
+            json=content_data
+        )
+
+    assert response.status_code == 201
+    assert response.json()["source_type"] == "url"
+    mock_task.delay.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_broker_unavailable(client, episode_and_auth):
+    """If queuing the extraction task raises after upload, upload still succeeds."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ) as mock_s3, patch(
+        "src.tasks.content_extraction.extract_content_task"
+    ) as mock_task:
+        mock_s3.return_value = "https://bucket.s3.amazonaws.com/content/key.pdf"
+        mock_task.delay.side_effect = Exception("broker unavailable")
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(),
+            data={"auto_extract": "true"},
+        )
+
+    assert response.status_code == 201
+    assert response.json()["source_type"] == "pdf"
+    mock_task.delay.assert_called_once()
+
+
+# ============================================================================
+# LIST CONTENT SOURCES — EPISODE NOT FOUND
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_list_content_sources_episode_not_found(client, authenticated_headers):
+    """Listing content sources for a non-existent episode returns 404."""
+    random_episode_id = str(uuid4())
+
+    response = await client.get(
+        f"/episodes/{random_episode_id}/content",
+        headers=authenticated_headers
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+# ============================================================================
+# TRIGGER EXTRACTION ENDPOINT TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_trigger_extraction_success(client, url_content_source):
+    """Triggering extraction on an existing content source returns 202 with task info."""
+    content, headers = url_content_source
+
+    mock_task = MagicMock()
+    mock_task.id = "task-abc-123"
+    with patch(
+        "src.tasks.content_extraction.extract_content_task"
+    ) as mock_extract_task:
+        mock_extract_task.delay.return_value = mock_task
+        response = await client.post(
+            f"/content/{content['id']}/extract",
+            headers=headers
+        )
+
+    assert response.status_code == 202
+    data = response.json()
+    assert data["content_source_id"] == content["id"]
+    assert data["task_id"] == "task-abc-123"
+    assert data["status"] == "extracting"
+    mock_extract_task.delay.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_trigger_extraction_not_found(client, authenticated_headers):
+    """Triggering extraction on a non-existent content source returns 404."""
+    random_id = str(uuid4())
+
+    response = await client.post(
+        f"/content/{random_id}/extract",
+        headers=authenticated_headers
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_trigger_extraction_broker_unavailable(client, url_content_source):
+    """When the extraction task cannot be queued, returns 503."""
+    content, headers = url_content_source
+
+    with patch(
+        "src.tasks.content_extraction.extract_content_task"
+    ) as mock_extract_task:
+        mock_extract_task.delay.side_effect = Exception("broker down")
+        response = await client.post(
+            f"/content/{content['id']}/extract",
+            headers=headers
+        )
+
+    assert response.status_code == 503
+    assert "unavailable" in response.json()["detail"].lower()
+
+
+# ============================================================================
+# EXTRACTION STATUS ENDPOINT TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_get_extraction_status_not_found(client, authenticated_headers):
+    """Getting extraction status for a non-existent content source returns 404."""
+    random_id = str(uuid4())
+
+    response = await client.get(
+        f"/content/{random_id}/extraction-status",
+        headers=authenticated_headers
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_get_extraction_status_pending_no_word_count(client, url_content_source):
+    """A pending content source has no extracted_word_count."""
+    content, headers = url_content_source
+
+    response = await client.get(
+        f"/content/{content['id']}/extraction-status",
+        headers=headers
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["content_source_id"] == content["id"]
+    assert data["extraction_status"] == "pending"
+    assert data["extracted_word_count"] is None
+    assert data["error_message"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_extraction_status_computes_word_count(client, url_content_source):
+    """A completed content source's extracted_word_count reflects the extracted text."""
+    content, headers = url_content_source
+
+    update_response = await client.put(
+        f"/content/{content['id']}",
+        headers=headers,
+        json={
+            "extraction_status": "complete",
+            "extracted_content": "one two three four five"
+        }
+    )
+    assert update_response.status_code == 200
+
+    response = await client.get(
+        f"/content/{content['id']}/extraction-status",
+        headers=headers
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["extraction_status"] == "complete"
+    assert data["extracted_word_count"] == 5

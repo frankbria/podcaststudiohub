@@ -1430,3 +1430,395 @@ async def test_batch_create_invalid_metadata(client, project_and_auth):
 		]
 	})
 	assert response.status_code == 422
+
+
+# ============================================================================
+# QUOTA ENFORCEMENT TESTS (#297)
+# ============================================================================
+
+async def _register_free_tier_user_and_project(client):
+	"""Register a plain free-tier user (no enterprise subscription seeded) and
+	create a project. Returns (project_id, headers)."""
+	reg_response = await client.post("/auth/register", json={
+		"email": f"quota_{uuid4()}@example.com",
+		"password": "SecurePass123!",
+		"full_name": "Quota Test User"
+	})
+	assert reg_response.status_code == 201
+	token = reg_response.json()["access_token"]
+	headers = {"Authorization": f"Bearer {token}"}
+
+	proj_response = await client.post("/projects", headers=headers, json={
+		"name": "Quota Project",
+		"podcast_metadata": {
+			"show_title": "Quota Show",
+			"author": "Quota Author",
+			"description": "Quota Description"
+		}
+	})
+	assert proj_response.status_code == 201
+	project_id = proj_response.json()["id"]
+
+	return project_id, headers
+
+
+@pytest.mark.asyncio
+async def test_create_episode_quota_exceeded(client):
+	"""Free-tier users are blocked with 402 once the monthly episode limit is reached."""
+	from src.utils.pricing import get_tier_limit
+
+	project_id, headers = await _register_free_tier_user_and_project(client)
+	free_limit = get_tier_limit("free", "episodes_per_month")
+
+	for i in range(1, free_limit + 1):
+		resp = await client.post("/episodes", headers=headers, json={
+			"project_id": project_id,
+			"episode_number": i,
+			"episode_metadata": {"title": f"Ep {i}", "description": "d"}
+		})
+		assert resp.status_code == 201, resp.text
+
+	# The (limit+1)-th creation is rejected with 402 Payment Required.
+	resp = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": free_limit + 1,
+		"episode_metadata": {"title": "Over limit", "description": "d"}
+	})
+	assert resp.status_code == 402
+	assert "limit" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_batch_create_episodes_quota_exceeded(client, test_db):
+	"""Batch creation is gated up front: a batch that would exceed the plan's
+	remaining monthly quota is rejected with 402 before any episode is created."""
+	from sqlalchemy import select
+	from src.models.billing_usage import BillingUsage
+	from src.services.auth_service import verify_jwt_token
+	from src.services.usage_service import _current_period_dates
+	from src.utils.pricing import get_tier_limit
+
+	project_id, headers = await _register_free_tier_user_and_project(client)
+	token = headers["Authorization"].split(" ", 1)[1]
+	claims = verify_jwt_token(token)
+	free_limit = get_tier_limit("free", "episodes_per_month")
+
+	# Pre-fill usage to one below the free cap (upsert: registration/project
+	# creation may already have created this period's usage row via metering).
+	start, end = _current_period_dates()
+	existing = (await test_db.execute(
+		select(BillingUsage).where(
+			BillingUsage.user_id == claims["sub"],
+			BillingUsage.period_start == start,
+		)
+	)).scalar_one_or_none()
+	if existing is None:
+		test_db.add(BillingUsage(
+			user_id=claims["sub"], tenant_id=claims["tenant_id"],
+			period_start=start, period_end=end, episodes_created=free_limit - 1,
+		))
+	else:
+		existing.episodes_created = free_limit - 1
+	await test_db.flush()
+
+	# A batch of 3 would exceed the single remaining slot → rejected before any write.
+	response = await client.post("/episodes/batch", headers=headers, json={
+		"episodes": [
+			{"project_id": project_id, "episode_metadata": {"title": f"B{n}", "description": "d"}}
+			for n in range(1, 4)
+		]
+	})
+	assert response.status_code == 402
+	assert "limit" in response.json()["detail"].lower()
+
+
+# ============================================================================
+# TAG FILTERING TESTS
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_list_episodes_tags_query_param_accepted(client, project_and_auth):
+	"""The `?tags=` query param is parsed (comma-split) and accepted by the endpoint."""
+	project_id, headers = project_and_auth
+
+	await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Tagged", "description": "d", "tags": ["tech", "ai"]}
+	})
+
+	response = await client.get(
+		f"/episodes?project_id={project_id}&tags=tech,ai",
+		headers=headers
+	)
+	assert response.status_code == 200
+	assert "episodes" in response.json()
+
+
+@pytest.mark.asyncio
+async def test_get_episodes_filters_by_tags(client, test_db, project_and_auth):
+	"""Regression test for a double-JSON-encoding bug in get_episodes()'s tag filter
+	(src/services/episode_service.py): `cast(json.dumps([tag]), JSONB)` pre-encodes
+	the value before the JSONB bind processor encodes it again, so the `@>`
+	containment check never matches and the filter silently returns zero rows.
+
+	Creates one episode tagged ["news", "tech"] and one tagged ["news"] only, then
+	calls get_episodes() directly (not through the HTTP layer) to verify the tags
+	filter actually narrows results: filtering by "news" must return both episodes,
+	filtering by "tech" must return only the news+tech one.
+	"""
+	from uuid import UUID
+	from src.services.episode_service import get_episodes
+
+	project_id, headers = project_and_auth
+
+	news_tech = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "News and Tech", "description": "d", "tags": ["news", "tech"]}
+	})
+	news_only = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "News Only", "description": "d", "tags": ["news"]}
+	})
+	assert news_tech.status_code == 201
+	assert news_only.status_code == 201
+	news_tech_id = news_tech.json()["id"]
+	news_only_id = news_only.json()["id"]
+
+	news_episodes, news_total = await get_episodes(
+		db=test_db, project_id=UUID(project_id), skip=0, limit=20, tags=["news"]
+	)
+	assert news_total == 2
+	assert {str(ep.id) for ep in news_episodes} == {news_tech_id, news_only_id}
+
+	tech_episodes, tech_total = await get_episodes(
+		db=test_db, project_id=UUID(project_id), skip=0, limit=20, tags=["tech"]
+	)
+	assert tech_total == 1
+	assert str(tech_episodes[0].id) == news_tech_id
+
+
+# ============================================================================
+# DOWNLOAD ENDPOINT TESTS
+# ============================================================================
+
+def _mock_s3_storage(total_size: int, content: bytes, mock_class):
+	"""Configure a mock StorageService for download tests."""
+	from unittest.mock import MagicMock
+
+	mock_instance = MagicMock()
+	mock_class.return_value = mock_instance
+	mock_instance.bucket_name = "test-bucket"
+	mock_instance.s3_client.head_object.return_value = {"ContentLength": total_size}
+	mock_body = MagicMock()
+	mock_body.read.side_effect = [content, b""]
+	mock_instance.s3_client.get_object.return_value = {"Body": mock_body}
+	return mock_instance
+
+
+@pytest.mark.asyncio
+async def test_download_episode_not_found(client, project_and_auth):
+	"""Downloading a non-existent episode returns 404."""
+	_, headers = project_and_auth
+	fake_id = str(uuid4())
+
+	response = await client.get(f"/episodes/{fake_id}/download", headers=headers)
+	assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_download_episode_not_complete(client, project_and_auth):
+	"""Downloading a draft (not-complete) episode returns 403."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Draft Ep", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	response = await client.get(f"/episodes/{episode_id}/download", headers=headers)
+	assert response.status_code == 403
+	assert "not ready" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_download_no_audio_in_storage(client, project_and_auth, set_system_fields):
+	"""A 'complete' episode with neither s3_key nor a usable file_path returns 404."""
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "No Audio", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+	await set_system_fields(episode_id, generation_status="complete")
+
+	response = await client.get(f"/episodes/{episode_id}/download", headers=headers)
+	assert response.status_code == 404
+	assert "audio file not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_download_s3_full_file_success(client, project_and_auth, set_system_fields):
+	"""A 'complete' episode with an s3_key streams from S3 with correct headers."""
+	from unittest.mock import patch
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "S3 Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+	await set_system_fields(
+		episode_id, generation_status="complete", s3_key="podcasts/episode.mp3"
+	)
+
+	fake_audio = b"FAKE_MP3_CONTENT_" * 10
+	with patch("src.routers.episodes.StorageService") as MockStorage:
+		_mock_s3_storage(len(fake_audio), fake_audio, MockStorage)
+		response = await client.get(f"/episodes/{episode_id}/download", headers=headers)
+
+	assert response.status_code == 200
+	assert response.headers["content-type"] == "audio/mpeg"
+	assert "attachment" in response.headers["content-disposition"]
+	assert int(response.headers["content-length"]) == len(fake_audio)
+	assert response.headers["accept-ranges"] == "bytes"
+	assert response.headers["cache-control"] == "private, max-age=31536000"
+
+
+@pytest.mark.asyncio
+async def test_download_s3_range_206(client, project_and_auth, set_system_fields):
+	"""A Range request against an S3-backed episode returns 206 with Content-Range."""
+	from unittest.mock import patch
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "S3 Range Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+	await set_system_fields(
+		episode_id, generation_status="complete", s3_key="podcasts/episode.mp3"
+	)
+
+	total_size = 5242880
+	range_start, range_end = 0, 1023
+	with patch("src.routers.episodes.StorageService") as MockStorage:
+		_mock_s3_storage(total_size, b"X" * 1024, MockStorage)
+		response = await client.get(
+			f"/episodes/{episode_id}/download",
+			headers={**headers, "Range": f"bytes={range_start}-{range_end}"}
+		)
+
+	assert response.status_code == 206
+	assert response.headers["content-range"] == f"bytes {range_start}-{range_end}/{total_size}"
+	assert int(response.headers["content-length"]) == 1024
+
+
+@pytest.mark.asyncio
+async def test_download_invalid_range_returns_416(client, project_and_auth, set_system_fields):
+	"""An out-of-bounds Range header returns 416."""
+	from unittest.mock import patch
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Bad Range Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+	await set_system_fields(
+		episode_id, generation_status="complete", s3_key="podcasts/episode.mp3"
+	)
+
+	total_size = 5242880
+	with patch("src.routers.episodes.StorageService") as MockStorage:
+		mock_instance = MockStorage.return_value
+		mock_instance.bucket_name = "test-bucket"
+		mock_instance.s3_client.head_object.return_value = {"ContentLength": total_size}
+
+		response = await client.get(
+			f"/episodes/{episode_id}/download",
+			headers={**headers, "Range": f"bytes={total_size}-{total_size + 100}"}
+		)
+
+	assert response.status_code == 416
+
+
+@pytest.mark.asyncio
+async def test_download_local_file_success(
+	client, project_and_auth, set_system_fields, tmp_path, monkeypatch
+):
+	"""When no s3_key is set but file_path points at a real local file under
+	LOCAL_AUDIO_STORAGE_PATH, the endpoint streams it from disk (issue #292)."""
+	from src.config import settings
+
+	monkeypatch.setattr(settings, "LOCAL_AUDIO_STORAGE_PATH", str(tmp_path))
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Local Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	audio = b"LOCAL_MP3_CONTENT_" * 16
+	audio_path = tmp_path / "episode-local.mp3"
+	audio_path.write_bytes(audio)
+
+	await set_system_fields(
+		episode_id, generation_status="complete", file_path=str(audio_path)
+	)
+
+	response = await client.get(f"/episodes/{episode_id}/download", headers=headers)
+
+	assert response.status_code == 200
+	assert response.headers["content-type"] == "audio/mpeg"
+	assert int(response.headers["content-length"]) == len(audio)
+	assert response.content == audio
+
+
+@pytest.mark.asyncio
+async def test_download_local_file_range_206(
+	client, project_and_auth, set_system_fields, tmp_path, monkeypatch
+):
+	"""A Range request against a locally stored file returns 206 with the correct slice."""
+	from src.config import settings
+
+	monkeypatch.setattr(settings, "LOCAL_AUDIO_STORAGE_PATH", str(tmp_path))
+	project_id, headers = project_and_auth
+
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Local Range Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	audio = bytes(range(256)) * 8  # 2048 bytes
+	audio_path = tmp_path / "episode-local.mp3"
+	audio_path.write_bytes(audio)
+	total_size = len(audio)
+	range_start, range_end = 100, 199
+
+	await set_system_fields(
+		episode_id, generation_status="complete", file_path=str(audio_path)
+	)
+
+	response = await client.get(
+		f"/episodes/{episode_id}/download",
+		headers={**headers, "Range": f"bytes={range_start}-{range_end}"}
+	)
+
+	assert response.status_code == 206
+	assert response.headers["content-range"] == f"bytes {range_start}-{range_end}/{total_size}"
+	assert int(response.headers["content-length"]) == 100
+	assert response.content == audio[range_start:range_end + 1]

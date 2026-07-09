@@ -374,6 +374,70 @@ async def test_spotify_callback_creates_target(client, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_spotify_callback_works_without_request_tenant_context(client, auth_headers, test_db):
+	"""Regression (#304 post-PR review): the OAuth callback is a browser
+	redirect with no JWT, so the request arms no tenant context. The handler
+	must bootstrap the user's tenant itself — for the users lookup AND the
+	distribution_targets INSERT (scoped WITH CHECK). Simulate production by
+	arming an unrelated tenant on the shared test session first."""
+	from src.database import arm_tenant_context, set_tenant_context
+
+	with patch("src.routers.distribution_targets.settings") as mock_settings:
+		mock_settings.SPOTIFY_CLIENT_ID = "test-client-id"
+		mock_settings.SPOTIFY_REDIRECT_URI = "https://api.example.com/callback"
+		auth_response = await client.post(
+			"/distribution-targets/spotify/authorize",
+			headers=auth_headers
+		)
+	assert auth_response.status_code == 200
+	state = auth_response.json()["state"]
+
+	mock_token_response = {
+		"access_token": "spotify-access-token",
+		"refresh_token": "spotify-refresh-token",
+		"expires_in": 3600,
+		"token_type": "Bearer"
+	}
+	mock_show_response = {"id": "show-id-456", "name": "Ctx Test Show"}
+
+	with patch("src.services.distribution_target_service.httpx") as mock_httpx:
+		mock_client = AsyncMock()
+		mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
+		mock_httpx.AsyncClient.return_value.__aexit__.return_value = None
+
+		token_resp = MagicMock()
+		token_resp.status_code = 200
+		token_resp.json.return_value = mock_token_response
+		token_resp.raise_for_status = MagicMock()
+
+		show_resp = MagicMock()
+		show_resp.status_code = 200
+		show_resp.json.return_value = mock_show_response
+		show_resp.raise_for_status = MagicMock()
+
+		mock_client.post.return_value = token_resp
+		mock_client.get.return_value = show_resp
+
+		with patch("src.routers.distribution_targets.settings") as mock_settings:
+			mock_settings.SPOTIFY_CLIENT_ID = "test-client-id"
+			mock_settings.SPOTIFY_CLIENT_SECRET = "test-client-secret"
+			mock_settings.SPOTIFY_REDIRECT_URI = "https://api.example.com/callback"
+
+			# Production has NO tenant context on the callback's fresh session;
+			# the shared test session inherits the authorize request's armed
+			# context, which masks the bug — overwrite it with a foreign tenant.
+			foreign = str(uuid4())
+			arm_tenant_context(test_db, foreign)
+			await set_tenant_context(test_db, foreign)
+
+			response = await client.get(
+				f"/distribution-targets/spotify/callback?code=auth-code-456&state={state}"
+			)
+
+	assert response.status_code in (200, 302)
+
+
+@pytest.mark.asyncio
 async def test_spotify_callback_invalid_state(client, auth_headers):
 	"""Test that Spotify callback with invalid state returns 400."""
 	response = await client.get(

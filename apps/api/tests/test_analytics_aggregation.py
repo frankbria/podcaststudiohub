@@ -23,13 +23,19 @@ from src.services.analytics_service import (
 
 
 async def _setup_project_episode(client):
-    """Register a user and create a project + episode; return (project_id, episode_id) as UUIDs."""
+    """Register a user and create a project + episode.
+
+    Returns (project_id, episode_id, tenant_id) as UUIDs — events must carry
+    the registering user's real tenant_id now that analytics_events is
+    RLS-protected (migration 014).
+    """
     resp = await client.post("/auth/register", json={
         "email": f"test_{uuid4()}@example.com",
         "password": "SecurePass123!",
         "full_name": "Test User",
     })
     assert resp.status_code == 201, resp.text
+    tenant_id = UUID(resp.json()["user"]["tenant_id"])
     headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
     resp = await client.post("/projects", json={
@@ -51,13 +57,13 @@ async def _setup_project_episode(client):
     assert resp.status_code == 201, resp.text
     episode_id = UUID(resp.json()["id"])
 
-    return project_id, episode_id
+    return project_id, episode_id, tenant_id
 
 
-def _mk_event(*, episode_id, project_id, event_type, created_at,
+def _mk_event(*, tenant_id, episode_id, project_id, event_type, created_at,
               device_type=None, app_name=None, country=None, metadata=None):
     return AnalyticsEvent(
-        tenant_id=uuid4(),  # no FK / no RLS on analytics_events
+        tenant_id=tenant_id,  # must match app.tenant_id (RLS WITH CHECK, #304)
         episode_id=episode_id,
         project_id=project_id,
         event_type=event_type,
@@ -72,36 +78,36 @@ def _mk_event(*, episode_id, project_id, event_type, created_at,
 @pytest.mark.asyncio
 async def test_get_episode_analytics_characterization(client, test_db):
     """Exact dict for a mixed set of events within an explicit date window."""
-    proj, ep = await _setup_project_episode(client)
+    proj, ep, tenant = await _setup_project_episode(client)
     date_from = datetime(2026, 6, 1)
     date_to = datetime(2026, 6, 30, 23, 59, 59)
 
     events = [
-        _mk_event(episode_id=ep, project_id=proj, event_type="download",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="download",
                   created_at=datetime(2026, 6, 10), device_type="mobile",
                   app_name="apple_podcasts", country="US"),
-        _mk_event(episode_id=ep, project_id=proj, event_type="download",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="download",
                   created_at=datetime(2026, 6, 11), device_type="desktop",
                   app_name="spotify", country="GB"),
-        _mk_event(episode_id=ep, project_id=proj, event_type="play",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="play",
                   created_at=datetime(2026, 6, 12), device_type="mobile",
                   app_name="apple_podcasts", country="US",
                   metadata={"duration_listened_seconds": 120, "completed": True}),
-        _mk_event(episode_id=ep, project_id=proj, event_type="play",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="play",
                   created_at=datetime(2026, 6, 13), device_type="tablet",
                   app_name="overcast", country="US",
                   metadata={"duration_listened_seconds": 60, "completed": False}),
         # play with empty metadata + NULL device/app/country: counted as play only
-        _mk_event(episode_id=ep, project_id=proj, event_type="play",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="play",
                   created_at=datetime(2026, 6, 14), metadata={}),
-        _mk_event(episode_id=ep, project_id=proj, event_type="stream",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="stream",
                   created_at=datetime(2026, 6, 15), device_type="desktop",
                   app_name="other", country="GB"),
-        _mk_event(episode_id=ep, project_id=proj, event_type="share",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="share",
                   created_at=datetime(2026, 6, 16), device_type="mobile",
                   app_name="other", country="US"),
         # outside the window -> excluded entirely
-        _mk_event(episode_id=ep, project_id=proj, event_type="download",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="download",
                   created_at=datetime(2026, 7, 5), device_type="mobile",
                   app_name="apple_podcasts", country="US"),
     ]
@@ -158,29 +164,29 @@ async def test_get_episode_analytics_zero_events(test_db):
 @pytest.mark.asyncio
 async def test_get_project_analytics_characterization(client, test_db):
     """Exact dict for a project summary using now-relative dates (default 30d window)."""
-    proj, ep = await _setup_project_episode(client)
+    proj, ep, tenant = await _setup_project_episode(client)
     now = utcnow()
 
     in_window = [
-        _mk_event(episode_id=ep, project_id=proj, event_type="download",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="download",
                   created_at=now - timedelta(days=2)),
-        _mk_event(episode_id=ep, project_id=proj, event_type="download",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="download",
                   created_at=now - timedelta(days=3)),
-        _mk_event(episode_id=ep, project_id=proj, event_type="play",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="play",
                   created_at=now - timedelta(days=4),
                   metadata={"duration_listened_seconds": 120, "completed": True}),
-        _mk_event(episode_id=ep, project_id=proj, event_type="play",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="play",
                   created_at=now - timedelta(days=5),
                   metadata={"duration_listened_seconds": 60}),
-        _mk_event(episode_id=ep, project_id=proj, event_type="play",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="play",
                   created_at=now - timedelta(days=6), metadata={}),
-        _mk_event(episode_id=ep, project_id=proj, event_type="stream",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="stream",
                   created_at=now - timedelta(days=7)),
-        _mk_event(episode_id=ep, project_id=proj, event_type="share",
+        _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="share",
                   created_at=now - timedelta(days=8)),
     ]
     # outside the 30-day window -> excluded
-    outside = _mk_event(episode_id=ep, project_id=proj, event_type="download",
+    outside = _mk_event(tenant_id=tenant, episode_id=ep, project_id=proj, event_type="download",
                         created_at=now - timedelta(days=40))
     for e in in_window + [outside]:
         test_db.add(e)

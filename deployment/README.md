@@ -265,6 +265,11 @@ DATABASE_URL=postgresql+asyncpg://podcastfy_app:pass@localhost/podcastfy
 # Alembic-only privileged role (superuser/BYPASSRLS owner) — required so RLS-affected
 # backfills apply to all rows (issue #301). Falls back to DATABASE_URL when unset.
 MIGRATION_DATABASE_URL=postgresql+asyncpg://podcastfy:pass@localhost/podcastfy
+# Secret password for the podcastfy_app role (issue #304). Alembic reads it at
+# migration time: migration 014 rotates the role password to this value whenever
+# it is set (fresh installs use it in 003). Generate with `openssl rand -hex 32`
+# and keep it in sync with the password embedded in DATABASE_URL above.
+APP_DB_PASSWORD=<same-password-as-in-DATABASE_URL>
 REDIS_URL=redis://localhost:6379/0
 JWT_SECRET_KEY=<generate-with-openssl-rand-hex-32>
 JWT_ALGORITHM=HS256

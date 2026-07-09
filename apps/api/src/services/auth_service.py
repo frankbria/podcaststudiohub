@@ -6,12 +6,13 @@ from uuid import UUID, uuid4
 import bcrypt
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text, func
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from ..database import set_tenant_context
 from ..models.user import User
 from ..config import settings
 from ..utils.encryption import encrypt_credential, decrypt_credential
@@ -237,12 +238,24 @@ async def get_user_by_email(session: AsyncSession, email: str) -> Optional["User
     Returns:
         User instance or None if not found
     """
-    # Case-insensitive lookup: email is not identity-significant by case (#255).
-    # func.lower(...) also matches legacy mixed-case rows from before canonicalization.
+    # Case-insensitive lookup: email is not identity-significant by case (#255);
+    # the function lowercases both sides, matching legacy mixed-case rows too.
+    # Two-step bootstrap (issue #304): login/resend-verification run before any
+    # tenant context exists and the blanket users SELECT policy is gone. The
+    # SECURITY DEFINER function discloses only (id, tenant_id) for the email —
+    # never password_hash/encrypted_api_keys — then the full row is loaded
+    # through the normal RLS-governed SELECT under that tenant's context.
     result = await session.execute(
-        select(User).where(func.lower(User.email) == email.lower())
+        text("SELECT id, tenant_id FROM auth_lookup_user_by_email(:email)"),
+        {"email": email},
     )
-    return result.scalar_one_or_none()
+    row = result.one_or_none()
+    if row is None:
+        return None
+
+    await set_tenant_context(session, str(row.tenant_id))
+    full = await session.execute(select(User).where(User.id == row.id))
+    return full.scalar_one_or_none()
 
 
 # ============================================================================
@@ -273,6 +286,11 @@ async def create_user(
     try:
         # Generate unique tenant_id for new user (each user is their own tenant)
         tenant_id = uuid4()
+
+        # Arm the new tenant's RLS context before the INSERT: registration is
+        # the one pre-tenant write, and since migration 014 the INSERT must
+        # satisfy WITH CHECK (tenant_id = current_setting('app.tenant_id')).
+        await set_tenant_context(session, str(tenant_id))
 
         # Canonicalize email to lowercase so case is never identity-significant (#255).
         email = email.lower()
@@ -326,11 +344,8 @@ async def authenticate_user(
     Returns:
         User model instance if valid credentials, None otherwise
     """
-    # Query user by email (case-insensitive — case is not identity-significant, #255)
-    result = await session.execute(
-        select(User).where(func.lower(User.email) == email.lower())
-    )
-    user = result.scalar_one_or_none()
+    # Pre-tenant lookup via the SECURITY DEFINER function (case-insensitive)
+    user = await get_user_by_email(session, email)
 
     if user is None:
         return None
@@ -343,8 +358,8 @@ async def authenticate_user(
     if not user.is_active:
         return None
 
-    # Set tenant context so the UPDATE is allowed by RLS, then update last_login
-    await session.execute(text(f"SET LOCAL app.tenant_id = '{user.tenant_id}'"))
+    # get_user_by_email already set this user's tenant context in the current
+    # transaction, so the last_login UPDATE passes RLS.
     user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
     await session.commit()
 

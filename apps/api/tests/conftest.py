@@ -115,14 +115,22 @@ async def client(test_db):
     This fixture properly handles tenant context for RLS by accepting the Request parameter.
     """
     from fastapi import HTTPException, Request
-    from src.database import set_tenant_context
+    from src.database import arm_tenant_context, set_tenant_context
 
     # Override the database dependency with proper tenant context support
     async def override_get_db(request: Request):
         """Override get_db to use test database with tenant context."""
         try:
-            # Set tenant context for RLS if available
+            # Arm AND set. Arming mirrors production get_db_session: mid-request
+            # commits (e.g. the usage-metering dependency) end the transaction
+            # and would leave app.tenant_id defined-but-empty, breaking every
+            # later RLS policy evaluation (issue #302). But the armed listener
+            # only fires on the NEXT transaction begin — unlike production,
+            # this session is shared across requests, so a different user's
+            # request arriving mid-transaction also needs an immediate
+            # SET LOCAL to switch tenant now.
             if hasattr(request.state, 'tenant_id') and request.state.tenant_id:
+                arm_tenant_context(test_db, str(request.state.tenant_id))
                 await set_tenant_context(test_db, str(request.state.tenant_id))
 
             yield test_db

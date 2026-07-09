@@ -12,8 +12,10 @@ Revises: 002
 Create Date: 2025-10-20 21:00:00.000000
 
 """
+import os
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -77,19 +79,39 @@ def upgrade() -> None:
 	# -------------------------------------------------------------------------
 	# Use DO block because CREATE ROLE IF NOT EXISTS is not supported directly
 	# in older PostgreSQL versions (<= 14 doesn't have CREATE ROLE IF NOT EXISTS)
+	# Fresh installs take the role password from APP_DB_PASSWORD; the literal
+	# fallback keeps local dev and CI working (migration 014 rotates it from
+	# the same env var on real deploys). The secret travels as a bound
+	# parameter into a transaction-local GUC, then through format(%L) — never
+	# interpolated into SQL text, so any password content is safe.
+	app_db_password = os.environ.get('APP_DB_PASSWORD', 'podcastfy_app_password')
+	op.get_bind().execute(
+		sa.text("SELECT set_config('app.bootstrap_pw', :pw, true)"),
+		{"pw": app_db_password},
+	)
 	op.execute("""
-		DO $$
+		DO $do$
 		BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'podcastfy_app') THEN
-				CREATE ROLE podcastfy_app
-					NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT LOGIN
-					PASSWORD 'podcastfy_app_password';
+				EXECUTE format(
+					'CREATE ROLE podcastfy_app '
+					'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT LOGIN '
+					'PASSWORD %L',
+					current_setting('app.bootstrap_pw')
+				);
 			END IF;
 		END
-		$$;
+		$do$;
 	""")
 
-	op.execute('GRANT CONNECT ON DATABASE podcastfy TO podcastfy_app')
+	# GRANT cannot take current_database() directly — go through format()
+	op.execute("""
+		DO $do$
+		BEGIN
+			EXECUTE format('GRANT CONNECT ON DATABASE %I TO podcastfy_app', current_database());
+		END
+		$do$;
+	""")
 	op.execute('GRANT USAGE ON SCHEMA public TO podcastfy_app')
 	op.execute('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO podcastfy_app')
 	op.execute('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO podcastfy_app')
@@ -100,7 +122,13 @@ def downgrade() -> None:
 	op.execute('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM podcastfy_app')
 	op.execute('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM podcastfy_app')
 	op.execute('REVOKE USAGE ON SCHEMA public FROM podcastfy_app')
-	op.execute('REVOKE CONNECT ON DATABASE podcastfy FROM podcastfy_app')
+	op.execute("""
+		DO $do$
+		BEGIN
+			EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM podcastfy_app', current_database());
+		END
+		$do$;
+	""")
 
 	op.execute('DROP ROLE IF EXISTS podcastfy_app')
 

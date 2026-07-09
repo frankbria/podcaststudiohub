@@ -13,11 +13,11 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
-from ..database import get_db
+from ..database import arm_tenant_context, get_db, set_tenant_context
 from ..middleware.auth import get_current_user
 from ..models import User
 from ..schemas.distribution_target import (
@@ -178,17 +178,25 @@ async def spotify_callback(
 	except Exception:
 		show_info = {"id": "", "name": ""}
 
-	# Look up user from DB to get tenant_id
+	# Look up the user's tenant via the SECURITY DEFINER bootstrap (#304):
+	# this callback is a browser redirect from Spotify with no JWT, so no
+	# tenant context is armed and a plain users SELECT would see nothing.
 	user_result = await db.execute(
-		select(User).where(User.id == UUID(user_id_str))
+		text("SELECT id, tenant_id FROM auth_lookup_user_by_id(:uid)"),
+		{"uid": UUID(user_id_str)},
 	)
-	db_user = user_result.scalar_one_or_none()
+	db_user = user_result.one_or_none()
 
 	if not db_user:
 		raise HTTPException(
 			status_code=status.HTTP_400_BAD_REQUEST,
 			detail="User not found",
 		)
+
+	# Arm + set the user's tenant so the distribution_targets INSERT below
+	# passes the scoped WITH CHECK policy.
+	arm_tenant_context(db, str(db_user.tenant_id))
+	await set_tenant_context(db, str(db_user.tenant_id))
 
 	# Create distribution target
 	target = await create_spotify_target(

@@ -258,3 +258,15 @@ first compile); fresh CI venvs recompile. Clear __pycache__ to reproduce compile
   owner (`podcastfy_user`), run the app as the RLS-subject `podcastfy_app`.
   `rm-review.yml` still uses the superuser-bootstrap pattern but only
   health-checks, so it survives; copy its services block, not its DB role.
+
+## Local "full suite" wasn't: testpaths multi-entry silently under-collects
+- **2026-07-09 (#346/PR #348):** `testpaths = tests tests/unit` in pytest.ini made
+  bare `pytest` collect ONLY tests/unit — 767 of 1662 tests. CI passes `tests/`
+  explicitly, so it ran ~900 tests my local verification never touched, and the
+  newly-activated `filterwarnings=error` failed 24 of them (starlette deprecated
+  status constants, leaked `asyncio.to_thread` coroutines from wait_for mocks).
+  Lessons: (1) verify with **CI's exact invocation** (`pytest tests/`), not a bare
+  `pytest`, before declaring the suite green; (2) sanity-check collected-test
+  counts against CI's log — a big mismatch is config rot, not parallelism magic;
+  (3) tests that patch `asyncio.wait_for` must `coro.close()` the coroutine arg
+  or the never-awaited RuntimeWarning fires at GC inside an unrelated later test.

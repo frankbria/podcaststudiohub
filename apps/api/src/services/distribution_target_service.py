@@ -650,6 +650,8 @@ async def _test_webhook_connection(db: AsyncSession, config: dict) -> dict:
 			"error": "url_not_allowed",
 		}
 	pinned_url, pin_headers, extensions = pin_httpx(url, resolved[0])
+	# The pinned Host deliberately overrides any user-configured Host header —
+	# TLS verification and virtual hosting must stay bound to the validated URL.
 	headers.update(pin_headers)
 
 	try:

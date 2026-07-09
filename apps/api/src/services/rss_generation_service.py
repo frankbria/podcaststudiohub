@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Episode, Project, RSSFeed
 from .storage_service import StorageService
+from ..utils.datetime_utils import utcnow
 
 
 class RSSGenerationService:
@@ -418,6 +419,6 @@ class RSSGenerationService:
 		"""
 		rss_feed.s3_key = s3_key
 		rss_feed.public_url = public_url
-		rss_feed.last_generated = datetime.utcnow()
+		rss_feed.last_generated = utcnow()
 		await db.commit()
 		return rss_feed

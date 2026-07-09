@@ -422,7 +422,7 @@ async def download_episode_audio(
 			start_byte, end_byte = parse_range_header(range, total_size)
 		except ValueError:
 			raise HTTPException(
-				status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+				status_code=status.HTTP_416_RANGE_NOT_SATISFIABLE,
 				detail="Invalid Range header",
 				headers={"Content-Range": f"bytes */{total_size}"}
 			)

@@ -27,7 +27,6 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Optional, Dict, Any, Tuple
 from uuid import UUID
-from datetime import datetime
 from pathlib import Path
 
 from podcastfy.content_generator import ContentGenerator
@@ -40,6 +39,7 @@ from .episode_service import (
 	update_generation_status,
 )
 from .content_service import get_content_sources
+from ..utils.datetime_utils import utcnow
 
 
 logger = logging.getLogger(__name__)
@@ -129,7 +129,7 @@ class ScriptGenerationService:
 		if episode.generation_status == 'draft':
 			await self._update_status(
 				db, episode, 'queued',
-				{"stage": "queued", "progress": 0, "started_at": datetime.utcnow().isoformat()}
+				{"stage": "queued", "progress": 0, "started_at": utcnow().isoformat()}
 			)
 
 		# Retrieve content sources with extraction_status='complete'
@@ -227,7 +227,7 @@ class ScriptGenerationService:
 					{
 						"stage": "complete",
 						"progress": 100,
-						"completed_at": datetime.utcnow().isoformat()
+						"completed_at": utcnow().isoformat()
 					}
 				)
 

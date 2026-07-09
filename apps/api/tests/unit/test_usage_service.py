@@ -16,9 +16,9 @@ os.environ.setdefault("ENCRYPTION_KEY", "a" * 32)
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-unit-tests")
 
 import pytest
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 

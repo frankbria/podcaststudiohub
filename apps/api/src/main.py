@@ -1,6 +1,8 @@
 """
 Main FastAPI application for Podcastfy GUI API
 """
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
 import logging
@@ -17,6 +19,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Verify critical dependencies are available at startup"""
+    try:
+        from podcastfy.client import generate_podcast  # noqa: F401
+        from podcastfy.content_generator import ContentGenerator  # noqa: F401
+        from podcastfy.content_parser.website_extractor import WebsiteExtractor  # noqa: F401
+        from podcastfy.content_parser.pdf_extractor import PDFExtractor  # noqa: F401
+        logger.info("Podcastfy dependencies verified")
+    except ImportError as e:
+        logger.critical(f"Failed to import podcastfy: {e}")
+        logger.critical("Run: uv sync to install dependencies")
+        raise RuntimeError("Podcastfy not installed") from e
+    yield
+
+
 # Create FastAPI application
 app = FastAPI(
     title=settings.APP_NAME,
@@ -28,6 +47,7 @@ app = FastAPI(
     # Boundary metering: count + enforce per-period API quota on every request
     # (no-op for public/unauthenticated paths). See dependencies.meter_api_call.
     dependencies=[Depends(meter_api_call)],
+    lifespan=lifespan,
 )
 
 # Setup CORS middleware
@@ -45,21 +65,6 @@ async def root():
         "version": settings.APP_VERSION,
         "docs": "/docs"
     }
-
-
-@app.on_event("startup")
-async def verify_dependencies():
-    """Verify critical dependencies are available at startup"""
-    try:
-        from podcastfy.client import generate_podcast  # noqa: F401
-        from podcastfy.content_generator import ContentGenerator  # noqa: F401
-        from podcastfy.content_parser.website_extractor import WebsiteExtractor  # noqa: F401
-        from podcastfy.content_parser.pdf_extractor import PDFExtractor  # noqa: F401
-        logger.info("Podcastfy dependencies verified")
-    except ImportError as e:
-        logger.critical(f"Failed to import podcastfy: {e}")
-        logger.critical("Run: uv sync to install dependencies")
-        raise RuntimeError("Podcastfy not installed") from e
 
 
 @app.get("/health")

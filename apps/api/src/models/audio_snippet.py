@@ -1,12 +1,12 @@
 """AudioSnippet model for reusable audio files"""
 
-from datetime import datetime
 from sqlalchemy import Column, Text, DateTime, BigInteger, Numeric, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import uuid
 
 from ..database import Base
+from ..utils.datetime_utils import utcnow
 
 
 class AudioSnippet(Base):
@@ -38,8 +38,8 @@ class AudioSnippet(Base):
     file_format = Column(Text, nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
     # Relationships
     user = relationship("User")

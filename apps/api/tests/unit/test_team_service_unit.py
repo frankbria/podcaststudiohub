@@ -10,7 +10,7 @@ for a nonexistent team, and similar not-found branches, can only be
 exercised by calling the service layer directly.
 """
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
@@ -21,6 +21,7 @@ from src.models.team_member import TeamMember
 from src.schemas.team import TeamCreate
 from src.services import team_service
 from tests.unit.conftest import _register_user
+from src.utils.datetime_utils import utcnow
 
 
 class TestGetTeamNotFound:
@@ -142,7 +143,7 @@ class TestAcceptInvitationExpired:
 			role="viewer",
 			token=token,
 			status="pending",
-			expires_at=datetime.utcnow() - timedelta(days=1),
+			expires_at=utcnow() - timedelta(days=1),
 		)
 		test_db.add(invitation)
 		await test_db.commit()
@@ -178,7 +179,7 @@ class TestAcceptInvitationAlreadyMember:
 			role="viewer",
 			token=token,
 			status="pending",
-			expires_at=datetime.utcnow() + timedelta(days=7),
+			expires_at=utcnow() + timedelta(days=7),
 		)
 		test_db.add(invitation)
 		await test_db.commit()
@@ -206,7 +207,7 @@ class TestAcceptInvitationSuccess:
 			role="editor",
 			token=token,
 			status="pending",
-			expires_at=datetime.utcnow() + timedelta(days=7),
+			expires_at=utcnow() + timedelta(days=7),
 		)
 		test_db.add(invitation)
 		await test_db.commit()

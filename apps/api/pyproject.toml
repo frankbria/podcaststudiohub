@@ -40,3 +40,9 @@ build-backend = "hatchling.build"
 dev = [
     "ruff>=0.15.2",
 ]
+
+[tool.ruff.lint]
+# W605 (invalid escape sequence) backstops the module-agnostic SyntaxWarning
+# ignore in pytest.ini: first-party invalid escapes fail lint, so the pytest
+# filter only ever masks pydub's compile-time warning (#346).
+extend-select = ["W605"]

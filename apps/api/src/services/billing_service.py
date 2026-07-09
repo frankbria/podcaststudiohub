@@ -1,7 +1,6 @@
 """Billing service: Stripe integration and subscription management"""
 
 import logging
-from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, Optional
 from uuid import UUID
@@ -12,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.billing_subscription import BillingSubscription, SubscriptionStatus, SubscriptionTier
 from ..utils.pricing import PRICING_TIERS
+from ..utils.datetime_utils import utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -168,7 +168,7 @@ async def update_subscription_tier(
 	sub.tier = new_tier
 	sub.price_monthly = Decimal(str(price)) if price is not None else None
 	sub.status = SubscriptionStatus.ACTIVE
-	sub.updated_at = datetime.utcnow()
+	sub.updated_at = utcnow()
 
 	await db.commit()
 	await db.refresh(sub)
@@ -188,9 +188,9 @@ async def cancel_subscription(
 		sub.auto_renew = False
 	else:
 		sub.status = SubscriptionStatus.CANCELED
-		sub.canceled_at = datetime.utcnow()
+		sub.canceled_at = utcnow()
 
-	sub.updated_at = datetime.utcnow()
+	sub.updated_at = utcnow()
 	await db.commit()
 	await db.refresh(sub)
 	return sub
@@ -270,7 +270,7 @@ async def _handle_subscription_updated(db: AsyncSession, subscription_obj: Dict[
 
 	sub.stripe_subscription_id = stripe_sub_id
 	sub.status = _map_stripe_status(stripe_status)
-	sub.updated_at = datetime.utcnow()
+	sub.updated_at = utcnow()
 	await db.commit()
 
 
@@ -288,9 +288,9 @@ async def _handle_subscription_deleted(db: AsyncSession, subscription_obj: Dict[
 		return
 
 	sub.status = SubscriptionStatus.CANCELED
-	sub.canceled_at = datetime.utcnow()
+	sub.canceled_at = utcnow()
 	sub.tier = SubscriptionTier.FREE
-	sub.updated_at = datetime.utcnow()
+	sub.updated_at = utcnow()
 	await db.commit()
 
 

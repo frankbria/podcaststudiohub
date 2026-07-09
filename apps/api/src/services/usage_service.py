@@ -1,6 +1,6 @@
 """Usage tracking service for billing enforcement"""
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Any, Dict
 from uuid import UUID
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.billing_subscription import BillingSubscription
 from ..models.billing_usage import BillingUsage
 from ..utils.pricing import OVERAGE_PRICING, get_tier_limit, is_unlimited
+from ..utils.datetime_utils import utcnow
 
 
 def _current_period_dates() -> tuple[date, date]:
@@ -82,7 +83,7 @@ async def track_episode_creation(
 		)
 		.values(
 			episodes_created=BillingUsage.episodes_created + count,
-			updated_at=datetime.utcnow(),
+			updated_at=utcnow(),
 		)
 	)
 	await db.commit()
@@ -101,7 +102,7 @@ async def track_api_call(db: AsyncSession, user_id: UUID, tenant_id: UUID) -> No
 		)
 		.values(
 			api_calls=BillingUsage.api_calls + 1,
-			updated_at=datetime.utcnow(),
+			updated_at=utcnow(),
 		)
 	)
 	await db.commit()

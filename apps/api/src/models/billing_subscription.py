@@ -1,12 +1,12 @@
 """Billing subscription model for user subscription management"""
 
-from datetime import datetime
 from enum import Enum
 from sqlalchemy import Column, String, DateTime, Boolean, Numeric
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
 from ..database import Base
+from ..utils.datetime_utils import utcnow
 
 
 class SubscriptionTier(str, Enum):
@@ -53,8 +53,8 @@ class BillingSubscription(Base):
 	currency = Column(String(3), default="USD", nullable=False)
 
 	# Timestamps
-	created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-	updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+	created_at = Column(DateTime, default=utcnow, nullable=False)
+	updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 	canceled_at = Column(DateTime, nullable=True)
 
 	def __repr__(self) -> str:

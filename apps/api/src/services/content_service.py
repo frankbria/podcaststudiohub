@@ -151,7 +151,7 @@ async def upload_pdf_content(
         validate_pdf_format(filename, file.content_type)
     except ValueError as e:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(e),
         )
 
@@ -160,12 +160,12 @@ async def upload_pdf_content(
     file_size = len(file_bytes)
     if file_size == 0:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Uploaded PDF is empty",
         )
     if file_size > MAX_PDF_SIZE_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail=(
                 f"File too large ({file_size} bytes). "
                 f"Maximum allowed size is {MAX_PDF_SIZE_BYTES // (1024 * 1024)} MB"
@@ -176,7 +176,7 @@ async def upload_pdf_content(
     # rejected synchronously with 422 rather than failing later during extraction.
     if not file_bytes.startswith(b"%PDF-"):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Uploaded file is not a valid PDF (missing %PDF- header).",
         )
 
@@ -197,7 +197,7 @@ async def upload_pdf_content(
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Failed to store PDF: {str(e)}",
         )
     finally:

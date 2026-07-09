@@ -1,12 +1,12 @@
 """ContentSource model for episode input sources"""
 
-from datetime import datetime
 from sqlalchemy import Column, Text, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
 
 from ..database import Base
+from ..utils.datetime_utils import utcnow
 
 
 class ContentSource(Base):
@@ -39,8 +39,8 @@ class ContentSource(Base):
     error_message = Column(Text, nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
     # Relationships
     episode = relationship("Episode", back_populates="content_sources")

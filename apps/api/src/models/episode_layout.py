@@ -1,12 +1,12 @@
 """EpisodeLayout model for composition templates"""
 
-from datetime import datetime
 from sqlalchemy import Column, Text, DateTime, Boolean, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
 
 from ..database import Base
+from ..utils.datetime_utils import utcnow
 
 
 class EpisodeLayout(Base):
@@ -56,8 +56,8 @@ class EpisodeLayout(Base):
     is_default = Column(Boolean, nullable=False, default=False)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
     # Relationships
     user = relationship("User")

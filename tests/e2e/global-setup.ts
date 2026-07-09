@@ -45,12 +45,12 @@ async function provisionUser(
 
   const context = await browser.newContext({ baseURL });
   const page = await context.newPage();
-  await page.goto('/login');
-  await page.fill('input[type="email"]', email);
-  await page.fill('input[type="password"]', password);
-  await page.click('button[type="submit"]');
 
   try {
+    await page.goto('/login');
+    await page.fill('input[type="email"]', email);
+    await page.fill('input[type="password"]', password);
+    await page.click('button[type="submit"]');
     await page.waitForURL(/\/dashboard/, { timeout: 15000 });
   } catch {
     const screenshot = `tests/e2e/.auth/login-failure-${statePath.replace(/[/.]/g, '_')}.png`;
@@ -60,7 +60,9 @@ async function provisionUser(
     await context.close();
     throw new Error(
       `[global-setup] Browser login failed for ${email} — stayed at: ${currentURL}\n` +
-      `Page text: ${pageText.substring(0, 500)}\nScreenshot: ${screenshot}`
+      `Page text: ${pageText.substring(0, 500)}\nScreenshot: ${screenshot}\n` +
+      'The API passed its health preflight, so likely causes are: the web frontend is ' +
+      'down/stale and not rendering the login form, or the credentials are wrong for this target.'
     );
   }
 
@@ -83,7 +85,29 @@ async function globalSetup(config: FullConfig) {
   mkdirSync(dirname(USER_A_AUTH_PATH), { recursive: true });
 
   const baseURL = config.projects[0].use.baseURL || 'https://dev.podcaststudiohub.me';
-  const apiURL = process.env.NEXT_PUBLIC_API_URL || `${baseURL}/api`;
+  // API_URL wins (server-side/CI override), then the build-time public URL,
+  // then the nginx-style `/api` prefix used by the deployed hosts.
+  const apiURL = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || `${baseURL}/api`;
+
+  // Preflight: distinguish "target stack unreachable/unhealthy" from real
+  // login/spec failures, so an env outage reads as an env outage (#341).
+  let health: Response;
+  try {
+    health = await fetch(`${apiURL}/health`, { signal: AbortSignal.timeout(15000) });
+  } catch (err) {
+    throw new Error(
+      `[global-setup] API unreachable at ${apiURL}/health (baseURL=${baseURL}): ${err}\n` +
+      'The target stack is not running or not reachable — this is an environment problem, ' +
+      'not a spec failure. For a local run, check DATABASE_URL/Redis and that the webServer ' +
+      'processes can boot; for a dev-smoke run, check the deployed host.'
+    );
+  }
+  if (!health.ok) {
+    throw new Error(
+      `[global-setup] API unhealthy: ${apiURL}/health returned ${health.status}. ` +
+      'Fix the target environment before re-running the suite.'
+    );
+  }
 
   const browser = await chromium.launch();
   try {

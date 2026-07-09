@@ -75,7 +75,7 @@ async def upload_audio_snippet(
 		file_ext = validate_audio_format(filename, file.content_type)
 	except ValueError as e:
 		raise HTTPException(
-			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
 			detail=str(e)
 		)
 
@@ -86,14 +86,14 @@ async def upload_audio_snippet(
 	# Validate file size
 	if file_size > MAX_FILE_SIZE_BYTES:
 		raise HTTPException(
-			status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+			status_code=status.HTTP_413_CONTENT_TOO_LARGE,
 			detail=f"File too large ({file_size} bytes). Maximum allowed size is 50 MB"
 		)
 	try:
 		validate_file_size(file_size)
 	except ValueError as e:
 		raise HTTPException(
-			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
 			detail=str(e)
 		)
 
@@ -122,7 +122,7 @@ async def upload_audio_snippet(
 		raise
 	except Exception as e:
 		raise HTTPException(
-			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
 			detail=f"Failed to process audio file: {str(e)}"
 		)
 	finally:

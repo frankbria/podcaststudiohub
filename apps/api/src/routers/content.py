@@ -102,7 +102,7 @@ async def create_content_source(
         )
     except (URLValidationError, TextValidationError, ValueError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=str(exc),
         )
 
@@ -408,7 +408,7 @@ async def trigger_content_extraction(
 
     if content_source.source_type not in ('url', 'pdf', 'text'):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Source type '{content_source.source_type}' does not support extraction"
         )
 

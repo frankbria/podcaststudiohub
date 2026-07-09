@@ -86,7 +86,7 @@ async def generate_rss_feed(
 		)
 	except ValueError as e:
 		raise HTTPException(
-			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
 			detail=str(e),
 		)
 	except Exception:
@@ -199,7 +199,7 @@ async def update_rss_feed(
 		)
 	except ValueError as e:
 		raise HTTPException(
-			status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+			status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
 			detail=str(e),
 		)
 	except Exception:

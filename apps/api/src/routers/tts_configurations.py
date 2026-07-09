@@ -176,7 +176,7 @@ async def update_tts_config_endpoint(
 			_validate_provider_config(effective_provider, update_data.config)
 		except (ValueError, TypeError) as exc:
 			raise HTTPException(
-				status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+				status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
 				detail=str(exc) or "Invalid TTS configuration",
 			)
 

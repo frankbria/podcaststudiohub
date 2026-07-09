@@ -84,10 +84,10 @@ NEXT_PUBLIC_API_URL=http://localhost:8200 npm run build:web
 BASE_URL=http://localhost:3200 API_URL=http://localhost:8200 \
 NEXT_PUBLIC_API_URL=http://localhost:8200 \
 DATABASE_URL=postgresql+asyncpg://podcastfy_app:postgres@localhost:5432/podcastfy_e2e \
-SECRET_KEY=test-secret-key-for-ci ENCRYPTION_KEY=test-encryption-key-for-ci-00000 \
+ENVIRONMENT=development ENCRYPTION_KEY=test-encryption-key-for-ci-00000 \
 JWT_SECRET_KEY=test-jwt-secret-for-ci NEXTAUTH_SECRET=test-nextauth-secret-for-ci \
 NEXTAUTH_URL=http://localhost:3200 CORS_ORIGINS='["http://localhost:3200"]' \
-RATE_LIMIT_ENABLED=false \
+RATE_LIMIT_ENABLED=false BILLING_ENFORCEMENT_ENABLED=false \
 E2E_TEST_EMAIL=e2e-ci@example.com E2E_TEST_PASSWORD='E2e-ci-Passw0rd!' \
 npx playwright test
 ```

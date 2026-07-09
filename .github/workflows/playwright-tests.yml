@@ -185,6 +185,9 @@ jobs:
           CELERY_RESULT_BACKEND: redis://localhost:6379/0
           CORS_ORIGINS: '["http://localhost:3200"]'
           RATE_LIMIT_ENABLED: 'false'
+          # Same rationale as dev/staging (config.py): E2E users are free-tier,
+          # so quota enforcement would 402 the suite as coverage grows.
+          BILLING_ENFORCEMENT_ENABLED: 'false'
           # Web process env (inherited by the webServer-launched `npm start`)
           NEXTAUTH_SECRET: test-nextauth-secret-for-ci
           NEXTAUTH_URL: ${{ env.E2E_WEB_URL }}

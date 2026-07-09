@@ -1,4 +1,4 @@
-# Issue #341 — [P2.4b] Restore real E2E CI signal (PR-built stack)
+# Issue #341 — COMPLETE (PR #347 squash-merged 2026-07-09 as 3c3f1a4, issue closed)
 
 Branch: `fix/341-e2e-pr-built-stack`. Plan adapted from CodeRabbit's issue comment; approved autonomously (no architectural fork — both design choices match the AC wording and reuse existing plumbing).
 
@@ -14,7 +14,7 @@ Branch: `fix/341-e2e-pr-built-stack`. Plan adapted from CodeRabbit's issue comme
 - [x] 5. `test.yml` `test-e2e` deleted + quality-gate refs removed
 - [x] 6. README updated (execution model + exact local recipe)
 - [x] 7. Local verify: 19 passed / 0 failed / 200 skipped; CI PR run 28989440713 identical (passed=19 skipped=200)
-- [ ] 8. PR #347 open; opencode reviews done (pre-PR "ship it" + post-PR: billing-402 Major fixed in 7dcecb6); demo posted; awaiting CI green on HEAD → final triage → merge. GitGuardian red = false positive on documented throwaway CI literals (same convention as test.yml on main); no branch protection.
+- [x] 8. PR #347 merged; opencode reviews done (pre-PR "ship it" + post-PR: billing-402 Major fixed in 7dcecb6); demo posted; awaiting CI green on HEAD → final triage → merge. GitGuardian red = false positive on documented throwaway CI literals (same convention as test.yml on main); no branch protection.
 
 ## Acceptance criteria mapping
 - PR-built stack via webServer/services → items 1–3

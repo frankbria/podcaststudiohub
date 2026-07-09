@@ -85,9 +85,14 @@ async function globalSetup(config: FullConfig) {
   mkdirSync(dirname(USER_A_AUTH_PATH), { recursive: true });
 
   const baseURL = config.projects[0].use.baseURL || 'https://dev.podcaststudiohub.me';
-  // API_URL wins (server-side/CI override), then the build-time public URL,
-  // then the nginx-style `/api` prefix used by the deployed hosts.
-  const apiURL = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL || `${baseURL}/api`;
+  // API_URL wins (server-side/CI override), then the build-time public URL.
+  // Fallback must mirror playwright.config.ts: local-stack runs get the
+  // webServer-booted API port; deployed hosts use the nginx `/api` prefix.
+  const isLocalStack = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(baseURL);
+  const apiURL =
+    process.env.API_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    (isLocalStack ? 'http://localhost:8200' : `${baseURL}/api`);
 
   // Preflight: distinguish "target stack unreachable/unhealthy" from real
   // login/spec failures, so an env outage reads as an env outage (#341).

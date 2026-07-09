@@ -11,7 +11,7 @@ through `rbac_service.assert_permission`. Any new team route MUST do the same.
 """
 
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -22,6 +22,7 @@ from ..models.team import Team
 from ..models.team_member import TeamMember
 from ..models.team_invitation import TeamInvitation
 from ..schemas.team import TeamCreate, TeamUpdate, InvitationCreate
+from ..utils.datetime_utils import utcnow
 
 # Roles that may be granted through an invitation. `owner` is excluded: an
 # invitation token is forwardable, so granting ownership through it is a
@@ -92,7 +93,7 @@ async def update_team(
 	update_data = team_data.model_dump(exclude_unset=True)
 	for field, value in update_data.items():
 		setattr(team, field, value)
-	team.updated_at = datetime.utcnow()
+	team.updated_at = utcnow()
 	await db.commit()
 	await db.refresh(team)
 	return team
@@ -194,7 +195,7 @@ async def create_invitation(
 		role=invite_data.role,
 		token=token,
 		status="pending",
-		expires_at=datetime.utcnow() + timedelta(days=expires_in_days),
+		expires_at=utcnow() + timedelta(days=expires_in_days),
 	)
 	db.add(invitation)
 	await db.commit()
@@ -248,7 +249,7 @@ async def accept_invitation(
 			status_code=status.HTTP_400_BAD_REQUEST,
 			detail=f"Invitation is {invitation.status}",
 		)
-	if invitation.expires_at < datetime.utcnow():
+	if invitation.expires_at < utcnow():
 		invitation.status = "expired"
 		await db.commit()
 		raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invitation has expired")
@@ -278,7 +279,7 @@ async def accept_invitation(
 
 	# Mark invitation accepted
 	invitation.status = "accepted"
-	invitation.accepted_at = datetime.utcnow()
+	invitation.accepted_at = utcnow()
 	await db.commit()
 	await db.refresh(membership)
 	return membership

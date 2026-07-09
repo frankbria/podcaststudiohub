@@ -6,6 +6,7 @@ These tests do not require a database connection.
 
 import pytest
 from uuid import uuid4
+from src.utils.datetime_utils import utcnow
 
 
 # ============================================================================
@@ -260,7 +261,6 @@ class TestAudioSnippetResponse:
 
 	def test_response_has_required_fields(self):
 		from src.schemas.audio_snippet import AudioSnippetResponse
-		import datetime
 		response = AudioSnippetResponse(
 			id=uuid4(),
 			user_id=uuid4(),
@@ -275,8 +275,8 @@ class TestAudioSnippetResponse:
 			duration_seconds=None,
 			file_size_bytes=None,
 			file_format=None,
-			created_at=datetime.datetime.utcnow(),
-			updated_at=datetime.datetime.utcnow(),
+			created_at=utcnow(),
+			updated_at=utcnow(),
 		)
 		assert response.name == "Test Snippet"
 		assert response.snippet_type == "intro"

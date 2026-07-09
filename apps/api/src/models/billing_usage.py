@@ -1,11 +1,11 @@
 """Billing usage model for tracking resource consumption"""
 
-from datetime import datetime
 from sqlalchemy import Column, Integer, BigInteger, Float, DateTime, Date, Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 import uuid
 
 from ..database import Base
+from ..utils.datetime_utils import utcnow
 
 
 class BillingUsage(Base):
@@ -35,8 +35,8 @@ class BillingUsage(Base):
 	overage_storage_gb = Column(Float, default=0, nullable=False)
 	overage_cost = Column(Numeric(10, 2), default=0, nullable=False)
 
-	created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-	updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+	created_at = Column(DateTime, default=utcnow, nullable=False)
+	updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
 	def __repr__(self) -> str:
 		return f"<BillingUsage(user_id={self.user_id}, period={self.period_start})>"

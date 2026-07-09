@@ -12,7 +12,7 @@ os.environ.setdefault("ENCRYPTION_KEY", "a" * 32)
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-unit-tests")
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 from fastapi import HTTPException
 

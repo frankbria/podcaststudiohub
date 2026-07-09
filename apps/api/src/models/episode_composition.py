@@ -1,12 +1,12 @@
 """EpisodeComposition model for final composition state"""
 
-from datetime import datetime
 from sqlalchemy import Column, Text, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
 
 from ..database import Base
+from ..utils.datetime_utils import utcnow
 
 
 class EpisodeComposition(Base):
@@ -53,8 +53,8 @@ class EpisodeComposition(Base):
     composed_s3_url = Column(Text, nullable=True)
 
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)
 
     # Relationships
     episode = relationship("Episode")

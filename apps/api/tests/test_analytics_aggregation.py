@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from src.models.analytics_event import AnalyticsEvent
+from src.utils.datetime_utils import utcnow
 from src.services.analytics_service import (
     get_episode_analytics,
     get_project_analytics,
@@ -158,7 +159,7 @@ async def test_get_episode_analytics_zero_events(test_db):
 async def test_get_project_analytics_characterization(client, test_db):
     """Exact dict for a project summary using now-relative dates (default 30d window)."""
     proj, ep = await _setup_project_episode(client)
-    now = datetime.utcnow()
+    now = utcnow()
 
     in_window = [
         _mk_event(episode_id=ep, project_id=proj, event_type="download",

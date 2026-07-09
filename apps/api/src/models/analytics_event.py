@@ -1,13 +1,13 @@
 """Analytics event model for tracking user engagement"""
 
 import hashlib
-from datetime import datetime
 from sqlalchemy import Column, Text, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
 
 from ..database import Base
+from ..utils.datetime_utils import utcnow
 
 VALID_EVENT_TYPES = {"download", "play", "share", "stream"}
 
@@ -46,7 +46,7 @@ class AnalyticsEvent(Base):
 	# Event metadata (renamed from metadata to avoid SQLAlchemy reserved name)
 	event_metadata = Column("metadata", JSONB, nullable=True)
 
-	created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+	created_at = Column(DateTime, default=utcnow, nullable=False, index=True)
 
 	episode = relationship("Episode", foreign_keys=[episode_id])
 	project = relationship("Project", foreign_keys=[project_id])

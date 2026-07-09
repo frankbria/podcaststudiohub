@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from src.utils.datetime_utils import utcnow
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +349,7 @@ async def test_legacy_owner_invitation_rejected_on_accept(
 ) -> None:
 	"""A pre-existing owner invitation (issued before role restriction) cannot
 	be accepted — the role guard is enforced at acceptance, not just creation."""
-	from datetime import datetime, timedelta
+	from datetime import timedelta
 	import secrets
 	from uuid import UUID
 	from src.models.team_invitation import TeamInvitation
@@ -372,7 +373,7 @@ async def test_legacy_owner_invitation_rejected_on_accept(
 		role="owner",
 		token=token,
 		status="pending",
-		expires_at=datetime.utcnow() + timedelta(days=7),
+		expires_at=utcnow() + timedelta(days=7),
 	))
 	await test_db.flush()
 

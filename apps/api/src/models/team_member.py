@@ -1,12 +1,12 @@
 """TeamMember model for associating users with teams"""
 
-from datetime import datetime
 from sqlalchemy import Column, String, DateTime, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 import uuid
 
 from ..database import Base
+from ..utils.datetime_utils import utcnow
 
 
 class TeamMember(Base):
@@ -38,7 +38,7 @@ class TeamMember(Base):
 	status = Column(String(50), nullable=False, default="active")
 
 	# Timestamps
-	joined_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+	joined_at = Column(DateTime, default=utcnow, nullable=False)
 	invited_at = Column(DateTime, nullable=True)
 	last_activity = Column(DateTime, nullable=True)
 

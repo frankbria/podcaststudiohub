@@ -8,6 +8,8 @@ from uuid import UUID
 from sqlalchemy import Boolean, Float, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..utils.datetime_utils import utcnow
+
 from ..models.analytics_event import (
 	AnalyticsEvent,
 	VALID_EVENT_TYPES,
@@ -64,9 +66,9 @@ async def get_episode_analytics(
 ) -> Dict[str, Any]:
 	"""Aggregate analytics events for an episode within a date range."""
 	if date_from is None:
-		date_from = datetime.utcnow() - timedelta(days=30)
+		date_from = utcnow() - timedelta(days=30)
 	if date_to is None:
-		date_to = datetime.utcnow()
+		date_to = utcnow()
 
 	window = (
 		(AnalyticsEvent.episode_id == episode_id)
@@ -166,7 +168,7 @@ async def get_project_analytics(
 	days: int = 30,
 ) -> Dict[str, Any]:
 	"""Aggregate analytics for an entire project, returning a dashboard summary."""
-	date_to = datetime.utcnow()
+	date_to = utcnow()
 	date_from = date_to - timedelta(days=days)
 
 	window = (

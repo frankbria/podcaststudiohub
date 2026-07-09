@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from src.routers.rss_feed import _fetch_rss_from_s3, get_rss_service
 from src.services.rss_generation_service import RSSGenerationService
+from src.utils.datetime_utils import utcnow
 
 
 # ============================================================================
@@ -63,7 +64,6 @@ async def second_user_headers(client):
 
 def make_mock_rss_feed(project_id):
 	"""Build a mock RSSFeed object for patching service calls."""
-	from datetime import datetime
 	feed = MagicMock()
 	feed.id = uuid4()
 	feed.project_id = project_id
@@ -71,9 +71,9 @@ def make_mock_rss_feed(project_id):
 	feed.s3_key = f"rss-feeds/{project_id}/feed.xml"
 	feed.public_url = f"https://bucket.s3.amazonaws.com/rss-feeds/{project_id}/feed.xml"
 	feed.validation_status = {}
-	feed.last_generated = datetime.utcnow()
-	feed.created_at = datetime.utcnow()
-	feed.updated_at = datetime.utcnow()
+	feed.last_generated = utcnow()
+	feed.created_at = utcnow()
+	feed.updated_at = utcnow()
 	return feed
 
 

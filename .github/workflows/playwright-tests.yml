@@ -26,6 +26,7 @@ on:
       - 'apps/api/**'
       - 'tests/e2e/**'
       - 'playwright.config.ts'
+      - '.github/workflows/playwright-tests.yml'
 
   workflow_dispatch:
     inputs:
@@ -174,8 +175,10 @@ jobs:
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD || 'E2e-ci-Passw0rd!' }}
           # API process env (inherited by the webServer-launched uvicorn).
           # podcastfy_app is RLS-subject — do not swap in a superuser here.
+          # ENVIRONMENT matches the dev host + local verification (with no
+          # .env in CI, config.py would otherwise default to production).
+          ENVIRONMENT: development
           DATABASE_URL: postgresql+asyncpg://podcastfy_app:postgres@localhost:5432/podcastfy
-          SECRET_KEY: test-secret-key-for-ci
           ENCRYPTION_KEY: test-encryption-key-for-ci-00000
           JWT_SECRET_KEY: test-jwt-secret-for-ci
           CELERY_BROKER_URL: redis://localhost:6379/0

@@ -1,5 +1,10 @@
 name: Playwright E2E Tests
 
+# PR/push runs exercise a PR-built local stack (API + web booted by Playwright's
+# webServer, Postgres/Redis as job services) so every PR validates its own code
+# (#341). workflow_dispatch is the optional dev-smoke path: it targets the
+# deployed dev host and is skipped (not failed) when dev is unhealthy.
+
 on:
   push:
     branches:
@@ -21,11 +26,12 @@ on:
       - 'apps/api/**'
       - 'tests/e2e/**'
       - 'playwright.config.ts'
+      - '.github/workflows/playwright-tests.yml'
 
   workflow_dispatch:
     inputs:
       test_suite:
-        description: 'Which test suite to run'
+        description: 'Which test suite to run (dev-smoke against the deployed dev host)'
         required: false
         default: 'all'
         type: choice
@@ -46,6 +52,12 @@ permissions:
   contents: read
   actions: read
 
+env:
+  # PR-built stack topology. Non-default ports so a local `npm run dev`
+  # (8000/3000) never collides. Mirrors rm-review.yml's verify job.
+  E2E_WEB_URL: http://localhost:3200
+  E2E_API_URL: http://localhost:8200
+
 jobs:
   test:
     name: Run Playwright Tests
@@ -58,6 +70,35 @@ jobs:
         # Reduced to 1 shard while E2E stability is fixed (see #94)
         shard: [1]
 
+    services:
+      # Bootstrap as `postgres` — NOT as the app user. The bootstrap role is a
+      # superuser, and superusers bypass RLS even under FORCE ROW LEVEL
+      # SECURITY, which silently disables tenant isolation (the isolation specs
+      # then fail: User B can read User A's data). Dev-parity roles are
+      # provisioned below instead (see test.yml's migrate-as-non-superuser).
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -69,22 +110,104 @@ jobs:
           cache: 'npm'
           cache-dependency-path: package-lock.json
 
+      - name: Set up Python
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        run: pip install uv
+
       - name: Install dependencies
         run: npm ci
 
       - name: Install Playwright Browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright tests
+      - name: Provision dev-parity roles and database
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        env:
+          PGPASSWORD: postgres
+        run: |
+          # Two-role model (issue #301): migrations run as the BYPASSRLS owner
+          # podcastfy_user; the API connects as podcastfy_app, which is subject
+          # to RLS — so the isolation specs test the real tenancy model.
+          # Throwaway CI credentials reuse the service password (no secret).
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE podcastfy_user LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS;
+          CREATE DATABASE podcastfy OWNER podcastfy_user;
+          CREATE ROLE podcastfy_app LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+          SQL
+
+      - name: Install API dependencies and migrate
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        working-directory: apps/api
+        env:
+          DATABASE_URL: postgresql+asyncpg://podcastfy_app:postgres@localhost:5432/podcastfy
+          MIGRATION_DATABASE_URL: postgresql+asyncpg://podcastfy_user:postgres@localhost:5432/podcastfy
+          ENCRYPTION_KEY: test-encryption-key-for-ci-00000
+          JWT_SECRET_KEY: test-jwt-secret-for-ci
+        run: |
+          uv sync
+          uv run alembic upgrade head
+
+      - name: Build frontend
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_API_URL: ${{ env.E2E_API_URL }}
+        run: npm run build
+
+      # PR/push: Playwright's webServer boots the PR-built API + web against
+      # the service Postgres/Redis (see playwright.config.ts). The plain
+      # credential defaults are safe: the stack is throwaway and rate limiting
+      # is off, so no shared-tenant/dev-secret coupling.
+      - name: Run Playwright tests (PR-built stack)
         if: ${{ github.event_name != 'workflow_dispatch' }}
         run: npx playwright test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
         env:
-          BASE_URL: https://dev.podcaststudiohub.me
-          E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
-          E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
+          BASE_URL: ${{ env.E2E_WEB_URL }}
+          API_URL: ${{ env.E2E_API_URL }}
+          NEXT_PUBLIC_API_URL: ${{ env.E2E_API_URL }}
+          E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL || 'e2e-ci@example.com' }}
+          E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD || 'E2e-ci-Passw0rd!' }}
+          # API process env (inherited by the webServer-launched uvicorn).
+          # podcastfy_app is RLS-subject — do not swap in a superuser here.
+          # ENVIRONMENT matches the dev host + local verification (with no
+          # .env in CI, config.py would otherwise default to production).
+          ENVIRONMENT: development
+          DATABASE_URL: postgresql+asyncpg://podcastfy_app:postgres@localhost:5432/podcastfy
+          ENCRYPTION_KEY: test-encryption-key-for-ci-00000
+          JWT_SECRET_KEY: test-jwt-secret-for-ci
+          CELERY_BROKER_URL: redis://localhost:6379/0
+          CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          CORS_ORIGINS: '["http://localhost:3200"]'
+          RATE_LIMIT_ENABLED: 'false'
+          # Same rationale as dev/staging (config.py): E2E users are free-tier,
+          # so quota enforcement would 402 the suite as coverage grows.
+          BILLING_ENFORCEMENT_ENABLED: 'false'
+          # Web process env (inherited by the webServer-launched `npm start`)
+          NEXTAUTH_SECRET: test-nextauth-secret-for-ci
+          NEXTAUTH_URL: ${{ env.E2E_WEB_URL }}
 
-      - name: Run specific test suite (manual)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.test_suite != 'all' }}
+      # Dev-smoke preflight: when the deployed dev host is down, skip the run
+      # with a warning instead of reporting a misleading hard failure (#341).
+      - name: Dev-smoke preflight
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        id: dev-health
+        run: |
+          if curl -sf --max-time 15 https://dev.podcaststudiohub.me/api/health > /dev/null; then
+            echo "healthy=true" >> "$GITHUB_OUTPUT"
+            echo "Dev host healthy — running smoke suite."
+          else
+            echo "healthy=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Dev-smoke skipped::https://dev.podcaststudiohub.me/api/health is unreachable/unhealthy. Smoke run skipped (non-blocking) — fix the dev deployment, then re-dispatch."
+          fi
+
+      - name: Run specific test suite (dev-smoke)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.test_suite != 'all' && steps.dev-health.outputs.healthy == 'true' }}
         # TEST_SUITE is a dispatch input (arbitrary via the API) — read from env, never
         # interpolated into the shell. The surrounding globs stay unquoted on purpose.
         run: npx playwright test tests/e2e/specs/*"$TEST_SUITE"*.spec.ts
@@ -94,8 +217,8 @@ jobs:
           E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
 
-      - name: Run all tests (manual)
-        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.test_suite == 'all' }}
+      - name: Run all tests (dev-smoke)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.test_suite == 'all' && steps.dev-health.outputs.healthy == 'true' }}
         run: npx playwright test --shard=${{ matrix.shard }}/${{ strategy.job-total }}
         env:
           BASE_URL: https://dev.podcaststudiohub.me
@@ -105,7 +228,8 @@ jobs:
       # Restore real signal: a suite that silently skips its coverage must not
       # report green. Parses the JSON report and enforces a floor of really-run
       # tests plus a ceiling on skips. Runs even when tests fail so the counts
-      # are always surfaced.
+      # are always surfaced. Scoped to PR/push — the dev-smoke path is
+      # non-blocking by design and may legitimately be skipped.
       - name: Enforce test signal (skip-count gate)
         if: ${{ always() && github.event_name != 'workflow_dispatch' }}
         run: |

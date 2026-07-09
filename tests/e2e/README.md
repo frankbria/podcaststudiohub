@@ -46,9 +46,55 @@ plus-addressed account derived from `E2E_TEST_EMAIL`). Provisioning User B once 
 rather than signing up a fresh user per test — keeps the suite within the dev
 registration rate limit (3/hr/IP).
 
+## Execution model (#341)
+
+- **PRs and pushes** run against a **PR-built local stack**: when `BASE_URL`
+  points at localhost, `playwright.config.ts` boots the API (uvicorn) and the
+  built web app (`next start`) via Playwright's `webServer`, with Postgres/Redis
+  provided as CI job services. A PR therefore validates **its own code**, and a
+  dev-host outage can no longer fail (or falsely pass) a PR.
+- **Dev-smoke** is the optional `workflow_dispatch` path of
+  `.github/workflows/playwright-tests.yml`: it targets the deployed
+  `https://dev.podcaststudiohub.me` and is **skipped with a warning** (not
+  failed) when dev's `/api/health` is unreachable.
+- `global-setup` preflights the API health endpoint so an unreachable/unhealthy
+  target fails with an explicit environment error instead of an opaque
+  `input[type="email"]` timeout.
+
 ## Running Tests
 
-### Run all tests
+### Run against a local PR-built stack
+```bash
+# Prereqs: Postgres + Redis running, `uv sync` done in apps/api, and a web build:
+NEXT_PUBLIC_API_URL=http://localhost:8200 npm run build:web
+
+# One-time DB setup — the API MUST connect as the RLS-subject app role
+# (podcastfy_app), not the bootstrap superuser: superusers bypass RLS even
+# under FORCE ROW LEVEL SECURITY, so the isolation specs would (correctly)
+# fail with cross-tenant reads. Migrations run as the BYPASSRLS owner:
+#   CREATE ROLE podcastfy_user LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS;
+#   CREATE ROLE podcastfy_app  LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+#   CREATE DATABASE podcastfy_e2e OWNER podcastfy_user;
+# then (from apps/api):
+#   MIGRATION_DATABASE_URL=postgresql+asyncpg://podcastfy_user:postgres@localhost:5432/podcastfy_e2e \
+#   DATABASE_URL=postgresql+asyncpg://podcastfy_app:postgres@localhost:5432/podcastfy_e2e \
+#   ENCRYPTION_KEY=test-encryption-key-for-ci-00000 JWT_SECRET_KEY=test-jwt-secret-for-ci \
+#   uv run alembic upgrade head
+
+BASE_URL=http://localhost:3200 API_URL=http://localhost:8200 \
+NEXT_PUBLIC_API_URL=http://localhost:8200 \
+DATABASE_URL=postgresql+asyncpg://podcastfy_app:postgres@localhost:5432/podcastfy_e2e \
+ENVIRONMENT=development ENCRYPTION_KEY=test-encryption-key-for-ci-00000 \
+JWT_SECRET_KEY=test-jwt-secret-for-ci NEXTAUTH_SECRET=test-nextauth-secret-for-ci \
+NEXTAUTH_URL=http://localhost:3200 CORS_ORIGINS='["http://localhost:3200"]' \
+RATE_LIMIT_ENABLED=false BILLING_ENFORCEMENT_ENABLED=false \
+E2E_TEST_EMAIL=e2e-ci@example.com E2E_TEST_PASSWORD='E2e-ci-Passw0rd!' \
+npx playwright test
+```
+Playwright starts uvicorn (:8200) and `next start` (:3200) itself and reuses
+already-running servers outside CI.
+
+### Run all tests (against the default remote target)
 ```bash
 npx playwright test
 ```
@@ -114,11 +160,14 @@ BASE_URL=https://podcaststudiohub.me npx playwright test
 ## CI/CD Integration
 
 Tests run automatically on:
-- Pull requests to main
-- Pushes to main
-- Manual workflow dispatch
+- Pull requests to main/develop — against the PR-built local stack
+- Pushes to main/develop — against the stack built from the merged code
+- Manual workflow dispatch — dev-smoke against the deployed dev host
+  (non-blocking: skipped when dev is down)
 
-See `.github/workflows/playwright-tests.yml`
+`.github/workflows/playwright-tests.yml` is the **single authoritative E2E
+signal** (with the skip-count gate); the old always-green `test-e2e` job in
+`test.yml` was removed (#341).
 
 ## Writing New Tests
 

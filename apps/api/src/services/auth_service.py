@@ -240,16 +240,22 @@ async def get_user_by_email(session: AsyncSession, email: str) -> Optional["User
     """
     # Case-insensitive lookup: email is not identity-significant by case (#255);
     # the function lowercases both sides, matching legacy mixed-case rows too.
-    # Goes through the SECURITY DEFINER auth_lookup_user_by_email function
-    # (migration 014) because login/resend-verification run before any tenant
-    # context exists — the blanket users SELECT policy is gone (issue #304).
+    # Two-step bootstrap (issue #304): login/resend-verification run before any
+    # tenant context exists and the blanket users SELECT policy is gone. The
+    # SECURITY DEFINER function discloses only (id, tenant_id) for the email —
+    # never password_hash/encrypted_api_keys — then the full row is loaded
+    # through the normal RLS-governed SELECT under that tenant's context.
     result = await session.execute(
-        select(User).from_statement(
-            text("SELECT * FROM auth_lookup_user_by_email(:email)")
-        ),
+        text("SELECT id, tenant_id FROM auth_lookup_user_by_email(:email)"),
         {"email": email},
     )
-    return result.scalar_one_or_none()
+    row = result.one_or_none()
+    if row is None:
+        return None
+
+    await set_tenant_context(session, str(row.tenant_id))
+    full = await session.execute(select(User).where(User.id == row.id))
+    return full.scalar_one_or_none()
 
 
 # ============================================================================
@@ -353,7 +359,7 @@ async def authenticate_user(
         return None
 
     # Set tenant context so the UPDATE is allowed by RLS, then update last_login
-    await session.execute(text(f"SET LOCAL app.tenant_id = '{user.tenant_id}'"))
+    await set_tenant_context(session, str(user.tenant_id))
     user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
     await session.commit()
 

@@ -15,6 +15,7 @@ Create Date: 2025-10-20 21:00:00.000000
 import os
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -80,17 +81,24 @@ def upgrade() -> None:
 	# in older PostgreSQL versions (<= 14 doesn't have CREATE ROLE IF NOT EXISTS)
 	# Fresh installs take the role password from APP_DB_PASSWORD; the literal
 	# fallback keeps local dev and CI working (migration 014 rotates it from
-	# the same env var on real deploys). Single quotes are SQL-escaped.
-	app_db_password = os.environ.get(
-		'APP_DB_PASSWORD', 'podcastfy_app_password'
-	).replace("'", "''")
-	op.execute(f"""
+	# the same env var on real deploys). The secret travels as a bound
+	# parameter into a transaction-local GUC, then through format(%L) — never
+	# interpolated into SQL text, so any password content is safe.
+	app_db_password = os.environ.get('APP_DB_PASSWORD', 'podcastfy_app_password')
+	op.get_bind().execute(
+		sa.text("SELECT set_config('app.bootstrap_pw', :pw, true)"),
+		{"pw": app_db_password},
+	)
+	op.execute("""
 		DO $do$
 		BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'podcastfy_app') THEN
-				CREATE ROLE podcastfy_app
-					NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT LOGIN
-					PASSWORD '{app_db_password}';
+				EXECUTE format(
+					'CREATE ROLE podcastfy_app '
+					'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT LOGIN '
+					'PASSWORD %L',
+					current_setting('app.bootstrap_pw')
+				);
 			END IF;
 		END
 		$do$;

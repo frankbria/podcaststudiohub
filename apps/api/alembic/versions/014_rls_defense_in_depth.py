@@ -23,6 +23,7 @@ Create Date: 2026-07-09 12:00:00.000000
 import os
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -60,6 +61,27 @@ LOOKUP_FUNCTIONS = [
 
 
 def upgrade() -> None:
+    # 0. The SECURITY DEFINER functions below must be owned by a role that can
+    #    read through FORCE RLS, or auth breaks for every user. Fail loudly if
+    #    Alembic fell back to the RLS-subject app role (MIGRATION_DATABASE_URL
+    #    unset — issue #301).
+    op.execute("""
+        DO $do$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_roles
+                WHERE rolname = current_user AND (rolsuper OR rolbypassrls)
+            ) THEN
+                RAISE EXCEPTION
+                    'migration 014 must run as a superuser/BYPASSRLS role '
+                    '(set MIGRATION_DATABASE_URL); running as % would leave '
+                    'auth lookup functions unable to read through FORCE RLS',
+                    current_user;
+            END IF;
+        END
+        $do$;
+    """)
+
     # 1. Billing/analytics tables: same FORCE-RLS + tenant policy as the core
     #    tables get in 003.
     for table in BILLING_ANALYTICS_TABLES:
@@ -82,13 +104,17 @@ def upgrade() -> None:
     #    read through FORCE RLS; EXECUTE is granted only to the app role.
     op.execute('DROP POLICY IF EXISTS users_auth_lookup ON users')
 
+    # Least-privilege by construction: the function discloses ONLY
+    # (id, tenant_id) for a given email — never password_hash or
+    # encrypted_api_keys. Callers set that tenant's context and load the full
+    # row through the normal RLS-governed SELECT.
     op.execute("""
         CREATE OR REPLACE FUNCTION auth_lookup_user_by_email(p_email text)
-        RETURNS SETOF users
+        RETURNS TABLE (id uuid, tenant_id uuid)
         LANGUAGE sql STABLE SECURITY DEFINER
         SET search_path = public, pg_temp
         AS $fn$
-            SELECT * FROM users WHERE lower(email) = lower(p_email)
+            SELECT id, tenant_id FROM users WHERE lower(email) = lower(p_email)
         $fn$
     """)
 
@@ -109,10 +135,24 @@ def upgrade() -> None:
 
     # 4. Rotate the app role password when a secret is provided (deploys set
     #    APP_DB_PASSWORD; CI/local keep their locally provisioned passwords).
+    #    The secret travels as a bound parameter into a transaction-local GUC,
+    #    then through format(%L) — never interpolated into SQL text.
     app_db_password = os.environ.get('APP_DB_PASSWORD')
     if app_db_password:
-        escaped = app_db_password.replace("'", "''")
-        op.execute(f"ALTER ROLE podcastfy_app PASSWORD '{escaped}'")
+        op.get_bind().execute(
+            sa.text("SELECT set_config('app.bootstrap_pw', :pw, true)"),
+            {"pw": app_db_password},
+        )
+        op.execute("""
+            DO $do$
+            BEGIN
+                EXECUTE format(
+                    'ALTER ROLE podcastfy_app PASSWORD %L',
+                    current_setting('app.bootstrap_pw')
+                );
+            END
+            $do$;
+        """)
 
 
 def downgrade() -> None:

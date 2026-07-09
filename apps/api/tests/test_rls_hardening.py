@@ -192,6 +192,16 @@ async def test_auth_lookup_by_email_works_across_contexts(test_db):
 
 
 @pytest.mark.asyncio
+async def test_auth_lookup_function_exposes_only_id_and_tenant(test_db):
+    """The SECURITY DEFINER lookup must never disclose password_hash or
+    encrypted_api_keys — it returns only (id, tenant_id)."""
+    result = await test_db.execute(
+        text("SELECT * FROM auth_lookup_user_by_email('nobody@example.com')")
+    )
+    assert set(result.keys()) == {"id", "tenant_id"}
+
+
+@pytest.mark.asyncio
 async def test_authenticate_user_works_without_tenant_context(test_db):
     """Login: authenticate_user must find the user pre-tenant and still update
     last_login under the user's own context."""

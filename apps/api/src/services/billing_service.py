@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..database import set_tenant_context
+from ..database import arm_tenant_context, set_tenant_context
 from ..models.billing_subscription import BillingSubscription, SubscriptionStatus, SubscriptionTier
 from ..utils.pricing import PRICING_TIERS
 from ..utils.datetime_utils import utcnow
@@ -259,9 +259,11 @@ async def _bootstrap_webhook_tenant(db: AsyncSession, customer_id: Optional[str]
 
 	Resolves stripe_customer_id -> tenant_id through the SECURITY DEFINER
 	function from migration 014 (billing_subscriptions is FORCE-RLS'd, so a
-	plain SELECT would see nothing), then sets app.tenant_id so the existing
-	ORM code operates on the right tenant's rows. Returns False when the
-	customer matches no subscription.
+	plain SELECT would see nothing), then ARMS app.tenant_id (survives any
+	future mid-handler commit — one-shot SET LOCAL would silently drop the
+	event after the first commit) so the existing ORM code operates on the
+	right tenant's rows. Returns False when the customer matches no
+	subscription.
 	"""
 	if not customer_id:
 		return False
@@ -272,6 +274,9 @@ async def _bootstrap_webhook_tenant(db: AsyncSession, customer_id: Optional[str]
 	tenant_id = result.scalar_one_or_none()
 	if tenant_id is None:
 		return False
+	arm_tenant_context(db, str(tenant_id))
+	# Arming takes effect at the next transaction begin; set it for the
+	# already-open transaction too.
 	await set_tenant_context(db, str(tenant_id))
 	return True
 

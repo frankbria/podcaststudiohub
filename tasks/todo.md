@@ -12,11 +12,12 @@
 - **Markers**: `unit`/`integration`/`slow` — zero usages in tests (`--strict-markers` already on and green) → stay dropped for good.
 
 ## Steps
-- [ ] Branch `fix/346-pytest-warnings-policy`
-- [ ] TDD: test for `utcnow()` helper (naive, ~now UTC), then implement helper
-- [ ] Replace all 62 `datetime.utcnow` refs in src/ and tests/ with the helper
-- [ ] Convert `main.py` `@app.on_event("startup")` → lifespan handler
-- [ ] Fix content-extraction task tests: patch `_extract_content_async` so no coroutine is created
-- [ ] Add `filterwarnings` (error + 3 pydub ignores) to `[pytest]` in `apps/api/pytest.ini`
-- [ ] Verify: full suite green with coverage; cold-compile pydub (`rm pydub __pycache__`) still green; ruff clean
-- [ ] Deslop → quality gate (opencode pre-PR review) → PR → post-PR review → demo → CI → merge
+- [x] Branch `fix/346-pytest-warnings-policy`
+- [x] TDD: test for `utcnow()` helper (naive, ~now UTC), then implement helper
+- [x] Replace all 62 `datetime.utcnow` refs in src/ and tests/ with the helper (imports normalized to relative in src/)
+- [x] Convert `main.py` `@app.on_event("startup")` → lifespan handler
+- [x] Fix content-extraction task tests: patch `_extract_content_async` so no coroutine is created
+- [x] Add `filterwarnings` (error + pydub ignores, module-scoped, ffprobe variant covered) to `[pytest]`
+- [x] Verify: 767 passed / 0 warnings with coverage gate; cold-compile pydub green; ruff clean
+- [x] Pre-PR opencode review (no blocking; sweeps verified, ignores scoped) → PR #348 → post-PR review (no blocking; ffprobe fix applied) → demo PASSED (evidence on PR)
+- [ ] CI green (backend pending) → merge

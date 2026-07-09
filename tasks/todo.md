@@ -7,14 +7,14 @@ Branch: `fix/341-e2e-pr-built-stack`. Plan adapted from CodeRabbit's issue comme
 - [x] Four #337 specs (02-projects isolation, 03-episodes isolation, 10-integration journey + concurrent) un-fixme'd in #338/#344; gate thresholds already MIN_PASSED=18 / MAX_SKIPPED=205.
 
 ## To do
-- [ ] 1. `playwright.config.ts`: env-gated `webServer` array (API uvicorn :8200 w/ `/health`, web `next start` :3200) — active only when BASE_URL is localhost; `reuseExistingServer: !CI`; bumped test/expect timeouts for cold boot.
-- [ ] 2. `tests/e2e/global-setup.ts`: apiURL = `API_URL || NEXT_PUBLIC_API_URL || ${baseURL}/api`; preflight API `/health` probe with actionable "unreachable/unhealthy vs login-failed" errors; keep screenshot-on-failure.
-- [ ] 3. `.github/workflows/playwright-tests.yml` PR/push path → PR-built stack: postgres:16 + redis:7 services, uv sync + alembic migrate, root `npm ci` (workspaces) + web build with `NEXT_PUBLIC_API_URL=http://localhost:8200`, run env per rm-review.yml conventions (`RATE_LIMIT_ENABLED=false`, CORS `http://localhost:3200`), plain-default E2E creds, keep skip-count gate unchanged as the single authoritative signal.
-- [ ] 4. Dev-smoke: keep `workflow_dispatch` path targeting dev; add preflight dev health check that ends the run as skipped/neutral (not failed) when dev is down.
-- [ ] 5. `.github/workflows/test.yml`: delete `test-e2e` job; remove from `quality-gate` needs + summary branch.
-- [ ] 6. `tests/e2e/README.md`: document PR-built-stack model, dev-smoke variant, local run instructions.
-- [ ] 7. Verify locally: run the full E2E suite against the locally-built stack (postgres container + redis), confirm passed>=18.
-- [ ] 8. Quality gate → PR → reviews → demo evidence → CI green → merge.
+- [x] 1. `playwright.config.ts`: env-gated `webServer` array (done; timeout bumps skipped — localhost prod build showed zero flakiness, 19 passed in 11s)
+- [x] 2. `tests/e2e/global-setup.ts`: preflight + diagnostics (negative path exercised: dead API → clear env-problem error)
+- [x] 3. `playwright-tests.yml` PR-built stack — **plus dev-parity RLS roles**: first local run FAILED isolation specs because the bootstrap superuser bypasses FORCE RLS; CI now migrates as BYPASSRLS `podcastfy_user`, API runs as RLS-subject `podcastfy_app` (lesson recorded)
+- [x] 4. Dev-smoke preflight (verified live: dispatch run 28989743173 — healthy dev detected, auth suite 15 passed against dev)
+- [x] 5. `test.yml` `test-e2e` deleted + quality-gate refs removed
+- [x] 6. README updated (execution model + exact local recipe)
+- [x] 7. Local verify: 19 passed / 0 failed / 200 skipped; CI PR run 28989440713 identical (passed=19 skipped=200)
+- [ ] 8. PR #347 open; opencode reviews done (pre-PR "ship it" + post-PR: billing-402 Major fixed in 7dcecb6); demo posted; awaiting CI green on HEAD → final triage → merge. GitGuardian red = false positive on documented throwaway CI literals (same convention as test.yml on main); no branch protection.
 
 ## Acceptance criteria mapping
 - PR-built stack via webServer/services → items 1–3

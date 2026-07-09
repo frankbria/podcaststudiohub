@@ -56,6 +56,7 @@ BILLING_ANALYTICS_TABLES = [
 
 LOOKUP_FUNCTIONS = [
     'auth_lookup_user_by_email(text)',
+    'auth_lookup_user_by_id(uuid)',
     'billing_tenant_for_stripe_customer(text)',
 ]
 
@@ -115,6 +116,18 @@ def upgrade() -> None:
         SET search_path = public, pg_temp
         AS $fn$
             SELECT id, tenant_id FROM users WHERE lower(email) = lower(p_email)
+        $fn$
+    """)
+
+    # Same least-privilege shape, for flows that hold a user id but no JWT
+    # (e.g. the Spotify OAuth browser-redirect callback).
+    op.execute("""
+        CREATE OR REPLACE FUNCTION auth_lookup_user_by_id(p_id uuid)
+        RETURNS TABLE (id uuid, tenant_id uuid)
+        LANGUAGE sql STABLE SECURITY DEFINER
+        SET search_path = public, pg_temp
+        AS $fn$
+            SELECT id, tenant_id FROM users WHERE id = p_id
         $fn$
     """)
 

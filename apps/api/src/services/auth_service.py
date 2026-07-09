@@ -358,8 +358,8 @@ async def authenticate_user(
     if not user.is_active:
         return None
 
-    # Set tenant context so the UPDATE is allowed by RLS, then update last_login
-    await set_tenant_context(session, str(user.tenant_id))
+    # get_user_by_email already set this user's tenant context in the current
+    # transaction, so the last_login UPDATE passes RLS.
     user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
     await session.commit()
 

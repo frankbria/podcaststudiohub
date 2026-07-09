@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from sqlalchemy.orm.attributes import flag_modified
 
+from ..database import set_tenant_context
 from ..models.user import User
 from ..config import settings
 from ..utils.encryption import encrypt_credential, decrypt_credential
@@ -283,7 +284,6 @@ async def create_user(
         # Arm the new tenant's RLS context before the INSERT: registration is
         # the one pre-tenant write, and since migration 014 the INSERT must
         # satisfy WITH CHECK (tenant_id = current_setting('app.tenant_id')).
-        from ..database import set_tenant_context
         await set_tenant_context(session, str(tenant_id))
 
         # Canonicalize email to lowercase so case is never identity-significant (#255).

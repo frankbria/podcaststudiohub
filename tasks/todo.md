@@ -20,13 +20,13 @@
 
 ## Steps
 - [x] Explore codebase (RLS session plumbing, billing/webhook/registration paths, CI role provisioning)
-- [ ] Branch `feature/issue-304-rls-defense-in-depth`
-- [ ] TDD RED: tests — cross-tenant SELECT on billing/analytics blocked under podcastfy_app; INSERT with mismatched tenant_id rejected on a core table; users SELECT without context returns nothing; auth definer lookup returns user; registration still works; webhook subscription update works with no pre-set tenant context
-- [ ] Migration 014 (policies, definer fns, conditional password rotation) + 003 edit (env password, current_database())
-- [ ] App changes: auth_service lookups via definer fns; create_user arms tenant context; billing webhook resolves tenant via definer fn + set_tenant_context
-- [ ] Update tests that assert "billing tables have no RLS" (test_usage_concurrency.py, test_episodes.py, test_analytics_aggregation.py) — spec change, not test-weakening
-- [ ] .env.example / docs/env_inventory.md / deployment/README.md: APP_DB_PASSWORD + rotation note
-- [ ] Full suite green under podcastfy_app (conftest already enforces), ruff clean
+- [x] Branch `feature/issue-304-rls-defense-in-depth`
+- [x] TDD RED: tests — cross-tenant SELECT on billing/analytics blocked under podcastfy_app; INSERT with mismatched tenant_id rejected on a core table; users SELECT without context returns nothing; auth definer lookup returns user; registration still works; webhook subscription update works with no pre-set tenant context
+- [x] Migration 014 (policies, definer fns, conditional password rotation) + 003 edit (env password, current_database())
+- [x] App changes: auth_service lookups via definer fns; create_user arms tenant context; billing webhook resolves tenant via definer fn + set_tenant_context
+- [x] Update tests that assert "billing tables have no RLS" (test_usage_concurrency.py, test_episodes.py, test_analytics_aggregation.py) — spec change, not test-weakening
+- [x] .env.example / docs/env_inventory.md / deployment/README.md: APP_DB_PASSWORD + rotation note
+- [x] Full suite green under podcastfy_app (conftest already enforces), ruff clean
 - [ ] Deslop scan → quality gate (opencode pre-PR review) → PR → post-PR review → demo (hard gate) → CI gate → docs sync → merge
 
 ## Acceptance criteria (from issue)

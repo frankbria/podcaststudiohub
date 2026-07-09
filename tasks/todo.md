@@ -1,4 +1,4 @@
-# #304 — RLS defense-in-depth: hardcoded DB password, USING(true) users SELECT, WITH CHECK(true) inserts, billing/analytics tables without RLS
+# #304 — COMPLETE (PR #349 squash-merged 2026-07-09, issue closed)
 
 **Plan source**: self-authored (issue has acceptance criteria but no plan comment).
 **Branch**: `feature/issue-304-rls-defense-in-depth`. Migration head is `013` → new migration `014`.
@@ -27,11 +27,11 @@
 - [x] Update tests that assert "billing tables have no RLS" (test_usage_concurrency.py, test_episodes.py, test_analytics_aggregation.py) — spec change, not test-weakening
 - [x] .env.example / docs/env_inventory.md / deployment/README.md: APP_DB_PASSWORD + rotation note
 - [x] Full suite green under podcastfy_app (conftest already enforces), ruff clean
-- [ ] Deslop scan → quality gate (opencode pre-PR review) → PR → post-PR review → demo (hard gate) → CI gate → docs sync → merge
+- [x] Deslop scan → quality gate (opencode pre-PR review) → PR → post-PR review → demo (hard gate) → CI gate → docs sync → merge
 
 ## Acceptance criteria (from issue)
-- [ ] Role password injected from a secret and rotated
-- [ ] Blanket users SELECT replaced with narrow SECURITY DEFINER auth-lookup
-- [ ] INSERT WITH CHECK scoped to `tenant_id = current_setting('app.tenant_id')` (achieved by dropping the redundant permissive policy; FOR ALL WITH CHECK governs)
-- [ ] FORCE RLS + tenant_isolation policies on billing_subscriptions, billing_usage, analytics_events
-- [ ] `current_database()` instead of literal db name
+- [x] Role password injected from a secret and rotated
+- [x] Blanket users SELECT replaced with narrow SECURITY DEFINER auth-lookup
+- [x] INSERT WITH CHECK scoped to `tenant_id = current_setting('app.tenant_id')` (achieved by dropping the redundant permissive policy; FOR ALL WITH CHECK governs)
+- [x] FORCE RLS + tenant_isolation policies on billing_subscriptions, billing_usage, analytics_events
+- [x] `current_database()` instead of literal db name

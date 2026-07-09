@@ -1207,3 +1207,34 @@ async def test_webhook_test_connection_pins_and_disables_redirects():
 	assert call.args[0] == "https://93.184.216.34/hook"
 	assert call.kwargs["headers"]["Host"] == "hooks.example.com"
 	assert call.kwargs["extensions"] == {"sni_hostname": "hooks.example.com"}
+
+
+@pytest.mark.asyncio
+async def test_webhook_test_connection_get_method_also_pinned():
+	"""The GET test path uses the same pinned URL and SNI extension (issue #305)."""
+	from src.services.distribution_target_service import _test_webhook_connection
+
+	test_resp = MagicMock()
+	test_resp.status_code = 200
+	test_resp.raise_for_status = MagicMock()
+
+	mock_client = AsyncMock()
+	mock_client.get.return_value = test_resp
+
+	with patch(
+		"src.services.distribution_target_service.validate_public_url",
+		return_value=["93.184.216.34"],
+	), patch("src.services.distribution_target_service.httpx") as mock_httpx:
+		mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
+		mock_httpx.AsyncClient.return_value.__aexit__.return_value = None
+
+		result = await _test_webhook_connection(
+			MagicMock(), {"url": "https://hooks.example.com/hook", "method": "GET"}
+		)
+
+	assert result["success"] is True
+	mock_client.post.assert_not_called()
+	call = mock_client.get.call_args
+	assert call.args[0] == "https://93.184.216.34/hook"
+	assert call.kwargs["headers"]["Host"] == "hooks.example.com"
+	assert call.kwargs["extensions"] == {"sni_hostname": "hooks.example.com"}

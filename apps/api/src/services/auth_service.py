@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import bcrypt
 from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text, func
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException
 
@@ -237,10 +237,16 @@ async def get_user_by_email(session: AsyncSession, email: str) -> Optional["User
     Returns:
         User instance or None if not found
     """
-    # Case-insensitive lookup: email is not identity-significant by case (#255).
-    # func.lower(...) also matches legacy mixed-case rows from before canonicalization.
+    # Case-insensitive lookup: email is not identity-significant by case (#255);
+    # the function lowercases both sides, matching legacy mixed-case rows too.
+    # Goes through the SECURITY DEFINER auth_lookup_user_by_email function
+    # (migration 014) because login/resend-verification run before any tenant
+    # context exists — the blanket users SELECT policy is gone (issue #304).
     result = await session.execute(
-        select(User).where(func.lower(User.email) == email.lower())
+        select(User).from_statement(
+            text("SELECT * FROM auth_lookup_user_by_email(:email)")
+        ),
+        {"email": email},
     )
     return result.scalar_one_or_none()
 
@@ -273,6 +279,12 @@ async def create_user(
     try:
         # Generate unique tenant_id for new user (each user is their own tenant)
         tenant_id = uuid4()
+
+        # Arm the new tenant's RLS context before the INSERT: registration is
+        # the one pre-tenant write, and since migration 014 the INSERT must
+        # satisfy WITH CHECK (tenant_id = current_setting('app.tenant_id')).
+        from ..database import set_tenant_context
+        await set_tenant_context(session, str(tenant_id))
 
         # Canonicalize email to lowercase so case is never identity-significant (#255).
         email = email.lower()
@@ -326,11 +338,8 @@ async def authenticate_user(
     Returns:
         User model instance if valid credentials, None otherwise
     """
-    # Query user by email (case-insensitive — case is not identity-significant, #255)
-    result = await session.execute(
-        select(User).where(func.lower(User.email) == email.lower())
-    )
-    user = result.scalar_one_or_none()
+    # Pre-tenant lookup via the SECURITY DEFINER function (case-insensitive)
+    user = await get_user_by_email(session, email)
 
     if user is None:
         return None

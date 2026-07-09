@@ -20,6 +20,7 @@
 | POSTGRES_DB | ✅ | ❌ | Missing | Critical |
 | DATABASE_URL | ✅ | ✅ | **Present** | Critical |
 | MIGRATION_DATABASE_URL | ✅ | ⚠️ optional | Alembic-only privileged URL; falls back to DATABASE_URL (issue #301) | High |
+| APP_DB_PASSWORD | ✅ | ⚠️ optional | podcastfy_app role password, read by Alembic (003 fresh-install / 014 rotation, issue #304); unset keeps the dev default | High |
 
 ### Redis Configuration (Critical)
 | Variable | Expected | Present | Status | Priority |

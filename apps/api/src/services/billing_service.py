@@ -6,9 +6,10 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..database import set_tenant_context
 from ..models.billing_subscription import BillingSubscription, SubscriptionStatus, SubscriptionTier
 from ..utils.pricing import PRICING_TIERS
 from ..utils.datetime_utils import utcnow
@@ -253,11 +254,36 @@ async def process_webhook(
 	return {"status": "processed", "event_type": event_type}
 
 
+async def _bootstrap_webhook_tenant(db: AsyncSession, customer_id: Optional[str]) -> bool:
+	"""Arm RLS tenant context for a Stripe webhook (no JWT -> no tenant context).
+
+	Resolves stripe_customer_id -> tenant_id through the SECURITY DEFINER
+	function from migration 014 (billing_subscriptions is FORCE-RLS'd, so a
+	plain SELECT would see nothing), then sets app.tenant_id so the existing
+	ORM code operates on the right tenant's rows. Returns False when the
+	customer matches no subscription.
+	"""
+	if not customer_id:
+		return False
+	result = await db.execute(
+		text("SELECT billing_tenant_for_stripe_customer(:cid)"),
+		{"cid": customer_id},
+	)
+	tenant_id = result.scalar_one_or_none()
+	if tenant_id is None:
+		return False
+	await set_tenant_context(db, str(tenant_id))
+	return True
+
+
 async def _handle_subscription_updated(db: AsyncSession, subscription_obj: Dict[str, Any]) -> None:
 	"""Update local subscription from Stripe data."""
 	stripe_sub_id = subscription_obj.get("id")
 	customer_id = subscription_obj.get("customer")
 	stripe_status = subscription_obj.get("status", "active")
+
+	if not await _bootstrap_webhook_tenant(db, customer_id):
+		return
 
 	result = await db.execute(
 		select(BillingSubscription).where(
@@ -277,6 +303,9 @@ async def _handle_subscription_updated(db: AsyncSession, subscription_obj: Dict[
 async def _handle_subscription_deleted(db: AsyncSession, subscription_obj: Dict[str, Any]) -> None:
 	"""Mark subscription as canceled."""
 	customer_id = subscription_obj.get("customer")
+
+	if not await _bootstrap_webhook_tenant(db, customer_id):
+		return
 
 	result = await db.execute(
 		select(BillingSubscription).where(

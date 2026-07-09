@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from src.database import arm_tenant_context
 from tests.unit.conftest import _register_user
 
 
@@ -313,6 +314,7 @@ class TestGetSubscriptionPlain:
 		from src.services.billing_service import get_or_create_subscription, get_subscription
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
 		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
 		created = await get_or_create_subscription(test_db, user_id, tenant_id)
 		fetched = await get_subscription(test_db, user_id)
 		assert fetched is not None
@@ -366,6 +368,7 @@ class TestCreateCheckoutStripeEnabled:
 		bs = _enable_fake_stripe_sdk(monkeypatch)
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
 		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
 
 		result = await bs.create_checkout_session(test_db, user_id, tenant_id, "pro")
 
@@ -380,6 +383,7 @@ class TestCreateCheckoutStripeEnabled:
 		bs = _enable_fake_stripe_sdk(monkeypatch)
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
 		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
 		sub = await bs.get_or_create_subscription(test_db, user_id, tenant_id)
 		sub.stripe_customer_id = "cus_existing"
 		await test_db.commit()
@@ -396,8 +400,10 @@ class TestCreateCheckoutStripeEnabled:
 	) -> None:
 		bs = _enable_fake_stripe_sdk(monkeypatch)
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
+		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
 		with pytest.raises(HTTPException) as exc:
-			await bs.create_checkout_session(test_db, user_id, uuid4(), "enterprise")
+			await bs.create_checkout_session(test_db, user_id, tenant_id, "enterprise")
 		assert exc.value.status_code == 400
 
 
@@ -431,6 +437,7 @@ class TestHandleSubscriptionUpdatedDirect:
 		)
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
 		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
 		sub = await get_or_create_subscription(test_db, user_id, tenant_id)
 		sub.stripe_customer_id = "cus_matched"
 		await test_db.commit()
@@ -453,7 +460,9 @@ class TestHandleSubscriptionUpdatedDirect:
 		# Seed an existing subscription in a state distinct from what a match
 		# would produce, so a false match would be visible below.
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
-		sub = await get_or_create_subscription(test_db, user_id, uuid4())
+		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
+		sub = await get_or_create_subscription(test_db, user_id, tenant_id)
 		sub.stripe_customer_id = "cus_unrelated"
 		sub.status = SubscriptionStatus.PAST_DUE
 		sub.stripe_subscription_id = "sub_preexisting"
@@ -480,6 +489,7 @@ class TestHandleSubscriptionDeletedDirect:
 		)
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
 		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
 		sub = await get_or_create_subscription(test_db, user_id, tenant_id)
 		await update_subscription_tier(test_db, user_id, tenant_id, "pro")
 		sub.stripe_customer_id = "cus_deleted"
@@ -504,6 +514,7 @@ class TestHandleSubscriptionDeletedDirect:
 		# and downgrade it, which the assertions below would catch.
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
 		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
 		sub = await get_or_create_subscription(test_db, user_id, tenant_id)
 		await update_subscription_tier(test_db, user_id, tenant_id, "pro")
 		sub.stripe_customer_id = "cus_unrelated_2"
@@ -533,7 +544,9 @@ class TestProcessWebhookDispatchesToHandlers:
 		})
 		bs, _ = _enable_stripe(monkeypatch, construct_event)
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
-		sub = await bs.get_or_create_subscription(test_db, user_id, uuid4())
+		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
+		sub = await bs.get_or_create_subscription(test_db, user_id, tenant_id)
 		sub.stripe_customer_id = "cus_dispatch"
 		await test_db.commit()
 
@@ -554,7 +567,9 @@ class TestProcessWebhookDispatchesToHandlers:
 		})
 		bs, _ = _enable_stripe(monkeypatch, construct_event)
 		user_id = await _register_user(client, email_prefix="billing_unit_", full_name="Billing Unit Test User")
-		sub = await bs.get_or_create_subscription(test_db, user_id, uuid4())
+		tenant_id = uuid4()
+		arm_tenant_context(test_db, str(tenant_id))
+		sub = await bs.get_or_create_subscription(test_db, user_id, tenant_id)
 		sub.stripe_customer_id = "cus_dispatch2"
 		await test_db.commit()
 

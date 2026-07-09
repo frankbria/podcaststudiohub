@@ -41,29 +41,22 @@ async def committing_session_factory():
 	"""
 	engine = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool, echo=False)
 	factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-	created_user_ids: list = []
+	created_users: list = []  # (user_id, tenant_id) pairs
 
 	async def cleanup():
+		# billing_usage and users are both FORCE RLS (#304) — every delete
+		# needs the owning tenant's context, so work per-user/per-transaction.
 		async with factory() as session:
-			# billing_usage has no RLS — deletes unconditionally.
-			await session.execute(
-				delete(BillingUsage).where(BillingUsage.user_id.in_(created_user_ids))
-			)
-			# users is FORCE RLS; DELETE needs a matching tenant context.
-			for uid in created_user_ids:
-				row = (
-					await session.execute(select(User).where(User.id == uid))
-				).scalar_one_or_none()
-				if row is not None:
-					await session.execute(
-						text(f"SET LOCAL app.tenant_id = '{row.tenant_id}'")
-					)
-					await session.execute(delete(User).where(User.id == uid))
-					await session.commit()
-			await session.commit()
+			for uid, tid in created_users:
+				await session.execute(text(f"SET LOCAL app.tenant_id = '{tid}'"))
+				await session.execute(
+					delete(BillingUsage).where(BillingUsage.user_id == uid)
+				)
+				await session.execute(delete(User).where(User.id == uid))
+				await session.commit()
 		await engine.dispose()
 
-	yield factory, created_user_ids
+	yield factory, created_users
 
 	await cleanup()
 
@@ -73,7 +66,8 @@ async def _make_user(factory) -> tuple:
 	user_id = uuid4()
 	tenant_id = uuid4()
 	async with factory() as session:
-		# INSERT works without tenant context (permissive insert-only policy).
+		# INSERT must satisfy WITH CHECK (tenant_id = app.tenant_id) since #304.
+		await session.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
 		session.add(
 			User(
 				id=user_id,
@@ -86,8 +80,9 @@ async def _make_user(factory) -> tuple:
 	return user_id, tenant_id
 
 
-async def _count_rows(factory, user_id, period_start) -> int:
+async def _count_rows(factory, user_id, tenant_id, period_start) -> int:
 	async with factory() as session:
+		await session.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
 		return (
 			await session.execute(
 				select(func.count())
@@ -100,8 +95,9 @@ async def _count_rows(factory, user_id, period_start) -> int:
 		).scalar_one()
 
 
-async def _get_usage(factory, user_id, period_start) -> BillingUsage:
+async def _get_usage(factory, user_id, tenant_id, period_start) -> BillingUsage:
 	async with factory() as session:
+		await session.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
 		# scalar_one() raises MultipleResultsFound if duplicates leaked through.
 		return (
 			await session.execute(
@@ -117,20 +113,21 @@ async def _get_usage(factory, user_id, period_start) -> BillingUsage:
 async def test_concurrent_episode_tracking_no_duplicates_or_lost_updates(
 	committing_session_factory,
 ):
-	factory, created_user_ids = committing_session_factory
+	factory, created_users = committing_session_factory
 	user_id, tenant_id = await _make_user(factory)
-	created_user_ids.append(user_id)
+	created_users.append((user_id, tenant_id))
 	period_start, _ = _current_period_dates()
 
 	async def track_once():
 		# Independent session/connection per coroutine = genuine parallel commits.
 		async with factory() as session:
+			await session.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
 			await track_episode_creation(session, user_id, tenant_id)
 
 	await asyncio.gather(*(track_once() for _ in range(CONCURRENCY)))
 
-	assert await _count_rows(factory, user_id, period_start) == 1
-	usage = await _get_usage(factory, user_id, period_start)
+	assert await _count_rows(factory, user_id, tenant_id, period_start) == 1
+	usage = await _get_usage(factory, user_id, tenant_id, period_start)
 	assert usage.episodes_created == CONCURRENCY
 
 
@@ -138,17 +135,18 @@ async def test_concurrent_episode_tracking_no_duplicates_or_lost_updates(
 async def test_concurrent_api_call_tracking_no_duplicates_or_lost_updates(
 	committing_session_factory,
 ):
-	factory, created_user_ids = committing_session_factory
+	factory, created_users = committing_session_factory
 	user_id, tenant_id = await _make_user(factory)
-	created_user_ids.append(user_id)
+	created_users.append((user_id, tenant_id))
 	period_start, _ = _current_period_dates()
 
 	async def track_once():
 		async with factory() as session:
+			await session.execute(text(f"SET LOCAL app.tenant_id = '{tenant_id}'"))
 			await track_api_call(session, user_id, tenant_id)
 
 	await asyncio.gather(*(track_once() for _ in range(CONCURRENCY)))
 
-	assert await _count_rows(factory, user_id, period_start) == 1
-	usage = await _get_usage(factory, user_id, period_start)
+	assert await _count_rows(factory, user_id, tenant_id, period_start) == 1
+	usage = await _get_usage(factory, user_id, tenant_id, period_start)
 	assert usage.api_calls == CONCURRENCY

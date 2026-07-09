@@ -12,6 +12,7 @@ Revises: 002
 Create Date: 2025-10-20 21:00:00.000000
 
 """
+import os
 from typing import Sequence, Union
 
 from alembic import op
@@ -77,19 +78,32 @@ def upgrade() -> None:
 	# -------------------------------------------------------------------------
 	# Use DO block because CREATE ROLE IF NOT EXISTS is not supported directly
 	# in older PostgreSQL versions (<= 14 doesn't have CREATE ROLE IF NOT EXISTS)
-	op.execute("""
-		DO $$
+	# Fresh installs take the role password from APP_DB_PASSWORD; the literal
+	# fallback keeps local dev and CI working (migration 014 rotates it from
+	# the same env var on real deploys). Single quotes are SQL-escaped.
+	app_db_password = os.environ.get(
+		'APP_DB_PASSWORD', 'podcastfy_app_password'
+	).replace("'", "''")
+	op.execute(f"""
+		DO $do$
 		BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'podcastfy_app') THEN
 				CREATE ROLE podcastfy_app
 					NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT LOGIN
-					PASSWORD 'podcastfy_app_password';
+					PASSWORD '{app_db_password}';
 			END IF;
 		END
-		$$;
+		$do$;
 	""")
 
-	op.execute('GRANT CONNECT ON DATABASE podcastfy TO podcastfy_app')
+	# GRANT cannot take current_database() directly — go through format()
+	op.execute("""
+		DO $do$
+		BEGIN
+			EXECUTE format('GRANT CONNECT ON DATABASE %I TO podcastfy_app', current_database());
+		END
+		$do$;
+	""")
 	op.execute('GRANT USAGE ON SCHEMA public TO podcastfy_app')
 	op.execute('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO podcastfy_app')
 	op.execute('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO podcastfy_app')
@@ -100,7 +114,13 @@ def downgrade() -> None:
 	op.execute('REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM podcastfy_app')
 	op.execute('REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM podcastfy_app')
 	op.execute('REVOKE USAGE ON SCHEMA public FROM podcastfy_app')
-	op.execute('REVOKE CONNECT ON DATABASE podcastfy FROM podcastfy_app')
+	op.execute("""
+		DO $do$
+		BEGIN
+			EXECUTE format('REVOKE CONNECT ON DATABASE %I FROM podcastfy_app', current_database());
+		END
+		$do$;
+	""")
 
 	op.execute('DROP ROLE IF EXISTS podcastfy_app')
 

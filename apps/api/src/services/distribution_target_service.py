@@ -25,6 +25,8 @@ from ..schemas.distribution_target import (
 	DistributionTargetUpdate,
 )
 from ..utils.encryption import encrypt_credential, decrypt_credential, is_sensitive_header
+from ..utils.pinned_fetch import pin_httpx
+from ..utils.ssrf import SSRFValidationError, validate_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -629,13 +631,40 @@ async def _test_webhook_connection(db: AsyncSession, config: dict) -> dict:
 	stored_headers = config.get("headers", {})
 	headers = await _decrypt_sensitive_headers(db, stored_headers) if stored_headers else {}
 
+	# Dispatch-time SSRF re-validation + IP pinning (issue #305): the URL was
+	# validated at create time, but DNS may have been re-pointed since (TOCTOU).
+	# Mirrors _distribute_via_webhook / source_validator_service.
 	try:
-		async with httpx.AsyncClient(timeout=10.0) as client:
+		resolved = validate_public_url(
+			url,
+			allowed_schemes=("https",),
+			allowed_ports={443},
+			block_on_resolution_failure=True,
+		)
+	except SSRFValidationError:
+		logger.warning("Webhook connection test blocked by SSRF guard")
+		return {
+			"success": False,
+			"platform": "webhook",
+			"message": "Webhook URL is not allowed",
+			"error": "url_not_allowed",
+		}
+	pinned_url, pin_headers, extensions = pin_httpx(url, resolved[0])
+	# The pinned Host deliberately overrides any user-configured Host header —
+	# TLS verification and virtual hosting must stay bound to the validated URL.
+	headers.update(pin_headers)
+
+	try:
+		async with httpx.AsyncClient(timeout=10.0, follow_redirects=False) as client:
 			test_payload = {"test": True, "event": "connection_test"}
 			if method == "POST":
-				response = await client.post(url, json=test_payload, headers=headers)
+				response = await client.post(
+					pinned_url, json=test_payload, headers=headers, extensions=extensions
+				)
 			else:
-				response = await client.get(url, headers=headers)
+				response = await client.get(
+					pinned_url, headers=headers, extensions=extensions
+				)
 
 			response.raise_for_status()
 			return {

@@ -749,8 +749,12 @@ async def test_test_connection_webhook(client, auth_headers):
 	assert create_response.status_code == 201
 	target_id = create_response.json()["id"]
 
-	# Mock httpx for the test connection call
-	with patch("src.services.distribution_target_service.httpx") as mock_httpx:
+	# Mock httpx for the test connection call; the dispatch-time SSRF guard
+	# would otherwise resolve hooks.example.com for real (issue #305).
+	with patch(
+		"src.services.distribution_target_service.validate_public_url",
+		return_value=["93.184.216.34"],
+	), patch("src.services.distribution_target_service.httpx") as mock_httpx:
 		mock_client = AsyncMock()
 		mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
 		mock_httpx.AsyncClient.return_value.__aexit__.return_value = None
@@ -1059,8 +1063,12 @@ async def test_webhook_connection_test_with_encrypted_headers(client, auth_heade
 	assert create_response.status_code == 201
 	target_id = create_response.json()["id"]
 
-	# Mock httpx for the test connection call and capture what headers are sent
-	with patch("src.services.distribution_target_service.httpx") as mock_httpx:
+	# Mock httpx for the test connection call and capture what headers are sent.
+	# The dispatch-time SSRF guard is stubbed so no real DNS happens (issue #305).
+	with patch(
+		"src.services.distribution_target_service.validate_public_url",
+		return_value=["93.184.216.34"],
+	), patch("src.services.distribution_target_service.httpx") as mock_httpx:
 		mock_client = AsyncMock()
 		mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
 		mock_httpx.AsyncClient.return_value.__aexit__.return_value = None
@@ -1137,3 +1145,96 @@ def test_distribute_via_webhook_disables_redirects_for_public():
 	assert result["status"] == "success"
 	mock_pinned.assert_called_once_with("https://93.184.216.34/hook", "93.184.216.34")
 	assert session.post.call_args.kwargs.get("allow_redirects") is False
+
+
+# ============================================================================
+# WEBHOOK TEST-CONNECTION SSRF TESTS (issue #305)
+# ============================================================================
+
+@pytest.mark.parametrize("url", [
+	"https://169.254.169.254/latest/meta-data/",
+	"https://127.0.0.1/",
+	"https://10.0.0.1/hook",
+	"https://192.168.1.1/hook",
+])
+@pytest.mark.asyncio
+async def test_webhook_test_connection_blocks_internal(url):
+	"""SSRF: test-connection re-validates at dispatch time and never fires (issue #305)."""
+	from src.services.distribution_target_service import _test_webhook_connection
+
+	with patch("src.services.distribution_target_service.httpx") as mock_httpx:
+		result = await _test_webhook_connection(MagicMock(), {"url": url, "method": "POST"})
+
+	assert result["success"] is False
+	assert result["error"] == "url_not_allowed"
+	mock_httpx.AsyncClient.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_webhook_test_connection_pins_and_disables_redirects():
+	"""Test-connection pins to the validated IP, keeps Host/SNI, and disables redirects (issue #305)."""
+	from src.services.distribution_target_service import _test_webhook_connection
+
+	test_resp = MagicMock()
+	test_resp.status_code = 200
+	test_resp.raise_for_status = MagicMock()
+
+	mock_client = AsyncMock()
+	mock_client.post.return_value = test_resp
+
+	with patch(
+		"src.services.distribution_target_service.validate_public_url",
+		return_value=["93.184.216.34"],
+	) as mock_validate, patch(
+		"src.services.distribution_target_service.httpx"
+	) as mock_httpx:
+		mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
+		mock_httpx.AsyncClient.return_value.__aexit__.return_value = None
+
+		result = await _test_webhook_connection(
+			MagicMock(), {"url": "https://hooks.example.com/hook", "method": "POST"}
+		)
+
+	assert result["success"] is True
+	mock_validate.assert_called_once_with(
+		"https://hooks.example.com/hook",
+		allowed_schemes=("https",),
+		allowed_ports={443},
+		block_on_resolution_failure=True,
+	)
+	assert mock_httpx.AsyncClient.call_args.kwargs.get("follow_redirects") is False
+	call = mock_client.post.call_args
+	assert call.args[0] == "https://93.184.216.34/hook"
+	assert call.kwargs["headers"]["Host"] == "hooks.example.com"
+	assert call.kwargs["extensions"] == {"sni_hostname": "hooks.example.com"}
+
+
+@pytest.mark.asyncio
+async def test_webhook_test_connection_get_method_also_pinned():
+	"""The GET test path uses the same pinned URL and SNI extension (issue #305)."""
+	from src.services.distribution_target_service import _test_webhook_connection
+
+	test_resp = MagicMock()
+	test_resp.status_code = 200
+	test_resp.raise_for_status = MagicMock()
+
+	mock_client = AsyncMock()
+	mock_client.get.return_value = test_resp
+
+	with patch(
+		"src.services.distribution_target_service.validate_public_url",
+		return_value=["93.184.216.34"],
+	), patch("src.services.distribution_target_service.httpx") as mock_httpx:
+		mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
+		mock_httpx.AsyncClient.return_value.__aexit__.return_value = None
+
+		result = await _test_webhook_connection(
+			MagicMock(), {"url": "https://hooks.example.com/hook", "method": "GET"}
+		)
+
+	assert result["success"] is True
+	mock_client.post.assert_not_called()
+	call = mock_client.get.call_args
+	assert call.args[0] == "https://93.184.216.34/hook"
+	assert call.kwargs["headers"]["Host"] == "hooks.example.com"
+	assert call.kwargs["extensions"] == {"sni_hostname": "hooks.example.com"}

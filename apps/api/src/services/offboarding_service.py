@@ -3,7 +3,8 @@
 import logging
 import os
 
-from sqlalchemy import delete, select
+from fastapi import HTTPException, status
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.audio_snippet import AudioSnippet
@@ -18,6 +19,11 @@ from ..models.user import User
 from .storage_service import StorageService
 
 logger = logging.getLogger(__name__)
+
+# Generation-pipeline states during which erasure is refused: a Celery chain is
+# still running and would re-upload audio to S3 after we deleted it, recreating
+# the orphaned-object problem this service exists to fix (issue #308).
+ACTIVE_GENERATION_STATUSES = {"queued", "generating", "composing", "uploading", "distributing"}
 
 
 async def erase_user(db: AsyncSession, user: User) -> dict:
@@ -38,7 +44,27 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 
 	Returns:
 		Summary dict with counts of S3 objects and local files erased
+
+	Raises:
+		HTTPException: 409 if any of the user's episodes is still generating
 	"""
+	active_count = await db.scalar(
+		select(func.count())
+		.select_from(Episode)
+		.where(
+			Episode.user_id == user.id,
+			Episode.generation_status.in_(ACTIVE_GENERATION_STATUSES),
+		)
+	)
+	if active_count:
+		raise HTTPException(
+			status_code=status.HTTP_409_CONFLICT,
+			detail=(
+				f"{active_count} episode(s) are still generating; "
+				"wait for them to finish (or fail) before deleting the account"
+			),
+		)
+
 	projects_result = await db.execute(select(Project.id).where(Project.user_id == user.id))
 	project_ids = [row[0] for row in projects_result.all()]
 
@@ -85,28 +111,47 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 	)
 	local_paths.extend(snippet.file_path for snippet in snippets if snippet.file_path)
 
+	failed_keys = []
 	if s3_keys:
 		storage = StorageService()
 		for key in s3_keys:
 			try:
 				await storage.delete_file(key)
 			except Exception:
+				failed_keys.append(key)
 				logger.warning(f"Failed to delete S3 object {key} for user {user.id}")
 
+	failed_paths = []
 	for path in local_paths:
 		try:
 			os.remove(path)
 		except OSError:
+			failed_paths.append(path)
 			logger.warning(f"Failed to remove local file {path} for user {user.id}")
 
 	# Billing rows have no FK to users, so DB cascade won't reach them.
 	await db.execute(delete(BillingSubscription).where(BillingSubscription.user_id == user.id))
 	await db.execute(delete(BillingUsage).where(BillingUsage.user_id == user.id))
 
-	await db.delete(user)
+	# Core DELETE (not ORM db.delete) so the ORM doesn't load and walk the full
+	# relationship graph — Postgres ON DELETE CASCADE removes the child rows.
+	await db.execute(delete(User).where(User.id == user.id))
+
+	# Audit record of the erasure, emitted before commit — after commit the user
+	# row is gone and this log line is the only durable trace of what happened.
+	logger.info(
+		"account erasure: user=%s tenant=%s s3_deleted=%d s3_failed=%s "
+		"local_deleted=%d local_failed=%s",
+		user.id,
+		user.tenant_id,
+		len(s3_keys) - len(failed_keys),
+		failed_keys or "none",
+		len(local_paths) - len(failed_paths),
+		failed_paths or "none",
+	)
 	await db.commit()
 
 	return {
-		"s3_objects_deleted": len(s3_keys),
-		"local_files_deleted": len(local_paths),
+		"s3_objects_deleted": len(s3_keys) - len(failed_keys),
+		"local_files_deleted": len(local_paths) - len(failed_paths),
 	}

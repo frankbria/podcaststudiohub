@@ -43,6 +43,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+	# Any environment that ran the workflow now holds rows with
+	# composing/uploading/distributing/distribution_failed; re-adding the
+	# narrow CHECK validates them and fails the downgrade, so normalize first.
+	op.execute(
+		"UPDATE episodes SET generation_status = CASE "
+		"WHEN generation_status = 'distribution_failed' THEN 'failed' "
+		"ELSE 'complete' END "
+		"WHERE generation_status IN "
+		"('composing', 'uploading', 'distributing', 'distribution_failed')"
+	)
 	op.drop_constraint("episodes_status_check", "episodes", type_="check")
 	op.create_check_constraint(
 		"episodes_status_check",

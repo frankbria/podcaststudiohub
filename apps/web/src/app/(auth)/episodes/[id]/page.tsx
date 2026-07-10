@@ -58,14 +58,25 @@ interface TTSConfig {
 // uses a sentinel that maps back to null when applied (#299).
 const TTS_DEFAULT_SENTINEL = "__default__"
 
-const ACTIVE_STATUSES = ["queued", "extracting", "generating", "synthesizing", "uploading"]
+const ACTIVE_STATUSES = [
+  "queued",
+  "extracting",
+  "generating",
+  "synthesizing",
+  "composing",
+  "uploading",
+  "distributing",
+]
 
 const STATUS_MESSAGES: Record<string, string> = {
   queued: "Queued for generation...",
   extracting: "Extracting content from sources...",
   generating: "Generating podcast transcript...",
   synthesizing: "Synthesizing audio...",
+  composing: "Composing final audio...",
   uploading: "Uploading audio...",
+  distributing: "Distributing to platforms...",
+  distribution_failed: "Distribution failed",
   complete: "Generation complete",
   failed: "Generation failed",
 }
@@ -455,7 +466,10 @@ export default function EpisodePage() {
       extracting: "text-accent-foreground",
       generating: "text-accent-foreground",
       synthesizing: "text-accent-foreground",
+      composing: "text-accent-foreground",
       uploading: "text-accent-foreground",
+      distributing: "text-accent-foreground",
+      distribution_failed: "text-destructive",
       complete: "text-foreground",
       failed: "text-destructive",
     }

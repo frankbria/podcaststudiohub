@@ -249,6 +249,10 @@ export default function ProjectPage() {
       extracting: "bg-accent text-accent-foreground",
       generating: "bg-accent text-accent-foreground",
       synthesizing: "bg-accent text-accent-foreground",
+      composing: "bg-accent text-accent-foreground",
+      uploading: "bg-accent text-accent-foreground",
+      distributing: "bg-accent text-accent-foreground",
+      distribution_failed: "bg-destructive/20 text-destructive",
       complete: "bg-muted text-foreground",
       failed: "bg-destructive/20 text-destructive",
     }

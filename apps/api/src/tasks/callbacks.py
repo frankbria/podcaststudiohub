@@ -187,6 +187,51 @@ def on_composition_complete(self: Task, result: Dict[str, Any], episode_id: str)
 	)
 
 
+def record_platform_distribution(
+	episode_id: str, platform: str, result: Dict[str, Any]
+) -> bool:
+	"""
+	Merge a platform's distribution outcome into Episode.generation_progress
+	under a row lock and commit.
+
+	Shared by the on_distribution_complete callback and the distribution task's
+	in-task success recording (issue #312) so both writes produce an identical
+	entry shape — the second write is an idempotent re-merge of the first.
+
+	Returns:
+		True if the episode was found and updated, False otherwise.
+	"""
+	failed = result.get("status") != "success"
+	with SyncSessionLocal() as db:
+		episode = _get_episode_for_update(db, episode_id)
+		if episode is None:
+			logger.error("Episode %s not found in database", episode_id)
+			return False
+
+		current_progress = dict(episode.generation_progress or {})
+		distribution = dict(current_progress.get("distribution", {}))
+		if failed:
+			distribution[platform] = {
+				"status": "failed",
+				"error": result.get("error"),
+				"failed_at": _utcnow_iso(),
+			}
+		else:
+			distribution[platform] = {
+				"status": "complete",
+				"platform_episode_id": result.get("platform_episode_id"),
+				"platform_url": result.get("platform_url"),
+				"distributed_at": _utcnow_iso(),
+			}
+		current_progress["distribution"] = distribution
+		episode.generation_progress = current_progress
+		if not failed:
+			episode.generation_status = "distributing"
+
+		db.commit()
+	return True
+
+
 @celery_app.task(bind=True, name="on_distribution_complete")
 def on_distribution_complete(
 	self: Task, result: Dict[str, Any], episode_id: str, platform: str
@@ -217,33 +262,8 @@ def on_distribution_complete(
 		)
 
 	try:
-		with SyncSessionLocal() as db:
-			episode = _get_episode_for_update(db, episode_id)
-			if episode is None:
-				logger.error("Episode %s not found in database", episode_id)
-				return
-
-			current_progress = dict(episode.generation_progress or {})
-			distribution = dict(current_progress.get("distribution", {}))
-			if failed:
-				distribution[platform] = {
-					"status": "failed",
-					"error": result.get("error"),
-					"failed_at": _utcnow_iso(),
-				}
-			else:
-				distribution[platform] = {
-					"status": "complete",
-					"platform_episode_id": result.get("platform_episode_id"),
-					"platform_url": result.get("platform_url"),
-					"distributed_at": _utcnow_iso(),
-				}
-			current_progress["distribution"] = distribution
-			episode.generation_progress = current_progress
-			if not failed:
-				episode.generation_status = "distributing"
-
-			db.commit()
+		if not record_platform_distribution(episode_id, platform, result):
+			return
 
 		if not failed:
 			logger.info(

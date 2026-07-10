@@ -60,6 +60,16 @@ def _decrypt_platform_config(config: Dict[str, Any], platform: str) -> Dict[str,
     return decrypted
 
 
+def _idempotency_key(episode_id: str, platform: str) -> str:
+    """
+    Canonical idempotency token for one episode/platform publish (issue #312).
+
+    Stable across Celery redeliveries (acks_late + retries), so the platform
+    API or webhook receiver can deduplicate a repeated publish.
+    """
+    return f"{episode_id}:{platform}"
+
+
 def _merge_episode_metadata(episode: Any, passed_metadata: Dict[str, Any]) -> Dict[str, Any]:
     """
     Build distribution metadata from an Episode row, overlaying any passed-in values.
@@ -134,15 +144,38 @@ def distribute_to_platform_task(
         # passed-in values win.
         from src.models.episode import Episode
         from uuid import UUID as _UUID
+        prior_result = None
         with SyncSessionLocal() as db:
-            episode = db.get(Episode, _UUID(episode_id))
+            # Row lock so the completion check below observes committed state and
+            # cannot race a concurrent callback's read-modify-write (issue #312).
+            episode = db.get(Episode, _UUID(episode_id), with_for_update=True)
             if episode is not None:
-                episode_metadata = _merge_episode_metadata(episode, episode_metadata)
+                progress = getattr(episode, "generation_progress", None) or {}
+                entry = (progress.get("distribution") or {}).get(platform) or {}
+                if entry.get("status") == "complete":
+                    # Redelivery after a recorded success — do not republish.
+                    prior_result = {
+                        "status": "success",
+                        "platform": platform,
+                        "platform_episode_id": entry.get("platform_episode_id"),
+                        "platform_url": entry.get("platform_url"),
+                        "error": None,
+                    }
+                else:
+                    episode_metadata = _merge_episode_metadata(episode, episode_metadata)
             else:
                 logger.warning(
                     "Episode %s not found while building distribution metadata",
                     episode_id,
                 )
+
+        if prior_result is not None:
+            logger.info(
+                "Episode %s already distributed to %s; skipping republish on redelivery.",
+                episode_id,
+                platform,
+            )
+            return prior_result
 
         # Never publish an episode whose audio was not actually uploaded. s3_url is
         # written by on_upload_complete only on a successful upload, so its absence
@@ -182,6 +215,28 @@ def distribute_to_platform_task(
             result = _distribute_via_webhook(episode_id, platform_config, episode_metadata, self)
         else:
             raise ValueError(f"Unsupported platform: {platform}")
+
+        # Record success durably before returning so a redelivery after this
+        # point hits the pre-check above instead of republishing (issue #312).
+        # The on_distribution_complete link callback re-merges the same entry
+        # as idempotent redundancy. A recording failure must NOT raise:
+        # retrying the task would repeat the platform side effect that just
+        # succeeded. If recording fails AND the worker dies before ack, the
+        # pre-check cannot catch the redelivery — the Idempotency-Key sent
+        # with the publish is the remaining (receiver-side) dedup layer.
+        if result.get("status") == "success":
+            try:
+                from src.tasks.callbacks import record_platform_distribution
+                record_platform_distribution(episode_id, platform, result)
+            except Exception as exc:
+                logger.error(
+                    "Failed to record %s distribution success for episode %s "
+                    "in-task (callback will retry the record): %s",
+                    platform,
+                    episode_id,
+                    exc,
+                    exc_info=True,
+                )
 
         self.update_state(
             state='SUCCESS',
@@ -305,6 +360,7 @@ def _distribute_to_spotify(episode_id: str, config: Dict, metadata: Dict, task: 
         show_id=show_id,
         access_token=access_token,
         metadata=metadata,
+        idempotency_key=_idempotency_key(episode_id, "spotify"),
     )
 
     logger.info(
@@ -361,6 +417,7 @@ def _distribute_to_apple(episode_id: str, config: Dict, metadata: Dict, task: Ta
         show_id=show_id,
         api_key=api_key,
         metadata=metadata,
+        idempotency_key=_idempotency_key(episode_id, "apple_podcasts"),
     )
 
     logger.info(
@@ -409,13 +466,16 @@ def _distribute_via_webhook(episode_id: str, config: Dict, metadata: Dict, task:
     except SSRFValidationError as exc:
         raise ValueError(f"Webhook URL is not allowed: {exc}") from exc
 
-    headers = config.get('headers', {})
+    idempotency_key = _idempotency_key(episode_id, "webhook")
+    headers = dict(config.get('headers', {}))
+    headers["Idempotency-Key"] = idempotency_key
     method = config.get('method', 'POST')
 
     payload = {
         "episode_id": episode_id,
         "metadata": metadata,
-        "event": "episode_published"
+        "event": "episode_published",
+        "idempotency_key": idempotency_key,
     }
 
     # Send webhook with episode data (redirects disabled to prevent SSRF bounce).

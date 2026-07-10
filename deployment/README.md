@@ -312,7 +312,7 @@ dedicated IAM user (e.g. `fastapi-s3-uploader`). That user needs an identity-bas
 |---|---|
 | `s3:PutObject` | upload generated audio (incl. multipart for large/long-form files) |
 | `s3:GetObject` | download / `head_object` / presigned playback URLs |
-| `s3:DeleteObject` | remove audio when an episode is deleted |
+| `s3:DeleteObject` | remove audio when an episode or account is deleted |
 | `s3:AbortMultipartUpload` | clean up failed multipart uploads |
 
 `s3:ListBucket` is intentionally **not** granted (least privilege). `aws s3 ls` returns
@@ -353,6 +353,38 @@ one-time **administrative** action — run it from AWS CloudShell (admin identit
 ```bash
 deployment/scripts/enable-s3-versioning.sh podcaststudiohub-audio
 ```
+
+### Tenant offboarding / GDPR erasure — issue #308
+
+`DELETE /auth/me` (authenticated, self-service — the app has no admin/superuser role) permanently
+erases a user's account:
+
+- **Postgres rows**: the user row is deleted directly; every other tenant-owned row (projects,
+  episodes, episode compositions, audio snippets, RSS feeds, content sources, distribution targets,
+  templates, TTS configs, layouts, team memberships/invitations) cascades via `ON DELETE CASCADE`.
+  `billing_subscriptions` and `billing_usage` have no FK to `users`, so those rows are deleted
+  explicitly first.
+- **S3 objects**: deleted by the keys already stored on those rows (`episodes.s3_key`,
+  `episode_compositions.composed_s3_key`, `audio_snippets.s3_key`, `rss_feeds.s3_key`, and the
+  `s3_key` inside `content_sources.source_data`). This is why `s3:ListBucket` is never needed — see
+  above.
+- **Local file artifacts**: episode audio/transcript files, composed audio, and snippet audio are
+  removed from disk.
+
+Storage and filesystem cleanup are **best-effort**: a failed S3 or `os.remove` call is logged but
+never blocks the Postgres erasure, matching the same pattern single-episode delete uses (below).
+
+Single-episode `DELETE /episodes/{id}` follows the same best-effort pattern at smaller scope: it
+removes the episode's `s3_key`, its composition's `composed_s3_key`, and the episode's local
+audio/transcript files, but does not touch that episode's content-source uploads (those are only
+erased on full account deletion).
+
+**Known limitations** (disclosed, not yet addressed):
+
+- `Team` rows have no owner; erasure removes the user's own memberships/invitations but leaves team
+  shells behind.
+- Stripe-side customer data is untouched — only local billing rows are deleted. Cancelling the
+  Stripe subscription/customer is out of scope here.
 
 ## Database Backup & Restore (DR) — issue #293
 

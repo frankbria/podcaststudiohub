@@ -565,7 +565,7 @@ async def test_middleware_invalid_user_id_in_token(client: AsyncClient):
     # Create a token with invalid user_id format (not a valid UUID)
     # Use a valid UUID for tenant_id so set_tenant_context succeeds,
     # keeping the focus on the invalid sub (user_id) which is what this test covers.
-    from jose import jwt
+    import jwt
     from src.config import settings
 
     payload = {
@@ -945,7 +945,7 @@ def test_verify_verification_token_invalid():
 
 def test_verify_verification_token_expired():
     """Expired verification token raises ValueError"""
-    from jose import jwt
+    import jwt
     from src.config import settings
 
     payload = {

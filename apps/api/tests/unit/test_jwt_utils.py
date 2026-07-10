@@ -11,7 +11,7 @@ Tests cover:
 
 from datetime import timedelta
 
-from jose import jwt
+import jwt
 
 from src.utils.jwt import (
 	create_access_token,

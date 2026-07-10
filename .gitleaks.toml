@@ -1,0 +1,10 @@
+# Extends gitleaks' default rules; only adds an allowlist.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Machine-generated lockfiles: sha256 wheel/package hashes false-positive against token rules (e.g. square-access-token on uv.lock)"
+paths = [
+    '''(^|/)uv\.lock$''',
+    '''(^|/)package-lock\.json$''',
+]

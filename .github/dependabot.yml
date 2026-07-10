@@ -6,3 +6,19 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+
+  # Python backend (uv.lock + pyproject.toml) — CVE alerting for the 200+
+  # package closure (#306).
+  - package-ecosystem: "uv"
+    directory: "/apps/api"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # npm workspace monorepo: the root package-lock.json covers apps/web too,
+  # so a single npm entry at "/" scans the whole JS tree (#306).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

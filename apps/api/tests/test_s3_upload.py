@@ -11,6 +11,7 @@ import uuid
 from unittest.mock import MagicMock, patch
 
 from botocore.exceptions import ClientError
+from sqlalchemy.orm.exc import StaleDataError
 
 
 # ============================================================================
@@ -496,6 +497,113 @@ class TestFinalizeEpisodeGenerationTask:
         # The episode should have gone through 'uploading' then 'complete'
         assert "uploading" in status_history
         assert episode.generation_status == "complete"
+
+    def test_absorbs_orphaned_s3_object_when_episode_deleted_mid_finalization(self):
+        """Issue #366: the episode row fetched at the top of the task
+        (unlocked, via db.get) can be deleted by another transaction before the
+        final commit. SQLAlchemy raises StaleDataError on that 0-row-matched
+        UPDATE. The S3 object already uploaded by this point must be queued
+        for deletion instead of silently orphaned (no s3:ListBucket in IAM)."""
+        episode_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id, user_id)
+        generation_result = self._make_generation_result()
+
+        mock_db = MagicMock()
+        # First call: initial fetch (row exists). Second call: post-StaleDataError
+        # recheck confirming the row is genuinely gone.
+        mock_db.get.side_effect = [episode, None]
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        # First commit ('uploading' status) succeeds; final commit hits the race.
+        mock_db.commit.side_effect = [None, StaleDataError("stale", 1, 0)]
+
+        upload_result = {
+            "status": "success",
+            "s3_key": f"podcasts/user-{user_id}/episode-{episode_id}.mp3",
+            "s3_url": "https://test-bucket.s3.amazonaws.com/test.mp3",
+            "file_size_bytes": 1000,
+            "error": None,
+        }
+
+        with (
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+            patch("src.tasks.podcast_generation.settings") as mock_settings,
+            patch("src.tasks.podcast_generation.upload_to_s3_task", return_value=upload_result),
+            patch("src.tasks.podcast_generation._queue_orphaned_storage") as mock_queue,
+        ):
+            mock_settings.AWS_S3_BUCKET = "test-bucket"
+            result = self._invoke_finalize(episode_id, generation_result, mock_db)
+
+        assert result["status"] == "absorbed"
+        mock_queue.assert_called_once_with(s3_key=upload_result["s3_key"], file_path=None)
+
+    def test_absorbs_orphaned_local_file_when_episode_deleted_mid_finalization_no_s3(
+        self, tmp_path
+    ):
+        """Same race as above, but with no S3 bucket configured: the durable
+        artifact is the locally-persisted copy, so that path is queued."""
+        episode_id = str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id)
+        src_audio = tmp_path / "episode-abc.mp3"
+        src_audio.write_bytes(b"FAKE_MP3")
+        storage_dir = tmp_path / "audio"
+        generation_result = self._make_generation_result(audio_file_path=str(src_audio))
+
+        mock_db = MagicMock()
+        mock_db.get.side_effect = [episode, None]
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        # No-S3 branch only ever commits once (the final commit).
+        mock_db.commit.side_effect = StaleDataError("stale", 1, 0)
+
+        with (
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+            patch("src.tasks.podcast_generation.settings") as mock_settings,
+            patch("src.tasks.podcast_generation._queue_orphaned_storage") as mock_queue,
+        ):
+            mock_settings.AWS_S3_BUCKET = None
+            mock_settings.LOCAL_AUDIO_STORAGE_PATH = str(storage_dir)
+            result = self._invoke_finalize(episode_id, generation_result, mock_db)
+
+        assert result["status"] == "absorbed"
+        expected_path = str(storage_dir / f"episode-{episode_id}.mp3")
+        mock_queue.assert_called_once_with(s3_key=None, file_path=expected_path)
+
+    def test_does_not_absorb_when_row_still_present_after_staledata_error(self):
+        """Extremely defensive: if the post-error recheck still finds the row,
+        something other than a delete race is going on — do not queue anything
+        for deletion, just fail cleanly."""
+        episode_id = str(uuid.uuid4())
+        user_id = str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id, user_id)
+        generation_result = self._make_generation_result()
+
+        mock_db = MagicMock()
+        mock_db.get.side_effect = [episode, episode]  # still present on recheck
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_db.commit.side_effect = [None, StaleDataError("stale", 1, 0)]
+
+        upload_result = {
+            "status": "success",
+            "s3_key": f"podcasts/user-{user_id}/episode-{episode_id}.mp3",
+            "s3_url": "https://test-bucket.s3.amazonaws.com/test.mp3",
+            "file_size_bytes": 1000,
+            "error": None,
+        }
+
+        with (
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+            patch("src.tasks.podcast_generation.settings") as mock_settings,
+            patch("src.tasks.podcast_generation.upload_to_s3_task", return_value=upload_result),
+            patch("src.tasks.podcast_generation._queue_orphaned_storage") as mock_queue,
+        ):
+            mock_settings.AWS_S3_BUCKET = "test-bucket"
+            result = self._invoke_finalize(episode_id, generation_result, mock_db)
+
+        assert result["status"] == "failed"
+        mock_queue.assert_not_called()
 
 
 # ============================================================================

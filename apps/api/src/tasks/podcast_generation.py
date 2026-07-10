@@ -10,6 +10,7 @@ import uuid as uuid_module
 import logging
 from celery import Task, chain
 from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy.orm.exc import StaleDataError
 from typing import Optional, List, Dict, Any
 from pydub import AudioSegment
 
@@ -17,7 +18,7 @@ from src.worker import celery_app
 from src.config import settings
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
-from src.tasks.callbacks import _update_episode, _utcnow_iso
+from src.tasks.callbacks import _update_episode, _utcnow_iso, _queue_orphaned_storage
 from src.tasks.idempotency import acquire_generation_lock, release_generation_lock
 from src.tasks.s3_upload import (
     GENERATION_RUN_DIR_PREFIX,
@@ -615,6 +616,10 @@ def finalize_episode_generation_task(
 
             s3_url = None
             s3_key = None
+            # Tracks the durable local artifact when no S3 bucket is configured,
+            # so it can be queued for deletion (issue #366) without depending on
+            # the possibly-expired `episode` ORM object after a rollback below.
+            finalized_local_path = None
 
             # S3 upload (skip gracefully if bucket not configured)
             if settings.AWS_S3_BUCKET:
@@ -669,6 +674,7 @@ def finalize_episode_generation_task(
                 # per-run temp dir now that a persistent copy exists (issue #309).
                 persistent_path = _persist_local_audio(audio_file_path, episode_id)
                 episode.file_path = persistent_path
+                finalized_local_path = persistent_path
                 _cleanup_temp_file(audio_file_path)
                 logger.info(
                     f"AWS_S3_BUCKET not configured; persisted episode {episode_id} "
@@ -685,7 +691,38 @@ def finalize_episode_generation_task(
                 "progress": 100,
                 "status": "Generation complete",
             }
-            db.commit()
+            try:
+                db.commit()
+            except StaleDataError:
+                # The episode row was deleted by another transaction between the
+                # unlocked fetch above and this commit (issue #366) — the ORM's
+                # 0-row-matched UPDATE raises here even without a version_id_col.
+                # The audio is already durably uploaded/persisted with nothing
+                # left to reference it, so it must be queued for deletion instead
+                # of silently orphaned (IAM has no s3:ListBucket to find it later).
+                db.rollback()
+                still_present = db.get(Episode, uuid_module.UUID(episode_id)) is not None
+                if still_present:
+                    # Not the delete race this handles — fail cleanly rather than
+                    # guess at what else could cause a 0-row-matched UPDATE.
+                    logger.error(
+                        f"Episode {episode_id} commit reported stale data, but the "
+                        "row is still present; not absorbing"
+                    )
+                    return {"status": "failed", "error": "Stale data on episode commit"}
+
+                logger.warning(
+                    f"Episode {episode_id} was deleted mid-finalization; queuing "
+                    f"{'s3_key=' + s3_key if s3_key else 'file_path=' + str(finalized_local_path)} "
+                    "for deletion instead of orphaning it"
+                )
+                _queue_orphaned_storage(s3_key=s3_key, file_path=finalized_local_path if not s3_key else None)
+                return {
+                    "status": "absorbed",
+                    "episode_id": episode_id,
+                    "s3_key": s3_key,
+                    "file_path": finalized_local_path,
+                }
 
             logger.info(f"Episode {episode_id} finalized successfully")
             return {

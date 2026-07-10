@@ -54,6 +54,13 @@ _rate_limit_resend = create_rate_limit_dependency(
     settings.RATE_LIMIT_RESEND_REQUESTS,
     settings.RATE_LIMIT_RESEND_WINDOW_MINUTES,
 )
+# Account erasure re-checks the password, so it gets the login limits: the
+# threat (online password guessing) is the same.
+_rate_limit_delete_account = create_rate_limit_dependency(
+    "delete-account",
+    settings.RATE_LIMIT_LOGIN_REQUESTS,
+    settings.RATE_LIMIT_LOGIN_WINDOW_MINUTES,
+)
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
@@ -186,6 +193,7 @@ async def delete_current_user(
     payload: AccountDeleteRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _: None = Depends(_rate_limit_delete_account),
 ):
     """
     Permanently erase the authenticated user's account (GDPR-style right to

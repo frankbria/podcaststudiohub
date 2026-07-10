@@ -221,7 +221,9 @@ def distribute_to_platform_task(
         # The on_distribution_complete link callback re-merges the same entry
         # as idempotent redundancy. A recording failure must NOT raise:
         # retrying the task would repeat the platform side effect that just
-        # succeeded.
+        # succeeded. If recording fails AND the worker dies before ack, the
+        # pre-check cannot catch the redelivery — the Idempotency-Key sent
+        # with the publish is the remaining (receiver-side) dedup layer.
         if result.get("status") == "success":
             try:
                 from src.tasks.callbacks import record_platform_distribution

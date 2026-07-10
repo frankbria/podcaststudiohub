@@ -191,6 +191,30 @@ class TestHelpersForwardIdempotencyKey:
 		assert kwargs["headers"]["Idempotency-Key"] == f"{EPISODE_ID}:webhook"
 		assert kwargs["json"]["idempotency_key"] == f"{EPISODE_ID}:webhook"
 
+	def test_webhook_get_method_carries_key(self):
+		from src.tasks.platform_distribution import _distribute_via_webhook
+
+		session = MagicMock()
+		session.__enter__ = MagicMock(return_value=session)
+		session.__exit__ = MagicMock(return_value=False)
+		response = MagicMock()
+		response.raise_for_status.return_value = None
+		session.get.return_value = response
+
+		with patch(
+			"src.utils.ssrf.validate_public_url", return_value=("1.2.3.4", 443)
+		), patch("src.utils.pinned_fetch.pinned_session", return_value=session):
+			_distribute_via_webhook(
+				EPISODE_ID,
+				{"url": "https://hooks.example.com/x", "method": "GET"},
+				{"title": "T"},
+				MagicMock(),
+			)
+
+		kwargs = session.get.call_args.kwargs
+		assert kwargs["headers"]["Idempotency-Key"] == f"{EPISODE_ID}:webhook"
+		assert kwargs["params"]["idempotency_key"] == f"{EPISODE_ID}:webhook"
+
 
 # ===========================================================================
 # Task-level: pre-publish skip of already-complete platforms
@@ -391,6 +415,37 @@ class TestRecordPlatformDistribution:
 		assert entry["platform_url"] == "https://open.spotify.com/episode/sp_1"
 		assert "distributed_at" in entry
 		session.commit.assert_called_once()
+
+	def test_double_call_is_idempotent_re_merge(self):
+		"""Second write (in-task then callback) re-merges an equivalent entry."""
+		from src.tasks.callbacks import record_platform_distribution
+
+		episode = SimpleNamespace(
+			generation_progress={}, generation_status="distributing"
+		)
+		session = MagicMock()
+		session.__enter__ = MagicMock(return_value=session)
+		session.__exit__ = MagicMock(return_value=False)
+		session.execute.return_value.scalar_one_or_none.return_value = episode
+
+		result = {
+			"status": "success",
+			"platform": "spotify",
+			"platform_episode_id": "sp_1",
+			"platform_url": "https://open.spotify.com/episode/sp_1",
+			"error": None,
+		}
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=session):
+			assert record_platform_distribution(EPISODE_ID, "spotify", result) is True
+			first = dict(episode.generation_progress["distribution"]["spotify"])
+			assert record_platform_distribution(EPISODE_ID, "spotify", result) is True
+			second = episode.generation_progress["distribution"]["spotify"]
+
+		# Identical shape and identifiers; only the timestamp may refresh.
+		assert {k: v for k, v in first.items() if k != "distributed_at"} == {
+			k: v for k, v in second.items() if k != "distributed_at"
+		}
+		assert second["status"] == "complete"
 
 	def test_missing_episode_returns_false(self):
 		from src.tasks.callbacks import record_platform_distribution

@@ -101,8 +101,10 @@ class TestOnUploadComplete:
 		# Session should not have been entered at all
 		mock_ctx.__enter__.assert_not_called()
 
-	def test_handles_missing_episode_gracefully(self):
-		"""Callback logs error but does not raise if episode is not found."""
+	def test_absorbs_orphaned_upload_when_episode_missing(self):
+		"""If the episode was deleted after this upload started (issue #366),
+		the callback queues the now-orphaned S3 key for deletion instead of
+		only logging — never raises."""
 		episode_id = str(uuid.uuid4())
 		mock_ctx, mock_session = _make_sync_session(None)  # .get() returns None
 
@@ -118,7 +120,12 @@ class TestOnUploadComplete:
 			# Should not raise
 			_invoke_task(on_upload_complete, result=result, episode_id=episode_id)
 
-		mock_session.commit.assert_not_called()
+		added_rows = [
+			call.args[0] for call in mock_session.add.call_args_list
+		]
+		assert len(added_rows) == 1
+		assert added_rows[0].s3_key == "key.mp3"
+		mock_session.commit.assert_called_once()
 
 	def test_updates_generation_progress(self):
 		"""generation_progress is updated with 'upload: complete' on success."""

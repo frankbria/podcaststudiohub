@@ -288,3 +288,13 @@ first compile); fresh CI venvs recompile. Clear __pycache__ to reproduce compile
   (deprecated `utcnow()` replacement) was already shipped in #348. Re-verify each
   plan step against current code before implementing (only the TZ-aware filter
   param bug remained).
+
+## 2026-07-10 (#311, PR #370)
+- **Mock tests must not assert outcomes impossible under real semantics.** The
+  rollback-failure test originally asserted the episode got marked failed after
+  `rollback()` raised — MagicMock allows it, but a real SQLAlchemy session would
+  keep raising `PendingRollbackError` on every op until a successful rollback.
+  Model the state machine in the mock (second `get` raises too) and assert the
+  degradation path, or the test breeds false confidence. (Caught by post-PR GLM.)
+- `showboat exec` signature is `<file> <lang> [code]` — omitting the lang makes
+  it treat the whole command string as argv[0] and fail with fork/exec noise.

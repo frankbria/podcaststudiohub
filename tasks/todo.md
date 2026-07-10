@@ -11,11 +11,12 @@ matches service-layer rollback precedent).
 
 ## Steps
 
-- [ ] RED: add tests in `apps/api/tests/unit/test_task_retry.py`
-  - broken-tx cleanup: first `db.get` raises, retries exhausted → assert `rollback()` called
-    before cleanup `get`, episode marked `failed`, cleanup `commit()` invoked
-  - graceful degradation: cleanup commit also fails → returns `{"status": "failed", ...}` without raising
-- [ ] GREEN: defensive `db.rollback()` (own try/except, log-and-continue) at start of the
-  `except self.MaxRetriesExceededError:` block, before `db.get(...)`
-- [ ] Quality gate: pytest, ruff, opencode review (pre-PR)
-- [ ] PR, post-PR opencode review comment, demo (Showboat, API-only), CI green, merge
+- [x] RED: ordering test failed on unfixed code (`['__enter__','get','get','commit','__exit__']` — no rollback)
+- [x] GREEN: defensive `db.rollback()` at start of the `MaxRetriesExceededError` handler
+- [x] GLM pre-PR review: APPROVE; took its Minor (cover rollback-failure branch → 3rd test)
+- [x] GLM post-PR review: APPROVE; took its Minor (rework 3rd test to faithful SQLAlchemy
+      semantics — cleanup get raises `PendingRollbackError` after failed rollback) + 2 nits
+- [x] SHIPPED via PR #370 — 1703 passed + coverage gate, CI review bots "no defects" (both
+      commits), real-Postgres demo posted to PR, CI green, squash-merged, issue #311 closed.
+      Sibling-handler sweep: anti-pattern unique to finalize (others use fresh-session
+      `_update_episode` or no DB).

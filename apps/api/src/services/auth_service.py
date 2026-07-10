@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 import bcrypt
-from jose import jwt, JWTError
+import jwt
+from jwt import PyJWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -119,7 +120,7 @@ def verify_jwt_token(token: str) -> dict:
             algorithms=[settings.JWT_ALGORITHM]
         )
         return payload
-    except JWTError as e:
+    except PyJWTError as e:
         raise ValueError(f"Invalid token: {str(e)}")
 
 

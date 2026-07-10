@@ -540,7 +540,7 @@ async def test_middleware_handles_missing_tenant_claim(client: AsyncClient):
     If the JWT is valid but doesn't contain tenant_id, the middleware should
     continue without setting tenant context (no error).
     """
-    from jose import jwt
+    import jwt
     from src.config import settings
 
     # Create a JWT without tenant_id claim

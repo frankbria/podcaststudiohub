@@ -3,7 +3,8 @@ JWT token creation and verification utilities
 """
 from datetime import timedelta
 from typing import Optional
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 
 from src.config import settings
 from .datetime_utils import utcnow
@@ -62,7 +63,7 @@ def verify_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
         return payload
-    except JWTError:
+    except PyJWTError:
         return None
 
 

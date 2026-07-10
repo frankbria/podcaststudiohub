@@ -1,7 +1,6 @@
 """Tenant offboarding service — GDPR-style account erasure (issue #308)."""
 
 import logging
-import os
 
 from fastapi import HTTPException, status
 from sqlalchemy import delete, func, select
@@ -13,8 +12,9 @@ from ..models.episode import Episode
 from ..models.episode_composition import EpisodeComposition
 from ..models.project import Project
 from ..models.rss_feed import RSSFeed
+from ..models.storage_deletion_outbox import StorageDeletionOutbox
 from ..models.user import User
-from .storage_service import StorageService
+from ..tasks.maintenance import drain_storage_deletion_outbox
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +30,22 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 	local file artifacts (GDPR-style tenant offboarding / right to erasure).
 
 	Collects S3 keys and local paths from the user's episodes, episode
-	compositions, audio snippets, RSS feeds, and content sources, then
-	best-effort deletes each — failures are logged but never block erasure.
-	Every tenant row (billing rows included — see migration 010) cascades via
-	`ON DELETE CASCADE` once the user row itself is deleted.
+	compositions, audio snippets, RSS feeds, and content sources, then queues
+	each onto the durable storage_deletion_outbox in the same transaction as
+	the user row delete (issue #366) instead of deleting from storage inline —
+	a commit failure therefore leaves storage untouched. The GC worker
+	(drain_storage_deletion_outbox) performs the actual deletion, retrying
+	until it succeeds; a best-effort post-commit trigger below makes that
+	happen promptly instead of waiting for the next beat tick. Every tenant row
+	(billing rows included — see migration 010) cascades via `ON DELETE
+	CASCADE` once the user row itself is deleted.
 
 	Args:
 		db: Database session (tenant context must already be armed for this user)
 		user: User instance to erase
 
 	Returns:
-		Summary dict with counts of S3 objects and local files erased
+		Summary dict with counts of S3 objects and local files queued for deletion
 
 	Raises:
 		HTTPException: 409 if any of the user's episodes is still generating
@@ -108,23 +113,10 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 	)
 	local_paths.extend(snippet.file_path for snippet in snippets if snippet.file_path)
 
-	failed_keys = []
-	if s3_keys:
-		storage = StorageService()
-		for key in s3_keys:
-			try:
-				await storage.delete_file(key)
-			except Exception:
-				failed_keys.append(key)
-				logger.warning(f"Failed to delete S3 object {key} for user {user.id}")
-
-	failed_paths = []
+	for key in s3_keys:
+		db.add(StorageDeletionOutbox(tenant_id=user.tenant_id, s3_key=key))
 	for path in local_paths:
-		try:
-			os.remove(path)
-		except OSError:
-			failed_paths.append(path)
-			logger.warning(f"Failed to remove local file {path} for user {user.id}")
+		db.add(StorageDeletionOutbox(tenant_id=user.tenant_id, file_path=path))
 
 	# Core DELETE (not ORM db.delete) so the ORM doesn't load and walk the full
 	# relationship graph — Postgres ON DELETE CASCADE removes the child rows.
@@ -135,18 +127,21 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 	# Audit record of the erasure, emitted before commit — after commit the user
 	# row is gone and this log line is the only durable trace of what happened.
 	logger.info(
-		"account erasure: user=%s tenant=%s s3_deleted=%d s3_failed=%s "
-		"local_deleted=%d local_failed=%s",
+		"account erasure: user=%s tenant=%s s3_queued=%d local_queued=%d",
 		user.id,
 		user.tenant_id,
-		len(s3_keys) - len(failed_keys),
-		failed_keys or "none",
-		len(local_paths) - len(failed_paths),
-		failed_paths or "none",
+		len(s3_keys),
+		len(local_paths),
 	)
 	await db.commit()
 
+	if s3_keys or local_paths:
+		try:
+			drain_storage_deletion_outbox.delay()
+		except Exception:
+			logger.warning(f"Failed to trigger storage deletion drain for user {user.id}")
+
 	return {
-		"s3_objects_deleted": len(s3_keys) - len(failed_keys),
-		"local_files_deleted": len(local_paths) - len(failed_paths),
+		"s3_objects_queued": len(s3_keys),
+		"local_files_queued": len(local_paths),
 	}

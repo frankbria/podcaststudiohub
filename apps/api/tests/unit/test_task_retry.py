@@ -540,3 +540,78 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 
 		mock_retry.assert_called_once()
 		assert result["status"] == "failed"
+
+	def _run_with_broken_session(self, mock_db):
+		"""Run finalize with retries exhausted against the given mock session."""
+		import uuid
+		from src.tasks.podcast_generation import finalize_episode_generation_task
+
+		generation_result = {
+			"status": "success",
+			"audio_file_path": "/tmp/ep.mp3",
+			"transcript_path": "/tmp/ep_transcript.txt",
+			"duration_seconds": 120.0,
+			"file_size_bytes": 2_000_000,
+			"error": None,
+		}
+
+		with (
+			patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+			patch("src.tasks.podcast_generation.settings") as mock_settings,
+			patch.object(finalize_episode_generation_task, "update_state"),
+			patch.object(
+				finalize_episode_generation_task,
+				"retry",
+				side_effect=_make_celery_retry_exception(finalize_episode_generation_task),
+			),
+		):
+			mock_settings.AWS_S3_BUCKET = None
+			finalize_episode_generation_task.request.update(retries=0)
+			return finalize_episode_generation_task.run(
+				episode_id=str(uuid.uuid4()),
+				generation_result=generation_result,
+			)
+
+	def test_cleanup_rolls_back_failed_transaction_before_marking_failed(self):
+		"""After retries are exhausted, the cleanup must rollback() the broken
+		session before reusing it, so the 'failed' status is durably persisted
+		(issue #311)."""
+		episode = MagicMock()
+		episode.generation_progress = {}
+
+		mock_db = MagicMock()
+		# First get() raises (triggers the outer except / broken tx); the
+		# cleanup get() after rollback succeeds.
+		mock_db.get.side_effect = [RuntimeError("Database connection lost"), episode]
+		mock_db.__enter__ = MagicMock(return_value=mock_db)
+		mock_db.__exit__ = MagicMock(return_value=False)
+
+		result = self._run_with_broken_session(mock_db)
+
+		names = [name for name, _, _ in mock_db.mock_calls]
+		first_get = names.index("get")
+		second_get = names.index("get", first_get + 1)
+		assert "rollback" in names, "cleanup must rollback the failed transaction"
+		assert first_get < names.index("rollback") < second_get, (
+			"rollback must happen before the cleanup get()"
+		)
+		assert episode.generation_status == "failed"
+		mock_db.commit.assert_called_once()
+		assert result["status"] == "failed"
+
+	def test_cleanup_degrades_gracefully_when_cleanup_commit_fails(self):
+		"""If even the post-rollback cleanup write fails, the task must log and
+		return a failed result dict instead of raising (issue #311)."""
+		episode = MagicMock()
+		episode.generation_progress = {}
+
+		mock_db = MagicMock()
+		mock_db.get.side_effect = [RuntimeError("Database connection lost"), episode]
+		mock_db.commit.side_effect = RuntimeError("connection still broken")
+		mock_db.__enter__ = MagicMock(return_value=mock_db)
+		mock_db.__exit__ = MagicMock(return_value=False)
+
+		result = self._run_with_broken_session(mock_db)
+
+		assert result["status"] == "failed"
+		assert "error" in result

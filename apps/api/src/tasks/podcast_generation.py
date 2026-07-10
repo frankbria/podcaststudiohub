@@ -710,6 +710,16 @@ def finalize_episode_generation_task(
                     f"Finalization failed after {self.max_retries} retries "
                     f"for episode {episode_id}: {e}"
                 )
+                # The triggering error may have left the session in a failed-
+                # transaction state; reset it so the 'failed' status write
+                # below can actually persist (issue #311).
+                try:
+                    db.rollback()
+                except Exception as rollback_err:
+                    logger.error(
+                        f"Rollback before failure-status write failed for "
+                        f"episode {episode_id}: {rollback_err}"
+                    )
                 try:
                     episode = db.get(Episode, uuid_module.UUID(episode_id))
                     if episode:

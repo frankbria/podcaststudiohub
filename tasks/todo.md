@@ -1,4 +1,4 @@
-# Issue #309 — Wrong transcript_path persisted; engine artifacts never cleaned up
+# #309 — SHIPPED via PR #368 (all gates passed: 1698 tests, diff-cover 87%, GLM APPROVE pre+post-PR, demo verified, CI green, issue closed)
 
 Plan source: CodeRabbit comment on issue, adapted to current code (post-#367).
 Autonomous decisions (no architectural fork):

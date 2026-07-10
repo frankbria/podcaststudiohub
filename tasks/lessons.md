@@ -270,3 +270,11 @@ first compile); fresh CI venvs recompile. Clear __pycache__ to reproduce compile
   counts against CI's log — a big mismatch is config rot, not parallelism magic;
   (3) tests that patch `asyncio.wait_for` must `coro.close()` the coroutine arg
   or the never-awaited RuntimeWarning fires at GC inside an unrelated later test.
+
+## 2026-07-10 (#309, PR #368)
+- **Mutation testing must not use `git checkout --` to revert** when the file has
+  uncommitted edits from a later fix round — it silently wipes them (had to
+  re-apply the composed-path fix). Apply the mutation with a Python string-replace
+  script and restore by re-running the same script inverted, or commit first.
+- opencode post-PR reviews on full PR diffs can exceed a 10-min foreground
+  timeout; run `ask-opencode.sh` in the background writing to a file, then post.

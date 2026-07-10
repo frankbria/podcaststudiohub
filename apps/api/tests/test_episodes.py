@@ -374,7 +374,7 @@ async def test_delete_episode_with_s3_key_calls_storage_delete(
 	episode_id = create_response.json()["id"]
 	await set_system_fields(episode_id, s3_key="podcasts/episode.mp3")
 
-	with patch("src.services.storage_service.StorageService") as MockStorage:
+	with patch("src.services.episode_service.StorageService") as MockStorage:
 		mock_instance = MockStorage.return_value
 		mock_instance.delete_file = AsyncMock()
 		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
@@ -398,7 +398,7 @@ async def test_delete_episode_without_s3_key_skips_storage_delete(
 	})
 	episode_id = create_response.json()["id"]
 
-	with patch("src.services.storage_service.StorageService") as MockStorage:
+	with patch("src.services.episode_service.StorageService") as MockStorage:
 		mock_instance = MockStorage.return_value
 		mock_instance.delete_file = AsyncMock()
 		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
@@ -423,7 +423,7 @@ async def test_delete_episode_s3_failure_does_not_block_delete(
 	episode_id = create_response.json()["id"]
 	await set_system_fields(episode_id, s3_key="podcasts/episode.mp3")
 
-	with patch("src.services.storage_service.StorageService") as MockStorage:
+	with patch("src.services.episode_service.StorageService") as MockStorage:
 		mock_instance = MockStorage.return_value
 		mock_instance.delete_file = AsyncMock(side_effect=Exception("S3 unavailable"))
 		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
@@ -495,7 +495,7 @@ async def test_delete_episode_also_deletes_composition_s3_key(
 	))
 	await test_db.flush()
 
-	with patch("src.services.storage_service.StorageService") as MockStorage:
+	with patch("src.services.episode_service.StorageService") as MockStorage:
 		mock_instance = MockStorage.return_value
 		mock_instance.delete_file = AsyncMock()
 		response = await client.delete(f"/episodes/{episode_id}", headers=headers)

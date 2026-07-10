@@ -85,12 +85,13 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 	)
 	local_paths.extend(snippet.file_path for snippet in snippets if snippet.file_path)
 
-	for key in s3_keys:
-		try:
-			storage = StorageService()
-			await storage.delete_file(key)
-		except Exception:
-			logger.warning(f"Failed to delete S3 object {key} for user {user.id}")
+	if s3_keys:
+		storage = StorageService()
+		for key in s3_keys:
+			try:
+				await storage.delete_file(key)
+			except Exception:
+				logger.warning(f"Failed to delete S3 object {key} for user {user.id}")
 
 	for path in local_paths:
 		try:

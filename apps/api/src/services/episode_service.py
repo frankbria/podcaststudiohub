@@ -5,6 +5,9 @@ Provides CRUD operations for episodes with project validation, pagination,
 status filtering, and generation status management. RLS ensures tenant isolation.
 """
 
+import logging
+import os
+
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, cast, or_
@@ -15,7 +18,11 @@ from typing import Optional, List
 from fastapi import HTTPException, status
 
 from ..models import Episode, Project
+from ..models.episode_composition import EpisodeComposition
 from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
+from .storage_service import StorageService
+
+logger = logging.getLogger(__name__)
 
 # Valid sort fields and orders for episode listing
 VALID_SORT_FIELDS = {"episode_number", "created_at", "duration_seconds"}
@@ -323,14 +330,6 @@ async def delete_episode(
 		db: Database session
 		episode: Episode instance to delete
 	"""
-	import logging
-	import os
-
-	from .storage_service import StorageService
-	from ..models.episode_composition import EpisodeComposition
-
-	logger = logging.getLogger(__name__)
-
 	composition_result = await db.execute(
 		select(EpisodeComposition).where(EpisodeComposition.episode_id == episode.id)
 	)
@@ -342,12 +341,13 @@ async def delete_episode(
 			composition.composed_s3_key if composition else None,
 		) if key
 	]
-	for key in s3_keys:
-		try:
-			storage = StorageService()
-			await storage.delete_file(key)
-		except Exception:
-			logger.warning(f"Failed to delete S3 object {key} for episode {episode.id}")
+	if s3_keys:
+		storage = StorageService()
+		for key in s3_keys:
+			try:
+				await storage.delete_file(key)
+			except Exception:
+				logger.warning(f"Failed to delete S3 object {key} for episode {episode.id}")
 
 	local_paths = [
 		path for path in (

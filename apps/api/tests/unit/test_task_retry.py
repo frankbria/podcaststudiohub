@@ -615,3 +615,22 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 
 		assert result["status"] == "failed"
 		assert "error" in result
+
+	def test_cleanup_proceeds_when_rollback_itself_fails(self):
+		"""A rollback failure is logged but must not prevent the cleanup write
+		from being attempted (issue #311)."""
+		episode = MagicMock()
+		episode.generation_progress = {}
+
+		mock_db = MagicMock()
+		mock_db.get.side_effect = [RuntimeError("Database connection lost"), episode]
+		mock_db.rollback.side_effect = RuntimeError("rollback failed too")
+		mock_db.__enter__ = MagicMock(return_value=mock_db)
+		mock_db.__exit__ = MagicMock(return_value=False)
+
+		result = self._run_with_broken_session(mock_db)
+
+		assert mock_db.get.call_count == 2, "cleanup get() must still run"
+		assert episode.generation_status == "failed"
+		mock_db.commit.assert_called_once()
+		assert result["status"] == "failed"

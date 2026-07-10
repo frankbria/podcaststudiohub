@@ -216,8 +216,9 @@ async def test_delete_me_removes_user_and_cascaded_rows(seeded_user, client, tes
 
 @pytest.mark.asyncio
 async def test_delete_me_removes_billing_rows(seeded_user, client, test_db):
-	"""BillingSubscription/BillingUsage rows have no FK to users, so the
-	offboarding routine must delete them explicitly."""
+	"""Billing rows are erased with the account. Their ORM models declare no FK,
+	but migration 010 gave them user_id FKs with ON DELETE CASCADE, so the DB
+	guarantees this outcome (mutation-testing the service can't break it)."""
 	from uuid import UUID as _UUID
 
 	# Guard against a vacuous test: the seeded rows must be visible up front.

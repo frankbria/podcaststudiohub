@@ -8,8 +8,6 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.audio_snippet import AudioSnippet
-from ..models.billing_subscription import BillingSubscription
-from ..models.billing_usage import BillingUsage
 from ..models.content_source import ContentSource
 from ..models.episode import Episode
 from ..models.episode_composition import EpisodeComposition
@@ -34,9 +32,8 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 	Collects S3 keys and local paths from the user's episodes, episode
 	compositions, audio snippets, RSS feeds, and content sources, then
 	best-effort deletes each — failures are logged but never block erasure.
-	BillingSubscription/BillingUsage rows have no FK to users and are deleted
-	explicitly; every other tenant row cascades via `ON DELETE CASCADE` once
-	the user row itself is deleted.
+	Every tenant row (billing rows included — see migration 010) cascades via
+	`ON DELETE CASCADE` once the user row itself is deleted.
 
 	Args:
 		db: Database session (tenant context must already be armed for this user)
@@ -129,12 +126,10 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 			failed_paths.append(path)
 			logger.warning(f"Failed to remove local file {path} for user {user.id}")
 
-	# Billing rows have no FK to users, so DB cascade won't reach them.
-	await db.execute(delete(BillingSubscription).where(BillingSubscription.user_id == user.id))
-	await db.execute(delete(BillingUsage).where(BillingUsage.user_id == user.id))
-
 	# Core DELETE (not ORM db.delete) so the ORM doesn't load and walk the full
 	# relationship graph — Postgres ON DELETE CASCADE removes the child rows.
+	# That includes billing_subscriptions/billing_usage: their ORM models omit
+	# the FK, but migration 010 created user_id FKs with ON DELETE CASCADE.
 	await db.execute(delete(User).where(User.id == user.id))
 
 	# Audit record of the erasure, emitted before commit — after commit the user

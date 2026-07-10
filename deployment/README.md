@@ -361,9 +361,12 @@ erases a user's account:
 
 - **Postgres rows**: the user row is deleted directly; every other tenant-owned row (projects,
   episodes, episode compositions, audio snippets, RSS feeds, content sources, distribution targets,
-  templates, TTS configs, layouts, team memberships/invitations) cascades via `ON DELETE CASCADE`.
-  `billing_subscriptions` and `billing_usage` have no FK to `users`, so those rows are deleted
-  explicitly first.
+  templates, TTS configs, layouts, team memberships/invitations, and billing
+  subscription/usage rows — whose FKs exist in migration 010 even though the ORM models omit
+  them) cascades via `ON DELETE CASCADE`.
+- **Guards**: the request must re-enter the account password (step-up auth; 403 on mismatch), and
+  erasure is refused with 409 while any episode is mid-generation — the running Celery chain would
+  re-upload audio to S3 after cleanup, recreating the orphaned-object problem this issue fixed.
 - **S3 objects**: deleted by the keys already stored on those rows (`episodes.s3_key`,
   `episode_compositions.composed_s3_key`, `audio_snippets.s3_key`, `rss_feeds.s3_key`, and the
   `s3_key` inside `content_sources.source_data`). This is why `s3:ListBucket` is never needed — see

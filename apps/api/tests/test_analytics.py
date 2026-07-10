@@ -3,6 +3,7 @@ Integration tests for analytics endpoints (GAP-049).
 """
 
 import pytest
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 
@@ -223,6 +224,53 @@ async def test_get_episode_analytics_counts_correctly(client):
 	data = response.json()
 	assert data["metrics"]["total_downloads"] == 2
 	assert data["metrics"]["total_plays"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_episode_analytics_tz_aware_date_range(client):
+	"""Z-suffixed (TZ-aware) date params must not raise against naive created_at (#310)."""
+	headers = await register_and_login(client)
+	project_id = await create_project(client, headers)
+	episode_id = await create_episode(client, headers, project_id)
+
+	await client.post("/analytics/events", json={
+		"event_type": "download",
+		"episode_id": episode_id,
+	}, headers=headers)
+
+	date_from = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	date_to = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	response = await client.get(
+		f"/analytics/episodes/{episode_id}?date_from={date_from}&date_to={date_to}",
+		headers=headers,
+	)
+	assert response.status_code == 200, response.text
+	assert response.json()["metrics"]["total_downloads"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_episode_analytics_non_utc_offset_converted(client):
+	"""Non-UTC offsets must be converted to UTC, not just tz-stripped (#310)."""
+	headers = await register_and_login(client)
+	project_id = await create_project(client, headers)
+	episode_id = await create_episode(client, headers, project_id)
+
+	await client.post("/analytics/events", json={
+		"event_type": "download",
+		"episode_id": episode_id,
+	}, headers=headers)
+
+	# 30 min ago UTC, expressed in +03:00 — naive stripping would yield a
+	# wall time ~2.5h in the future and wrongly exclude the event just tracked.
+	plus3 = timezone(timedelta(hours=3))
+	date_from = (datetime.now(timezone.utc) - timedelta(minutes=30)).astimezone(plus3)
+	response = await client.get(
+		f"/analytics/episodes/{episode_id}",
+		params={"date_from": date_from.isoformat()},
+		headers=headers,
+	)
+	assert response.status_code == 200, response.text
+	assert response.json()["metrics"]["total_downloads"] == 1
 
 
 @pytest.mark.asyncio

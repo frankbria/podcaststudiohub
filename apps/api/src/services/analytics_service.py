@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import Boolean, Float, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..utils.datetime_utils import utcnow
+from ..utils.datetime_utils import to_naive_utc, utcnow
 
 from ..models.analytics_event import (
 	AnalyticsEvent,
@@ -65,10 +65,9 @@ async def get_episode_analytics(
 	date_to: Optional[datetime] = None,
 ) -> Dict[str, Any]:
 	"""Aggregate analytics events for an episode within a date range."""
-	if date_from is None:
-		date_from = utcnow() - timedelta(days=30)
-	if date_to is None:
-		date_to = utcnow()
+	# created_at is offset-naive UTC, so normalize caller-supplied bounds to naive UTC
+	date_from = utcnow() - timedelta(days=30) if date_from is None else to_naive_utc(date_from)
+	date_to = utcnow() if date_to is None else to_naive_utc(date_to)
 
 	window = (
 		(AnalyticsEvent.episode_id == episode_id)

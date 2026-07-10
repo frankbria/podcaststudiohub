@@ -79,7 +79,6 @@ def test_security_headers_present(server_blocks: list[str]):
 	https_block = _block_matching(server_blocks, "listen 443 ssl")
 	required = [
 		"Strict-Transport-Security",
-		"Content-Security-Policy",
 		"X-Frame-Options",
 		"X-Content-Type-Options",
 		"Referrer-Policy",
@@ -106,26 +105,28 @@ def test_frame_options_denies_frame(server_blocks: list[str]):
 	assert "deny" in m.group(1).lower() or "sameorigin" in m.group(1).lower()
 
 
-def test_csp_allows_s3_audio(server_blocks: list[str]):
-	"""Episode audio streams / downloads from S3 (apps/web episode page +
-	DownloadButton). CSP must not block it — both media-src (<audio>) and
-	connect-src (fetch download) must allow an S3 origin."""
+def test_no_server_level_csp_header(server_blocks: list[str]):
+	"""The document CSP is a per-request nonce policy set by the Next.js
+	middleware (issue #307). nginx must NOT also add_header a CSP at server
+	level: browsers enforce the intersection of multiple CSP headers, so a
+	second policy without the nonce would block every framework script.
+	The /static/ location keeps its own CSP for on-disk assets, which is why
+	this walks server-level lines only (location bodies excluded)."""
 	https_block = _block_matching(server_blocks, "listen 443 ssl")
-	m = re.search(r"Content-Security-Policy\s+\"([^\"]+)\"", https_block, re.I)
-	assert m, "Content-Security-Policy header missing"
-	csp = m.group(1)
-
-	def directive(src: str) -> str:
-		match = re.search(rf"{src}\s+([^;]+)", csp)
-		return match.group(1) if match else ""
-
-	# An S3 host must be permitted for both media playback and fetch downloads.
-	assert any(".s3." in tok for tok in directive("media-src").split()), (
-		"media-src must allow the S3 audio host (episode playback)"
+	server_level = re.split(r"location\s", https_block)[0]
+	assert "content-security-policy" not in server_level.lower(), (
+		"server-level CSP would stack with the app's nonce CSP — remove it"
 	)
-	assert any(".s3." in tok for tok in directive("connect-src").split()), (
-		"connect-src must allow the S3 audio host (download fetch)"
-	)
+
+
+def test_no_unsafe_inline_script_src(nginx_conf_raw: str):
+	"""Issue #307: no CSP shipped by nginx may allow inline scripts."""
+	for csp in re.findall(r"Content-Security-Policy\s+\"([^\"]+)\"", nginx_conf_raw, re.I):
+		m = re.search(r"script-src\s+([^;]+)", csp)
+		if m:
+			assert "'unsafe-inline'" not in m.group(1), (
+				"script-src must not allow 'unsafe-inline'"
+			)
 
 
 # ── AC1: Let's Encrypt cert paths + renewal webroot ─────────────────────────

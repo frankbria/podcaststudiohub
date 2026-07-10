@@ -62,7 +62,9 @@ export default async function middleware(req: NextRequest) {
     }
   }
 
-  const nonce = Buffer.from(crypto.randomUUID()).toString('base64')
+  // btoa, not Buffer: Web API only, so the middleware has no Node-runtime
+  // coupling regardless of where it executes.
+  const nonce = btoa(crypto.randomUUID())
   const csp = buildCsp(nonce)
 
   const requestHeaders = new Headers(req.headers)

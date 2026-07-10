@@ -2,6 +2,11 @@ version: 2
 updates:
   # Keep GitHub Actions (including SHA-pinned third-party actions) up to date.
   - package-ecosystem: "github-actions"
+    cooldown:
+      default-days: 14
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 7
     directory: "/"
     schedule:
       interval: "weekly"
@@ -10,6 +15,8 @@ updates:
   # Python backend (uv.lock + pyproject.toml) — CVE alerting for the 200+
   # package closure (#306).
   - package-ecosystem: "uv"
+    cooldown:
+      default-days: 14
     directory: "/apps/api"
     schedule:
       interval: "weekly"
@@ -18,6 +25,11 @@ updates:
   # npm workspace monorepo: the root package-lock.json covers apps/web too,
   # so a single npm entry at "/" scans the whole JS tree (#306).
   - package-ecosystem: "npm"
+    cooldown:
+      default-days: 14
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 7
     directory: "/"
     schedule:
       interval: "weekly"

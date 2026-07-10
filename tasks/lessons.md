@@ -1,5 +1,23 @@
 # Lessons
 
+## 2026-07-10 (#312, PR #371)
+- **Demo against the real schema, not mocks — it catches what mocked suites
+  structurally can't.** The #312 demo (real task + real Postgres, only HTTP
+  stubbed) crashed on `episodes_status_check`: migration 001 never allowed
+  `distributing`/`composing`/`uploading`/`distribution_failed`, so every
+  distribution callback's write had been silently failing in production (the
+  except-and-log swallowed the CheckViolation). 1717 mocked/API tests were green
+  through it. Pairs with the standing "verify pg_constraint, not model files"
+  lesson — model-metadata `create_all` would also have hidden it.
+- **Suite-order poisoning: mocked-podcastfy workflow tests break psycopg Jsonb
+  adaptation** for any later sync-ORM JSONB insert (`cannot adapt type 'Jsonb'`).
+  Bisect with `pytest <suspect>.py <victim>.py`; filed #372. Workaround: assert
+  DDL via `pg_get_constraintdef` (SELECT-only) instead of inserting rows.
+- **Migration downgrades must handle data the upgrade enabled.** Re-narrowing a
+  CHECK fails validation once rows carry the new values — normalize them in
+  `downgrade()` first. (Caught by post-PR GLM review; verify with a local
+  `alembic downgrade && upgrade` round-trip.)
+
 ## issue-lifecycle: skill invocation authorizes the whole flow through merge
 - **2026-06-26 (#296/PR #331):** During an autonomous tick I finished the
   implementation but held push/PR/merge waiting for plan re-confirmation. User:

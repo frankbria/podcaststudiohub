@@ -9,19 +9,13 @@ a redelivery after a successful publish re-publishes to Spotify/Apple or re-POST
 
 ## Steps
 
-- [ ] 1. Tests first (RED): unit tests in `apps/api/tests/unit/`
-  - services: `publish_episode(idempotency_key=...)` sets `Idempotency-Key` header; absent → no header
-  - webhook: key in header AND payload
-  - task: platform already `complete` in generation_progress → short-circuit, no publish/POST, returns stored result
-  - task: after successful publish, success merged into `generation_progress["distribution"][platform]` in-task (locked session)
-- [ ] 2. `spotify_service.py` / `apple_podcasts_service.py`: optional `idempotency_key` param → `Idempotency-Key` header
-- [ ] 3. `platform_distribution.py`:
-  - derive `key = f"{episode_id}:{platform}"` in task; thread through `_distribute_to_spotify/_apple/_via_webhook`
-  - webhook: key as header + `idempotency_key` payload field (keep SSRF pinning/`allow_redirects=False`)
-  - pre-check: read episode `with_for_update` in existing session; skip if `distribution[platform].status == "complete"`
-  - after success result: locked merge of completion entry (same shape as `on_distribution_complete`); share the merge helper with callbacks.py to avoid drift
-- [ ] 4. Full test suite + lint (ruff/mypy) green
-- [ ] 5. Deslop scan, third-party review (opencode/GLM pre-PR), PR, demo, CI gate, merge
+- [x] 1. Tests first (RED): 17 unit tests (`test_distribution_idempotency.py`)
+- [x] 2. Services: optional `idempotency_key` → `Idempotency-Key` header
+- [x] 3. `platform_distribution.py`: `_idempotency_key()` helper (derived in helpers, not threaded — shorter diff), webhook header+payload, locked pre-check skip, in-task `record_platform_distribution` (extracted from `on_distribution_complete`)
+- [x] 4. Full suite 1720 passed, coverage 94.05%; ruff clean
+- [x] 5. Reviews (opencode pre-PR + post-PR, triaged), PR #371, demo posted
+- [x] 6. **Demo-found bug**: migration 001 `episodes_status_check` rejected `distributing`/`composing`/`uploading`/`distribution_failed` → callbacks silently never recorded results. Fixed via migration 016 + constraint regression test + web status labels. Filed #372 (psycopg Jsonb test-isolation poisoning).
+- [x] 7. CI green (12 checks) → squash-merged as PR #371 (2026-07-10)
 
 ## Acceptance criteria (from issue)
 - Pre-publish check skips platforms already recorded complete (locked read)

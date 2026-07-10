@@ -383,11 +383,14 @@ async def test_delete_nonexistent_episode(client, project_and_auth):
 
 
 @pytest.mark.asyncio
-async def test_delete_episode_with_s3_key_calls_storage_delete(
-	client, project_and_auth, set_system_fields
+async def test_delete_episode_with_s3_key_queues_outbox_row(
+	client, project_and_auth, set_system_fields, test_db
 ):
-	"""Deleting an episode with an s3_key removes the S3 object (#308)."""
-	from unittest.mock import AsyncMock, patch
+	"""Deleting an episode with an s3_key queues a durable outbox row instead of
+	deleting from S3 synchronously (#366)."""
+	from unittest.mock import patch
+	from sqlalchemy import select
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
 
 	project_id, headers = project_and_auth
 	create_response = await client.post("/episodes", headers=headers, json={
@@ -398,21 +401,27 @@ async def test_delete_episode_with_s3_key_calls_storage_delete(
 	episode_id = create_response.json()["id"]
 	await set_system_fields(episode_id, s3_key="podcasts/episode.mp3")
 
-	with patch("src.services.episode_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+	with patch("src.services.episode_service.drain_storage_deletion_outbox") as mock_drain:
+		mock_drain.delay = lambda: None
 		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
 
 	assert response.status_code == 204
-	mock_instance.delete_file.assert_called_once_with("podcasts/episode.mp3")
+
+	result = await test_db.execute(
+		select(StorageDeletionOutbox).where(StorageDeletionOutbox.s3_key == "podcasts/episode.mp3")
+	)
+	row = result.scalar_one()
+	assert row.file_path is None
 
 
 @pytest.mark.asyncio
-async def test_delete_episode_without_s3_key_skips_storage_delete(
-	client, project_and_auth
+async def test_delete_episode_without_s3_key_queues_no_outbox_row(
+	client, project_and_auth, test_db
 ):
-	"""Deleting an episode with no s3_key makes no S3 call (#308)."""
-	from unittest.mock import AsyncMock, patch
+	"""Deleting an episode with no s3_key/file_path queues no outbox row (#366)."""
+	from unittest.mock import patch
+	from sqlalchemy import select
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
 
 	project_id, headers = project_and_auth
 	create_response = await client.post("/episodes", headers=headers, json={
@@ -422,34 +431,35 @@ async def test_delete_episode_without_s3_key_skips_storage_delete(
 	})
 	episode_id = create_response.json()["id"]
 
-	with patch("src.services.episode_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+	with patch("src.services.episode_service.drain_storage_deletion_outbox") as mock_drain:
+		mock_drain.delay = lambda: None
 		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
 
 	assert response.status_code == 204
-	mock_instance.delete_file.assert_not_called()
+
+	result = await test_db.execute(select(StorageDeletionOutbox))
+	assert result.scalars().all() == []
 
 
 @pytest.mark.asyncio
-async def test_delete_episode_s3_failure_does_not_block_delete(
+async def test_delete_episode_succeeds_when_drain_delay_fails(
 	client, project_and_auth, set_system_fields
 ):
-	"""An S3 delete failure is best-effort: the episode row is still removed (#308)."""
-	from unittest.mock import AsyncMock, patch
+	"""The post-commit best-effort drain trigger is best-effort: a broker-down
+	failure never blocks the delete or the response (#366)."""
+	from unittest.mock import patch
 
 	project_id, headers = project_and_auth
 	create_response = await client.post("/episodes", headers=headers, json={
 		"project_id": project_id,
 		"episode_number": 1,
-		"episode_metadata": {"title": "Flaky S3 Episode", "description": "Desc"}
+		"episode_metadata": {"title": "Flaky Broker Episode", "description": "Desc"}
 	})
 	episode_id = create_response.json()["id"]
 	await set_system_fields(episode_id, s3_key="podcasts/episode.mp3")
 
-	with patch("src.services.episode_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock(side_effect=Exception("S3 unavailable"))
+	with patch("src.services.episode_service.drain_storage_deletion_outbox") as mock_drain:
+		mock_drain.delay.side_effect = Exception("broker unavailable")
 		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
 
 	assert response.status_code == 204
@@ -459,11 +469,15 @@ async def test_delete_episode_s3_failure_does_not_block_delete(
 
 
 @pytest.mark.asyncio
-async def test_delete_episode_removes_local_files(
-	client, project_and_auth, set_system_fields, tmp_path
+async def test_delete_episode_queues_local_file_paths_for_outbox(
+	client, project_and_auth, set_system_fields, test_db, tmp_path
 ):
-	"""Deleting an episode removes its local audio and transcript files (#308)."""
+	"""Deleting an episode queues its local audio/transcript paths for the GC
+	worker instead of removing them synchronously (#366)."""
 	import os
+	from unittest.mock import patch
+	from sqlalchemy import select
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
 
 	project_id, headers = project_and_auth
 	create_response = await client.post("/episodes", headers=headers, json={
@@ -484,20 +498,29 @@ async def test_delete_episode_removes_local_files(
 		transcript_path=str(transcript_path),
 	)
 
-	response = await client.delete(f"/episodes/{episode_id}", headers=headers)
+	with patch("src.services.episode_service.drain_storage_deletion_outbox") as mock_drain:
+		mock_drain.delay = lambda: None
+		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
 	assert response.status_code == 204
 
-	assert not os.path.exists(audio_path)
-	assert not os.path.exists(transcript_path)
+	# Not removed synchronously — deletion is deferred to the GC worker.
+	assert os.path.exists(audio_path)
+	assert os.path.exists(transcript_path)
+
+	result = await test_db.execute(select(StorageDeletionOutbox.file_path))
+	queued_paths = {row[0] for row in result.all()}
+	assert queued_paths == {str(audio_path), str(transcript_path)}
 
 
 @pytest.mark.asyncio
-async def test_delete_episode_also_deletes_composition_s3_key(
+async def test_delete_episode_also_queues_composition_s3_key(
 	client, project_and_auth, test_db
 ):
-	"""Deleting an episode also deletes its EpisodeComposition's S3 audio (#308)."""
-	from unittest.mock import AsyncMock, patch
+	"""Deleting an episode also queues its EpisodeComposition's S3 audio (#366)."""
+	from unittest.mock import patch
+	from sqlalchemy import select
 	from src.models.episode_composition import EpisodeComposition
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
 	from src.services.auth_service import verify_jwt_token
 
 	project_id, headers = project_and_auth
@@ -519,13 +542,40 @@ async def test_delete_episode_also_deletes_composition_s3_key(
 	))
 	await test_db.flush()
 
-	with patch("src.services.episode_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+	with patch("src.services.episode_service.drain_storage_deletion_outbox") as mock_drain:
+		mock_drain.delay = lambda: None
 		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
 
 	assert response.status_code == 204
-	mock_instance.delete_file.assert_called_once_with("compositions/final.mp3")
+
+	result = await test_db.execute(
+		select(StorageDeletionOutbox).where(StorageDeletionOutbox.s3_key == "compositions/final.mp3")
+	)
+	assert result.scalar_one() is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_episode_triggers_drain_task(
+	client, project_and_auth, set_system_fields
+):
+	"""Deleting an episode with a queued key best-effort triggers a prompt drain
+	so audio disappears promptly instead of waiting for the beat schedule (#366)."""
+	from unittest.mock import patch
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Drain Trigger Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+	await set_system_fields(episode_id, s3_key="podcasts/episode.mp3")
+
+	with patch("src.services.episode_service.drain_storage_deletion_outbox") as mock_drain:
+		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 204
+	mock_drain.delay.assert_called_once_with()
 
 
 # ============================================================================

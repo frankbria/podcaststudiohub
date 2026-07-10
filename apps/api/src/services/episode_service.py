@@ -6,7 +6,6 @@ status filtering, and generation status management. RLS ensures tenant isolation
 """
 
 import logging
-import os
 
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,9 +18,10 @@ from fastapi import HTTPException, status
 
 from ..models import Episode, Project
 from ..models.episode_composition import EpisodeComposition
+from ..models.storage_deletion_outbox import StorageDeletionOutbox
 from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
+from ..tasks.maintenance import drain_storage_deletion_outbox
 from ..utils.datetime_utils import to_naive_utc
-from .storage_service import StorageService
 
 logger = logging.getLogger(__name__)
 
@@ -320,10 +320,15 @@ async def delete_episode(
 	Unlike projects, episodes use hard delete (no soft delete).
 	Cascade deletes related content sources.
 
-	Best-effort removes the episode's S3 audio object, its EpisodeComposition's
-	composed S3 audio object (if any), and local file artifacts (episode audio,
-	transcript, composed audio) before deleting the database row. Storage and
-	filesystem cleanup failures are logged but never block the DB delete.
+	Queues the episode's S3 audio object, its EpisodeComposition's composed S3
+	audio object (if any), and local file artifacts (episode audio, transcript,
+	composed audio) onto the durable storage_deletion_outbox in the same
+	transaction as the row delete, instead of deleting from storage inline
+	(issue #366). A commit failure here therefore leaves storage untouched —
+	nothing is deleted from S3/disk until the row delete itself is durable. The
+	GC worker (drain_storage_deletion_outbox) performs the actual deletion,
+	retrying until it succeeds; a best-effort post-commit trigger below makes
+	that happen promptly instead of waiting for the next beat tick.
 
 	Args:
 		db: Database session
@@ -340,13 +345,8 @@ async def delete_episode(
 			composition.composed_s3_key if composition else None,
 		) if key
 	]
-	if s3_keys:
-		storage = StorageService()
-		for key in s3_keys:
-			try:
-				await storage.delete_file(key)
-			except Exception:
-				logger.warning(f"Failed to delete S3 object {key} for episode {episode.id}")
+	for key in s3_keys:
+		db.add(StorageDeletionOutbox(tenant_id=episode.tenant_id, s3_key=key))
 
 	local_paths = [
 		path for path in (
@@ -356,13 +356,16 @@ async def delete_episode(
 		) if path
 	]
 	for path in local_paths:
-		try:
-			os.remove(path)
-		except OSError:
-			logger.warning(f"Failed to remove local file {path} for episode {episode.id}")
+		db.add(StorageDeletionOutbox(tenant_id=episode.tenant_id, file_path=path))
 
 	await db.delete(episode)
 	await db.commit()
+
+	if s3_keys or local_paths:
+		try:
+			drain_storage_deletion_outbox.delay()
+		except Exception:
+			logger.warning(f"Failed to trigger storage deletion drain for episode {episode.id}")
 
 
 async def batch_create_episodes(

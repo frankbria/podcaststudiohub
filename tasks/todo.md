@@ -1,4 +1,4 @@
-# #306 — Dependabot pip/npm CVE alerting + auth-crypto hardening (in progress)
+# #306 — COMPLETE (PR #351 squash-merged 2026-07-09, issue closed)
 
 **Plan source**: self-authored (no plan comment on issue), verified against code 2026-07-09.
 **Branch**: `fix/issue-306-cve-alerting-dep-hardening`
@@ -23,7 +23,7 @@
 - [x] dependabot.yml: `uv` (/apps/api) + `npm` (/) — npm workspaces mean root covers web
 - [x] pytest.ini: ignore google.generativeai EOL FutureWarning ([\s\S]* — message starts with newline)
 - [x] Deslop + opencode pre-PR review (approve; watch-items: dependabot `uv` ecosystem recognition, first real Actions run of the gate)
-- [ ] PR → post-PR review → demo (hard gate) → CI gate → docs sync → merge
+- [x] PR #351 → post-PR review (approve) → demo (caught CI JWT-key-length landmine, fixed) → CI green incl. new security-audit job → docs sync (.env.example 32-char note) → squash-merged
 
 ## Acceptance criteria (issue #306)
 - [ ] pip + npm Dependabot ecosystems added

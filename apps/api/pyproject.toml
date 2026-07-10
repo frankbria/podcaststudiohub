@@ -9,7 +9,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
+    "uvicorn[standard]>=0.51.0",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
     "email-validator>=2.0.0",

@@ -450,8 +450,16 @@ Nginx reverse proxy configuration is in `deployment/nginx/podcastfy.conf`.
 - `https://dev.podcaststudiohub.me` → `localhost:3010` (Frontend)
 
 The config terminates TLS 1.2/1.3 only and sends every request through a
-301 HTTP→HTTPS redirect, plus HSTS / CSP / X-Frame-Options /
+301 HTTP→HTTPS redirect, plus HSTS / X-Frame-Options /
 X-Content-Type-Options / Referrer-Policy. Port 80 never reaches the app.
+
+The document Content-Security-Policy is **not** set by nginx: it is a
+per-request nonce policy (no `'unsafe-inline'` script-src) minted by the
+Next.js middleware (`apps/web/src/middleware.ts`, issue #307). Do not add a
+CSP `add_header` back to the server block — browsers enforce the intersection
+of multiple CSP headers, which would block every nonce'd script. The
+`/static/` location keeps its own strict CSP for assets nginx serves
+directly.
 
 ## SSL / TLS (Let's Encrypt)
 

@@ -58,6 +58,7 @@ class ApplePodcastsService:
 		show_id: str,
 		api_key: str,
 		metadata: Dict[str, Any],
+		idempotency_key: Optional[str] = None,
 	) -> Dict[str, Any]:
 		"""
 		Publish a podcast episode to Apple Podcasts Connect.
@@ -74,6 +75,8 @@ class ApplePodcastsService:
 				- audio_url (str): Publicly accessible audio file URL
 				- publish_date (str): ISO-8601 datetime string
 				- explicit (bool): Whether episode contains explicit content
+			idempotency_key: Stable token sent as an ``Idempotency-Key`` header
+				so a retried publish deduplicates server-side (issue #312)
 
 		Returns:
 			Dict with keys:
@@ -96,6 +99,8 @@ class ApplePodcastsService:
 			"Authorization": f"Bearer {api_key}",
 			"Content-Type": "application/json",
 		}
+		if idempotency_key:
+			headers["Idempotency-Key"] = idempotency_key
 
 		publish_date = metadata.get(
 			"publish_date",

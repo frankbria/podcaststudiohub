@@ -8,7 +8,7 @@ Raises typed exceptions to enable selective retry logic:
 """
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -56,6 +56,7 @@ class SpotifyService:
 		show_id: str,
 		access_token: str,
 		metadata: Dict[str, Any],
+		idempotency_key: Optional[str] = None,
 	) -> Dict[str, Any]:
 		"""
 		Publish a podcast episode to Spotify for Podcasters.
@@ -73,6 +74,8 @@ class SpotifyService:
 				- duration_seconds (float): Episode duration
 				- publish_date (str): ISO-8601 date string (e.g. "2024-01-15")
 				- explicit (bool): Whether episode contains explicit content
+			idempotency_key: Stable token sent as an ``Idempotency-Key`` header
+				so a retried publish deduplicates server-side (issue #312)
 
 		Returns:
 			Dict with keys:
@@ -94,6 +97,8 @@ class SpotifyService:
 			"Authorization": f"Bearer {access_token}",
 			"Content-Type": "application/json",
 		}
+		if idempotency_key:
+			headers["Idempotency-Key"] = idempotency_key
 
 		payload: Dict[str, Any] = {
 			"name": metadata.get("title", ""),

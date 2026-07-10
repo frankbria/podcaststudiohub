@@ -12,7 +12,10 @@ YouTube URLs arrive via ``urls``; file/PDF sources arrive pre-extracted via
 """
 
 import inspect
+import os
+import shutil
 import sys
+import tempfile
 import types
 from typing import Any
 from unittest.mock import MagicMock, create_autospec, patch
@@ -229,6 +232,88 @@ def test_task_returns_failed_result_on_exception():
 	assert result["status"] == "failed"
 	assert "Podcastfy crashed" in result["error"]
 	assert result["audio_file_path"] is None
+
+
+# ============================================================================
+# ISSUE #309 — transcript_path must not be fabricated; engine output must be
+# routed into a per-run temp dir so post-upload cleanup can remove it.
+# ============================================================================
+
+def _engine_output_dirs(mock_gen) -> dict:
+	"""Extract the output_directories the task injected into conversation_config."""
+	cc = mock_gen.call_args.kwargs.get("conversation_config")
+	assert cc is not None, "task must pass conversation_config to generate_podcast"
+	return cc["text_to_speech"]["output_directories"]
+
+
+def test_success_result_transcript_path_is_none():
+	"""podcastfy never returns a transcript path when generating audio, so the
+	task must persist None — not a string-substituted path to a file that does
+	not exist (issue #309)."""
+	result, mock_gen = _run_task(episode_id=str(uuid4()), urls=["https://example.com"])
+	assert result["status"] == "success"
+	assert result["transcript_path"] is None
+	shutil.rmtree(_engine_output_dirs(mock_gen)["audio"], ignore_errors=True)
+
+
+def test_task_routes_engine_output_to_per_run_temp_dir():
+	"""Both audio and transcript output dirs must be the same per-run directory
+	under the system temp root, named with the cleanup-recognized prefix."""
+	_, mock_gen = _run_task(episode_id=str(uuid4()), urls=["https://example.com"])
+	dirs = _engine_output_dirs(mock_gen)
+
+	assert dirs["audio"] == dirs["transcripts"]
+	run_dir = os.path.realpath(dirs["audio"])
+	temp_root = os.path.realpath(tempfile.gettempdir())
+	assert os.path.commonpath([temp_root, run_dir]) == temp_root
+	assert os.path.basename(run_dir).startswith("podcastfy-run-")
+	assert os.path.isdir(run_dir), "run dir must exist before the engine writes to it"
+	shutil.rmtree(run_dir, ignore_errors=True)
+
+
+def test_task_preserves_user_conversation_config():
+	"""Injecting output_directories must not clobber user-provided conversation
+	config keys (top-level or inside text_to_speech), nor mutate the caller's dict."""
+	user_cc = {"word_count": 500, "text_to_speech": {"ending_message": "bye"}}
+	_, mock_gen = _run_task(
+		episode_id=str(uuid4()),
+		urls=["https://example.com"],
+		conversation_config=user_cc,
+	)
+	cc = mock_gen.call_args.kwargs["conversation_config"]
+	assert cc["word_count"] == 500
+	assert cc["text_to_speech"]["ending_message"] == "bye"
+	assert "output_directories" in cc["text_to_speech"]
+	# The caller's dict must not be mutated in place.
+	assert "output_directories" not in user_cc["text_to_speech"]
+	shutil.rmtree(cc["text_to_speech"]["output_directories"]["audio"], ignore_errors=True)
+
+
+def test_terminal_failure_cleans_up_run_dir():
+	"""When generation fails terminally, the attempt's run dir must be removed
+	so failed attempts don't leak temp artifacts either."""
+	run_dir = tempfile.mkdtemp(prefix="podcastfy-run-")
+	try:
+		mock_client, mock_modules = _mock_podcastfy_modules()
+		mock_client.generate_podcast = create_autospec(
+			real_generate_podcast, side_effect=RuntimeError("boom")
+		)
+		with patch.object(generate_podcast_task, 'update_state'), \
+			 patch.dict(sys.modules, mock_modules), \
+			 patch('src.tasks.podcast_generation.tempfile.mkdtemp', return_value=run_dir), \
+			 patch.object(
+				generate_podcast_task,
+				"retry",
+				side_effect=generate_podcast_task.MaxRetriesExceededError(),
+			 ):
+			result = generate_podcast_task.run(
+				episode_id=str(uuid4()),
+				urls=["https://example.com"],
+			)
+		assert result["status"] == "failed"
+		assert not os.path.exists(run_dir)
+	finally:
+		shutil.rmtree(run_dir, ignore_errors=True)
 
 
 class TestBuildPodcastS3Key:

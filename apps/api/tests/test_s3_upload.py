@@ -254,6 +254,45 @@ class TestFinalizeEpisodeGenerationTask:
         assert os.path.isfile(episode.file_path)
         assert episode.file_path != str(src_audio)
 
+    def test_no_s3_path_cleans_up_run_dir_after_persisting(self, tmp_path):
+        """Issue #309: with no S3 bucket, once the audio is copied into persistent
+        storage the per-run temp dir (audio + transcript) must be removed."""
+        import shutil
+
+        episode_id = str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id)
+
+        run_dir = tempfile.mkdtemp(prefix="podcastfy-run-")
+        src_audio = os.path.join(run_dir, "podcast_abc.mp3")
+        transcript = os.path.join(run_dir, "transcript_abc.txt")
+        storage_dir = tmp_path / "audio"
+        try:
+            with open(src_audio, "wb") as f:
+                f.write(b"FAKE_MP3")
+            with open(transcript, "w") as f:
+                f.write("transcript")
+            generation_result = self._make_generation_result(
+                audio_file_path=src_audio, transcript_path=None
+            )
+            mock_db = self._make_db_context_manager(episode)
+
+            with (
+                patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+                patch("src.tasks.podcast_generation.settings") as mock_settings,
+            ):
+                mock_settings.AWS_S3_BUCKET = None
+                mock_settings.LOCAL_AUDIO_STORAGE_PATH = str(storage_dir)
+                result = self._invoke_finalize(episode_id, generation_result, mock_db)
+
+            assert result["status"] == "success"
+            assert episode.generation_status == "complete"
+            assert os.path.isfile(episode.file_path)
+            assert not os.path.exists(run_dir), (
+                "run dir should be removed once the persistent copy exists"
+            )
+        finally:
+            shutil.rmtree(run_dir, ignore_errors=True)
+
     def test_populates_s3_url_on_successful_upload(self):
         """Episode.s3_url and s3_key are populated after successful S3 upload."""
         episode_id = str(uuid.uuid4())
@@ -669,6 +708,71 @@ class TestTempFileCleanup:
 
         assert result["status"] == "success"
         assert persistent.exists(), "non-temp file must be preserved"
+
+    def test_run_dir_removed_after_successful_upload(self):
+        """Issue #309: uploading a file that lives in a podcastfy per-run dir must
+        remove the whole dir — audio AND the transcript beside it."""
+        import shutil
+        from src.tasks.s3_upload import GENERATION_RUN_DIR_PREFIX
+
+        run_dir = tempfile.mkdtemp(prefix=GENERATION_RUN_DIR_PREFIX)
+        audio = os.path.join(run_dir, "podcast_abc.mp3")
+        transcript = os.path.join(run_dir, "transcript_abc.txt")
+        try:
+            with open(audio, "wb") as f:
+                f.write(b"fake audio bytes")
+            with open(transcript, "w") as f:
+                f.write("fake transcript")
+
+            with (
+                patch("src.tasks.s3_upload.settings") as mock_settings,
+                patch("src.tasks.s3_upload.boto3") as mock_boto,
+            ):
+                mock_settings.AWS_REGION = "us-east-1"
+                mock_boto.client.return_value = MagicMock()
+
+                result = self._invoke_upload(
+                    file_path=audio,
+                    s3_key="test/key.mp3",
+                    bucket_name="my-bucket",
+                )
+
+            assert result["status"] == "success"
+            assert not os.path.exists(run_dir), (
+                "the per-run dir (audio + transcript) should be removed after upload"
+            )
+        finally:
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+    def test_run_dir_outside_temp_root_is_preserved(self, tmp_path):
+        """Guard: a podcastfy-run-* directory OUTSIDE the system temp root must
+        never be deleted (nor its files)."""
+        fake_temp_root = tmp_path / "systmp"
+        fake_temp_root.mkdir()
+        run_dir = tmp_path / "podcastfy-run-persistent"
+        run_dir.mkdir()
+        audio = run_dir / "podcast.mp3"
+        audio.write_bytes(b"keep me")
+        transcript = run_dir / "transcript.txt"
+        transcript.write_text("keep me")
+
+        with (
+            patch("src.tasks.s3_upload.settings") as mock_settings,
+            patch("src.tasks.s3_upload.boto3") as mock_boto,
+            patch("src.tasks.s3_upload.os.path.getsize", return_value=7),
+            patch("src.tasks.s3_upload.tempfile.gettempdir", return_value=str(fake_temp_root)),
+        ):
+            mock_settings.AWS_REGION = "us-east-1"
+            mock_boto.client.return_value = MagicMock()
+
+            result = self._invoke_upload(
+                file_path=str(audio),
+                s3_key="test/key.mp3",
+                bucket_name="my-bucket",
+            )
+
+        assert result["status"] == "success"
+        assert audio.exists() and transcript.exists(), "non-temp run dir must be preserved"
 
     def test_temp_file_kept_while_retrying(self):
         """Retry path: a transient error that triggers a retry must NOT delete

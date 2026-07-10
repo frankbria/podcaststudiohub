@@ -173,6 +173,47 @@ class TestOnCompositionComplete:
 		assert progress.get("duration_seconds") == 182.5
 		mock_session.commit.assert_called_once()
 
+	def test_removes_raw_generation_artifacts_after_composition(self):
+		"""Issue #309: once the composed file supersedes the raw generated audio,
+		the raw per-run dir (audio + transcript) must be removed — the composed
+		file itself is later cleaned by upload_to_s3_task."""
+		import os
+		import shutil
+		import tempfile
+
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+
+		run_dir = tempfile.mkdtemp(prefix="podcastfy-run-")
+		raw_audio = os.path.join(run_dir, "podcast_raw.mp3")
+		transcript = os.path.join(run_dir, "transcript_raw.txt")
+		try:
+			with open(raw_audio, "wb") as f:
+				f.write(b"raw audio")
+			with open(transcript, "w") as f:
+				f.write("transcript")
+			episode.file_path = raw_audio
+			mock_ctx, mock_session = _make_sync_session(episode)
+
+			result = {
+				"status": "success",
+				"output_path": "/tmp/composed.mp3",
+				"duration_seconds": 10.0,
+			}
+
+			from src.tasks.callbacks import on_composition_complete
+
+			with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+				_invoke_task(on_composition_complete, result=result, episode_id=episode_id)
+
+			assert episode.file_path == "/tmp/composed.mp3"
+			mock_session.commit.assert_called_once()
+			assert not os.path.exists(run_dir), (
+				"raw generation run dir should be removed once composition succeeded"
+			)
+		finally:
+			shutil.rmtree(run_dir, ignore_errors=True)
+
 	def test_skips_update_when_composition_failed(self):
 		"""No database update happens when result status is not 'success'."""
 		episode_id = str(uuid.uuid4())

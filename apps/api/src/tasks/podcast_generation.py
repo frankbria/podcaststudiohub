@@ -4,6 +4,7 @@ Wraps the existing podcastfy CLI functionality
 """
 import os
 import shutil
+import tempfile
 import time
 import uuid as uuid_module
 import logging
@@ -18,7 +19,11 @@ from src.database import SyncSessionLocal
 from src.models.episode import Episode
 from src.tasks.callbacks import _update_episode, _utcnow_iso
 from src.tasks.idempotency import acquire_generation_lock, release_generation_lock
-from src.tasks.s3_upload import upload_to_s3_task
+from src.tasks.s3_upload import (
+    GENERATION_RUN_DIR_PREFIX,
+    _cleanup_temp_file,
+    upload_to_s3_task,
+)
 from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
@@ -83,6 +88,10 @@ def _persist_local_audio(audio_file_path: str, episode_id: str) -> str:
     dest = os.path.join(storage_dir, f"episode-{episode_id}.mp3")
     if os.path.abspath(dest) == os.path.abspath(audio_file_path):
         return audio_file_path
+    if os.path.isfile(dest) and not os.path.isfile(audio_file_path):
+        # A finalize retry after the temp source was already cleaned up (issue
+        # #309): the persistent copy exists, so reuse it instead of failing.
+        return dest
     shutil.copy2(audio_file_path, dest)
     return dest
 
@@ -195,7 +204,7 @@ def generate_podcast_task(
         {
             "status": "success" | "failed",
             "audio_file_path": str,
-            "transcript_path": str,
+            "transcript_path": None,  # engine transcript is a temp artifact (#309)
             "duration_seconds": float,
             "file_size_bytes": int,
             "error": Optional[str]
@@ -204,6 +213,7 @@ def generate_podcast_task(
     task_id = self.request.id or "unknown"
     is_retry = (self.request.retries or 0) > 0
     lock_held = False
+    run_dir: Optional[str] = None
 
     try:
         # Idempotency guard (issue #295): short-circuit before any paid work so a
@@ -265,6 +275,19 @@ def generate_podcast_task(
             }
         )
 
+        # Route engine output (audio + transcript) into a per-run temp dir via
+        # podcastfy's supported text_to_speech.output_directories config (deep-
+        # merged into its defaults). Otherwise podcastfy writes to persistent
+        # data/audio + data/transcripts, which nothing ever cleans up (issue #309).
+        run_dir = tempfile.mkdtemp(prefix=GENERATION_RUN_DIR_PREFIX)
+        engine_conversation_config = dict(conversation_config or {})
+        engine_tts_config = dict(engine_conversation_config.get("text_to_speech") or {})
+        engine_tts_config["output_directories"] = {
+            "audio": run_dir,
+            "transcripts": run_dir,
+        }
+        engine_conversation_config["text_to_speech"] = engine_tts_config
+
         # Generate the podcast using existing CLI.
         # podcastfy 0.4.1 has no `file`/`youtube_urls` kwargs: YouTube URLs flow
         # through `urls`, and file/PDF sources are pre-extracted into `text`.
@@ -274,7 +297,7 @@ def generate_podcast_task(
             image_paths=image_paths,
             topic=topic,
             tts_model=tts_model,
-            conversation_config=conversation_config,
+            conversation_config=engine_conversation_config,
             longform=longform,
         )
 
@@ -321,7 +344,10 @@ def generate_podcast_task(
         generation_result = {
             "status": "success",
             "audio_file_path": audio_file_path,
-            "transcript_path": audio_file_path.replace('.mp3', '_transcript.txt'),
+            # podcastfy does not return the transcript path when generating
+            # audio; the transcript is a temp artifact deleted with the run dir
+            # after upload, so persist None rather than a fabricated path (#309).
+            "transcript_path": None,
             "duration_seconds": duration_seconds,
             "file_size_bytes": file_size_bytes,
             "error": None
@@ -435,6 +461,8 @@ def generate_podcast_task(
         # episode does not stay stuck at 'queued' (issue #294).
         msg = "Generation exceeded the soft time limit"
         logger.error("Podcast generation soft-timeout for episode %s", episode_id)
+        if run_dir:
+            shutil.rmtree(run_dir, ignore_errors=True)
         _update_episode(
             episode_id,
             updates={"generation_status": "failed"},
@@ -469,6 +497,10 @@ def generate_podcast_task(
             f"Podcast generation error for episode {episode_id}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
         )
+        # Each attempt creates its own run dir (a retry re-executes the whole
+        # task body), so this attempt's partial artifacts are dead weight (#309).
+        if run_dir:
+            shutil.rmtree(run_dir, ignore_errors=True)
         self.update_state(
             state='PROGRESS',
             meta={
@@ -633,9 +665,11 @@ def finalize_episode_generation_task(
                     return {"status": "failed", "error": error_msg}
             else:
                 # No S3: persist the artifact off ephemeral /tmp so the episode
-                # stays downloadable from local disk (issue #292).
+                # stays downloadable from local disk (issue #292), then drop the
+                # per-run temp dir now that a persistent copy exists (issue #309).
                 persistent_path = _persist_local_audio(audio_file_path, episode_id)
                 episode.file_path = persistent_path
+                _cleanup_temp_file(audio_file_path)
                 logger.info(
                     f"AWS_S3_BUCKET not configured; persisted episode {episode_id} "
                     f"audio to {persistent_path}"

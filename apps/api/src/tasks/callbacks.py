@@ -14,6 +14,7 @@ from sqlalchemy import select
 
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
+from src.tasks.s3_upload import _cleanup_temp_file
 from src.worker import celery_app
 
 logger = logging.getLogger(__name__)
@@ -143,27 +144,47 @@ def on_composition_complete(self: Task, result: Dict[str, Any], episode_id: str)
 		)
 		return
 
-	updated = _update_episode(
-		episode_id,
-		updates={
-			"file_path": result.get("output_path"),
+	composed_path = result.get("output_path")
+	old_file_path: Optional[str] = None
+	try:
+		with SyncSessionLocal() as db:
+			episode = _get_episode_for_update(db, episode_id)
+			if episode is None:
+				logger.error("Episode %s not found in database", episode_id)
+				return
+
+			# Capture the pre-composition path before overwriting it: the composed
+			# file supersedes the raw generated audio, so its per-run temp dir
+			# (audio + transcript) is now disposable (issue #309).
+			old_file_path = episode.file_path
+
+			episode.file_path = composed_path
 			# Persist the composed duration to the column so distribution publishes
 			# the composed length, not the pre-composition one (issue #211).
-			"duration_seconds": result.get("duration_seconds"),
-			"generation_status": "composing",
-		},
-		progress_updates={
-			"composition": "complete",
-			"duration_seconds": result.get("duration_seconds"),
-			"composed_at": _utcnow_iso(),
-		},
-	)
-	if updated:
-		logger.info(
-			"Episode %s composition complete: %.1fs",
-			episode_id,
-			result.get("duration_seconds", 0),
+			episode.duration_seconds = result.get("duration_seconds")
+			episode.generation_status = "composing"
+			current_progress = dict(episode.generation_progress or {})
+			current_progress.update({
+				"composition": "complete",
+				"duration_seconds": result.get("duration_seconds"),
+				"composed_at": _utcnow_iso(),
+			})
+			episode.generation_progress = current_progress
+			db.commit()
+	except Exception as exc:
+		logger.error(
+			"Failed to update episode %s: %s", episode_id, exc, exc_info=True
 		)
+		return
+
+	if old_file_path and old_file_path != composed_path:
+		_cleanup_temp_file(old_file_path)
+
+	logger.info(
+		"Episode %s composition complete: %.1fs",
+		episode_id,
+		result.get("duration_seconds", 0),
+	)
 
 
 @celery_app.task(bind=True, name="on_distribution_complete")

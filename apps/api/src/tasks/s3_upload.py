@@ -2,6 +2,7 @@
 Celery tasks for S3 file uploads
 """
 import os
+import shutil
 import tempfile
 import logging
 from celery import Task
@@ -16,19 +17,37 @@ from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
 
+# Per-run directory prefix used by generate_podcast_task to route podcastfy's
+# audio + transcript output under the system temp dir (issue #309). Cleanup
+# recognizes this prefix and removes the whole run dir, not just the uploaded
+# file, so the transcript beside it cannot leak.
+GENERATION_RUN_DIR_PREFIX = "podcastfy-run-"
+
 
 def _cleanup_temp_file(file_path: str) -> None:
     """Best-effort delete of a temp upload artifact once it is no longer needed.
 
     Only removes files under the system temp dir so it can never delete a
-    persistent file (e.g. under ``data/``); never raises. Call this only when the
-    local copy is disposable: after a successful upload, or after retries are
-    exhausted (no further retry will read it) — never on the retry path.
+    persistent file (e.g. under ``data/``); never raises. When the file lives in
+    a ``podcastfy-run-*`` per-run dir, the whole dir is removed (audio +
+    transcript, issue #309). Call this only when the local copy is disposable:
+    after a successful upload, or after retries are exhausted (no further retry
+    will read it) — never on the retry path.
     """
     try:
         temp_root = os.path.realpath(tempfile.gettempdir())
         real = os.path.realpath(file_path)
-        if os.path.commonpath([temp_root, real]) == temp_root and os.path.isfile(real):
+        if os.path.commonpath([temp_root, real]) != temp_root:
+            return
+        parent = os.path.dirname(real)
+        if (
+            parent != temp_root
+            and os.path.basename(parent).startswith(GENERATION_RUN_DIR_PREFIX)
+            and os.path.isdir(parent)
+        ):
+            shutil.rmtree(parent)
+            logger.info("Removed generation run dir: %s", parent)
+        elif os.path.isfile(real):
             os.remove(real)
             logger.info("Removed temp upload artifact: %s", real)
     except Exception as exc:  # cleanup must never fail the task

@@ -6,7 +6,7 @@ status filtering, and tenant isolation for episodes.
 """
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from src.models.billing_subscription import BillingSubscription
@@ -127,6 +127,30 @@ async def test_list_episodes(client, project_and_auth):
 	data = response.json()
 	assert data["total"] >= 3
 	assert len(data["episodes"]) >= 3
+
+
+@pytest.mark.asyncio
+async def test_list_episodes_tz_aware_date_filter(client, project_and_auth):
+	"""TZ-aware date_from/date_to are converted to UTC before filtering (#310)."""
+	project_id, headers = project_and_auth
+	response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_metadata": {"title": "TZ Episode", "description": "TZ"},
+	})
+	assert response.status_code == 201
+
+	# 30 min ago UTC, expressed in +03:00 — naive stripping would yield a
+	# wall time ~2.5h in the future and wrongly exclude the episode.
+	plus3 = timezone(timedelta(hours=3))
+	date_from = (datetime.now(timezone.utc) - timedelta(minutes=30)).astimezone(plus3)
+	date_to = (datetime.now(timezone.utc) + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	response = await client.get(
+		"/episodes",
+		params={"project_id": project_id, "date_from": date_from.isoformat(), "date_to": date_to},
+		headers=headers,
+	)
+	assert response.status_code == 200, response.text
+	assert response.json()["total"] == 1
 
 
 @pytest.mark.asyncio

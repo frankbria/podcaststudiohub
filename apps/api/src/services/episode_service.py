@@ -20,6 +20,7 @@ from fastapi import HTTPException, status
 from ..models import Episode, Project
 from ..models.episode_composition import EpisodeComposition
 from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
+from ..utils.datetime_utils import to_naive_utc
 from .storage_service import StorageService
 
 logger = logging.getLogger(__name__)
@@ -170,14 +171,12 @@ async def get_episodes(
 			)
 		)
 
-	# Date range filter — created_at is offset-naive, so strip tzinfo from inputs
+	# Date range filter — created_at is offset-naive UTC, so normalize inputs
 	if date_from is not None:
-		date_from_naive = date_from.replace(tzinfo=None) if date_from.tzinfo else date_from
-		query = query.where(Episode.created_at >= date_from_naive)
+		query = query.where(Episode.created_at >= to_naive_utc(date_from))
 
 	if date_to is not None:
-		date_to_naive = date_to.replace(tzinfo=None) if date_to.tzinfo else date_to
-		query = query.where(Episode.created_at <= date_to_naive)
+		query = query.where(Episode.created_at <= to_naive_utc(date_to))
 
 	# Tag filter — each tag must be present in episode_metadata.tags array (AND logic)
 	# Uses PostgreSQL JSONB @> operator: episode_metadata->'tags' @> '["tag"]'::jsonb

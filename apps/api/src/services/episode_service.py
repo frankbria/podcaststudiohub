@@ -5,6 +5,9 @@ Provides CRUD operations for episodes with project validation, pagination,
 status filtering, and generation status management. RLS ensures tenant isolation.
 """
 
+import logging
+import os
+
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, cast, or_
@@ -15,7 +18,11 @@ from typing import Optional, List
 from fastapi import HTTPException, status
 
 from ..models import Episode, Project
+from ..models.episode_composition import EpisodeComposition
 from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
+from .storage_service import StorageService
+
+logger = logging.getLogger(__name__)
 
 # Valid sort fields and orders for episode listing
 VALID_SORT_FIELDS = {"episode_number", "created_at", "duration_seconds"}
@@ -314,10 +321,47 @@ async def delete_episode(
 	Unlike projects, episodes use hard delete (no soft delete).
 	Cascade deletes related content sources.
 
+	Best-effort removes the episode's S3 audio object, its EpisodeComposition's
+	composed S3 audio object (if any), and local file artifacts (episode audio,
+	transcript, composed audio) before deleting the database row. Storage and
+	filesystem cleanup failures are logged but never block the DB delete.
+
 	Args:
 		db: Database session
 		episode: Episode instance to delete
 	"""
+	composition_result = await db.execute(
+		select(EpisodeComposition).where(EpisodeComposition.episode_id == episode.id)
+	)
+	composition = composition_result.scalar_one_or_none()
+
+	s3_keys = [
+		key for key in (
+			episode.s3_key,
+			composition.composed_s3_key if composition else None,
+		) if key
+	]
+	if s3_keys:
+		storage = StorageService()
+		for key in s3_keys:
+			try:
+				await storage.delete_file(key)
+			except Exception:
+				logger.warning(f"Failed to delete S3 object {key} for episode {episode.id}")
+
+	local_paths = [
+		path for path in (
+			episode.file_path,
+			episode.transcript_path,
+			composition.composed_file_path if composition else None,
+		) if path
+	]
+	for path in local_paths:
+		try:
+			os.remove(path)
+		except OSError:
+			logger.warning(f"Failed to remove local file {path} for episode {episode.id}")
+
 	await db.delete(episode)
 	await db.commit()
 

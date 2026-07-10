@@ -110,6 +110,11 @@ class VerificationResponse(BaseModel):
     verified: bool
 
 
+class AccountDeleteRequest(BaseModel):
+    """Schema for confirming irreversible account erasure"""
+    password: str = Field(..., description="Current password, re-entered to confirm erasure")
+
+
 class ResendVerificationRequest(BaseModel):
     """Schema for resending a verification email"""
     email: EmailStr = Field(..., description="Email address to resend verification to")

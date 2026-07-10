@@ -1,60 +1,79 @@
-# #307 — COMPLETE (PR #362 squash-merged 2026-07-10, issue closed)
+# #308 — SHIPPED via PR #367 (all gates passed: tests, diff-cover 98%, cross-family APPROVE, bot review clean, demo verified, CI green)
 
-**Plan source**: self-authored (no plan comment on issue), verified against code 2026-07-09.
-**Branch**: `fix/307-csp-nonce-and-build-gates`
+**Plan source**: self-authored (no plan comment on issue), derived from code exploration 2026-07-09.
+**Branch**: `feature/issue-308-episode-delete-s3-erasure`
 
-## Why this shape
+## Design decisions (made autonomously — no architectural fork)
 
-nginx cannot mint per-request nonces (no native module on the VPS), so the CSP for
-HTML documents moves to Next.js middleware — the official Next 15 pattern
-(nonce + `'strict-dynamic'`, `'unsafe-eval'` in dev only). nginx keeps every other
-security header; its `/static/` block keeps a CSP with `script-src 'self'` (no
-unsafe-inline). Hash-based CSP is unworkable: Next's hydration payload changes
-every request.
-
-**Gotcha that forced a middleware rewrite**: next-auth v4 `withAuth` early-returns
-for the signIn page (`/login`), `/api/auth/*` and `/_next` — wrapped middleware
-never runs there, so the login page would get **no CSP**. Replace `withAuth` with a
-plain middleware: nonce-CSP for all matched pages + auth gate via `getToken`
-(what withAuth uses internally) with the same `/login?callbackUrl=` redirect.
+1. **Erasure entry point = self-service `DELETE /auth/me`** (204, `Depends(get_current_user)`).
+   The system has no admin/superuser role (`User` has only `is_active`/`is_verified`), so an
+   admin-only endpoint isn't possible; user-initiated deletion is the standard GDPR
+   right-to-erasure shape and matches existing hard-delete endpoints.
+2. **S3 deletion is key-based, not prefix-listing.** IAM intentionally does NOT grant
+   `s3:ListBucket` (deployment/README.md:318). Every S3 object has its key stored in a DB row
+   (`episodes.s3_key`, `episode_compositions.composed_s3_key`, `audio_snippets.s3_key`,
+   `rss_feeds.s3_key`, content-source `source_data['s3_key']`), so we collect keys from rows
+   before deleting them. No new StorageService list/bulk API needed — iterate `delete_file`
+   (S3 `delete_object` is already idempotent on missing keys).
+3. **S3/local cleanup is best-effort** (log warning, never block the DB delete) — copies the
+   existing `delete_audio_snippet` pattern (audio_snippet_service.py:286-318).
+4. **Wrap sync `delete_file` in `asyncio.to_thread`** at async call sites (matches how
+   `upload_file`/`download_file` are handled; existing `delete_file` call is bare — leave that).
+5. **Tests fake StorageService with unittest.mock patches** — the repo's established S3 test
+   convention (tests/unit/test_storage_service.py, test_episodes.py:1691).
 
 ## Steps (TDD)
 
-- [x] 1. Branch off main.
-- [x] 2. RED — extend `apps/web/__tests__/middleware.test.ts`:
-  - existing auth tests keep passing unchanged (redirect w/ callbackUrl; authed pass-through)
-  - CSP response header present on protected AND public (`/login`) routes
-  - `script-src` contains a base64 nonce + `'strict-dynamic'`, NOT `'unsafe-inline'`
-  - `style-src` keeps `'unsafe-inline'` (Radix/shadcn inline style attrs)
-  - media-src/connect-src keep both S3 hosts (episode audio streaming/download)
-  - nonce differs across requests; `x-nonce` request header forwarded
-- [x] 3. RED — update `deployment/tests/test_nginx_config.py`:
-  - server block no longer sets CSP (moved to app); other headers still asserted
-  - `/static/` CSP has no `'unsafe-inline'` in script-src
-  - drop/replace `test_csp_allows_s3_audio` (S3 allowance asserted in jest now)
-- [x] 4. GREEN — rewrite `apps/web/src/middleware.ts` (plain middleware, matcher
-  `/((?!api|_next/static|_next/image|favicon.ico).*)` — no prefetch `missing`
-  exclusions, preserving #222 auth-on-prefetch behavior).
-- [x] 5. GREEN — `apps/web/src/app/layout.tsx`: async, read `x-nonce` via
-  `headers()`, pass `nonce` to the theme-flash inline script.
-- [x] 6. GREEN — `deployment/nginx/podcastfy.conf`: remove server-level CSP
-  add_header (comment: owned by Next middleware); `/static/` CSP drops
-  unsafe-inline from script-src.
-- [x] 7. `apps/web/next.config.mjs`: delete `eslint.ignoreDuringBuilds` +
-  `typescript.ignoreBuildErrors` (lint + typecheck verified green locally; CI
-  gates already blocking; server-side rebuild in deploy-dev.yml now also gated).
-- [x] 8. Verify: jest w/ coverage (≥80 gate), deployment pytest, `next build`
-  (flags removed → build runs lint+types), lint, typecheck.
-- [x] 9. Deslop scan; quality gate incl. opencode (GLM) review pre-PR.
-- [x] 10. PR; demo: `next start` + curl -I → CSP header w/ nonce, no
-  unsafe-inline in script-src; browser loads login/dashboard with zero CSP
-  violations; build fails when a type error is injected (gate proof, reverted).
-- [x] 11. Post-PR opencode review comment; CI green; docs sync; merge.
+- [x] 1. Branch off main: `feature/issue-308-episode-delete-s3-erasure`.
+- [x] 2. **Episode delete cleanup** — `apps/api/src/services/episode_service.py:delete_episode`:
+  - RED: tests in `tests/test_episodes.py`: (a) delete of episode with `s3_key` calls
+    `StorageService.delete_file(s3_key)`; (b) no `s3_key` → no S3 call; (c) S3 delete raising
+    still deletes the DB row (204); (d) local `file_path`/`transcript_path` files removed
+    (tmp_path fixture); (e) composition `composed_s3_key` also deleted.
+  - GREEN: collect episode.s3_key + its EpisodeComposition.composed_s3_key; best-effort
+    delete S3 objects (`asyncio.to_thread(storage.delete_file, key)`, try/except → log
+    warning); best-effort `os.remove` of `file_path`, `transcript_path`,
+    `composed_file_path`; then `db.delete(episode)` + commit.
+- [x] 3. **Tenant offboarding** — new `apps/api/src/services/offboarding_service.py` +
+  `DELETE /auth/me` in `src/routers/auth.py`:
+  - RED: new `tests/test_offboarding.py`: register user via `/auth/register`, seed
+    project/episode (with s3_key, composition) /audio_snippet/rss_feed rows; patch
+    StorageService; `DELETE /auth/me` → 204; `delete_file` called once per collected key;
+    user + cascaded rows + billing rows gone; the old token now 401/403 on `/auth/me`.
+  - GREEN: `erase_user(db, user)`: collect S3 keys from episodes, compositions, snippets,
+    rss feeds, content-source `source_data['s3_key']`; collect local paths; best-effort
+    delete S3 + local files; explicitly delete `BillingSubscription`/`BillingUsage` by
+    `user_id` (no FK — DB cascade won't reach them); `db.delete(user)` (FK CASCADE removes
+    projects → episodes → content_sources/compositions, snippets, rss_feeds, distribution
+    targets, templates, tts configs, layouts, team memberships/invitations); commit; return
+    summary counts. Router endpoint is a thin wrapper.
+  - RLS note: runs as the requesting user with tenant context armed, so RLS permits deleting
+    own-tenant rows. If the `users` RLS policy blocks self-delete, stop and report (don't
+    improvise a bypass).
+- [x] 4. **Docs reconcile**:
+  - `deployment/README.md:315`: `s3:DeleteObject` rationale → "remove audio when an episode
+    or account is deleted" (now true).
+  - Add "Tenant offboarding / GDPR erasure" section (deployment/README.md): what
+    `DELETE /auth/me` erases (Postgres rows + S3 objects + local artifacts), key-based
+    deletion rationale (no ListBucket), limitations below.
+- [x] 5. Quality gates: full pytest 1689 passed / diff-cover 98% / ruff clean; deslop done;
+  internal review (1 Major rebutted: S3-before-commit ordering is deliberate — see #366);
+  cross-family opencode/GLM round 1 REQUEST_CHANGES → fixes (password step-up, 409
+  mid-generation guard, core user DELETE, audit log, rate limit) → round 2 APPROVE;
+  mutation checks: 4 killed, 1 infeasible (billing cascade DB-enforced, documented): full pytest from apps/api (`uv run pytest tests/`), ruff, coverage ≥85;
+  deslop; internal review + cross-family (opencode/GLM) review; PR; demo; CI; merge.
 
-## Risks
+## Acceptance criteria (from issue)
 
-- Nonce CSP forces dynamic rendering of all pages — fine for an authed SaaS
-  behind PM2 (`next start`); Playwright E2E runs prod mode, so a broken CSP
-  fails E2E loudly.
-- style-src keeps unsafe-inline deliberately (inline `style=` attrs everywhere
-  in Radix); issue AC only requires script-src.
+- [x] `StorageService.delete_file(episode.s3_key)` called on episode delete (idempotent on
+  missing) and local file artifacts removed.
+- [x] Documented tenant-offboarding routine erasing Postgres rows + all S3 audio for a user.
+- [x] deployment/README.md reconciled with actual behaviour.
+
+## Known limitations (disclose in PR)
+
+- `Team` rows have no owner; erasure removes the user's memberships/invitations but leaves
+  team shells.
+- Stripe-side customer data is not touched (only local billing rows) — out of scope here.
+- Content-source uploads are deleted on account erasure but not on single-episode delete
+  (episode delete scope per AC = episode audio + local artifacts + composition audio).

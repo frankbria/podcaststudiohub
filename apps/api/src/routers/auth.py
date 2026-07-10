@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db, set_tenant_context
 from ..schemas.auth import (
+    AccountDeleteRequest,
     ResendVerificationRequest,
     ResendVerificationResponse,
     TokenResponse,
@@ -23,9 +24,11 @@ from ..services.auth_service import (
     create_verification_token,
     get_user_by_email,
     mark_user_verified,
+    verify_password,
     verify_verification_token,
 )
 from ..services.email_service import send_verification_email
+from ..services.offboarding_service import erase_user
 from ..models.user import User
 from ..middleware.auth import get_current_user
 from ..dependencies import create_rate_limit_dependency
@@ -50,6 +53,13 @@ _rate_limit_resend = create_rate_limit_dependency(
     "resend",
     settings.RATE_LIMIT_RESEND_REQUESTS,
     settings.RATE_LIMIT_RESEND_WINDOW_MINUTES,
+)
+# Account erasure re-checks the password, so it gets the login limits: the
+# threat (online password guessing) is the same.
+_rate_limit_delete_account = create_rate_limit_dependency(
+    "delete-account",
+    settings.RATE_LIMIT_LOGIN_REQUESTS,
+    settings.RATE_LIMIT_LOGIN_WINDOW_MINUTES,
 )
 
 
@@ -176,6 +186,33 @@ async def get_current_user_info(
     Example: Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
     """
     return UserResponse.model_validate(current_user)
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_current_user(
+    payload: AccountDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(_rate_limit_delete_account),
+):
+    """
+    Permanently erase the authenticated user's account (GDPR-style right to
+    erasure).
+
+    Requires the current password re-entered in the body (step-up auth for an
+    irreversible action). Deletes every Postgres row tied to the account
+    (projects, episodes and everything cascading from them, plus billing rows),
+    all S3 audio objects, and local file artifacts. Returns 409 while any of
+    the account's episodes is still generating. Irreversible; the bearer token
+    used to call this is rejected on every subsequent request.
+    """
+    if not verify_password(payload.password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password confirmation failed",
+        )
+    await erase_user(db, current_user)
+    return None
 
 
 @router.get("/verify-email", response_model=VerificationResponse)

@@ -124,6 +124,30 @@ describe('Content-Security-Policy (issue #307)', () => {
     }
   })
 
+  it('allows the configured API origin in connect-src (signup posts to it cross-origin in dev/CI)', async () => {
+    process.env.NEXT_PUBLIC_API_URL = 'http://localhost:8200'
+    try {
+      const res = await callMiddleware('/signup')
+      const connectSrc = directive(res!.headers.get('content-security-policy')!, 'connect-src')
+      expect(connectSrc).toContain('http://localhost:8200')
+    } finally {
+      delete process.env.NEXT_PUBLIC_API_URL
+    }
+  })
+
+  it('ignores a same-path API URL cleanly (prod: API is same-origin behind nginx)', async () => {
+    process.env.NEXT_PUBLIC_API_URL = '/api'
+    try {
+      const res = await callMiddleware('/signup')
+      // Relative URL has no origin — CSP must stay valid with just 'self' + S3.
+      const connectSrc = directive(res!.headers.get('content-security-policy')!, 'connect-src')
+      expect(connectSrc).toContain("'self'")
+      expect(connectSrc).not.toContain('/api')
+    } finally {
+      delete process.env.NEXT_PUBLIC_API_URL
+    }
+  })
+
   it('keeps the hardening directives from the old nginx policy', async () => {
     const res = await callMiddleware('/login')
     const csp = res!.headers.get('content-security-policy')!

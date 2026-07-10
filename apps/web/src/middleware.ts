@@ -29,9 +29,22 @@ const PROTECTED_PATHS = ['/dashboard', '/episodes', '/projects']
 const S3_AUDIO =
   'https://podcaststudiohub-audio.s3.amazonaws.com https://podcaststudiohub-audio.s3.us-east-1.amazonaws.com'
 
+// The signup page fetches ${NEXT_PUBLIC_API_URL}/auth/register from the
+// browser. Behind nginx that URL is same-origin ('self' covers it), but in
+// dev/CI the API runs on its own port — its origin must be in connect-src or
+// signup breaks. Relative/unset URLs have no origin and add nothing.
+function apiOrigin(): string {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_API_URL ?? '').origin
+  } catch {
+    return ''
+  }
+}
+
 function buildCsp(nonce: string): string {
   // React dev tooling (fast refresh) needs eval; production must not allow it.
   const scriptExtra = process.env.NODE_ENV === 'development' ? " 'unsafe-eval'" : ''
+  const api = apiOrigin()
   return [
     "default-src 'self'",
     `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${scriptExtra}`,
@@ -41,7 +54,7 @@ function buildCsp(nonce: string): string {
     "img-src 'self' data: https:",
     "font-src 'self' data:",
     `media-src 'self' ${S3_AUDIO}`,
-    `connect-src 'self' ${S3_AUDIO}`,
+    `connect-src 'self' ${S3_AUDIO}${api ? ` ${api}` : ''}`,
     "object-src 'none'",
     "base-uri 'self'",
     "frame-ancestors 'none'",

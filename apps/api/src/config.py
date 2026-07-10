@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     CELERY_BROKER_VISIBILITY_TIMEOUT: int = 2400  # 40m — keep in-flight msgs from redelivering
     EPISODE_REAP_THRESHOLD_SECONDS: int = 2700    # 45m — reaper fails genuinely-stuck episodes
     REAP_STUCK_EPISODES_INTERVAL_SECONDS: int = 300  # reaper cadence
+    STORAGE_GC_INTERVAL_SECONDS: int = 300  # storage-deletion-outbox drain cadence (issue #366)
 
     # Spotify OAuth
     SPOTIFY_CLIENT_ID: Optional[str] = None

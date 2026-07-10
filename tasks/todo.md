@@ -56,7 +56,11 @@
   - Add "Tenant offboarding / GDPR erasure" section (deployment/README.md): what
     `DELETE /auth/me` erases (Postgres rows + S3 objects + local artifacts), key-based
     deletion rationale (no ListBucket), limitations below.
-- [ ] 5. Quality gates: full pytest from apps/api (`uv run pytest tests/`), ruff, coverage ≥85;
+- [x] 5. Quality gates: full pytest 1689 passed / diff-cover 98% / ruff clean; deslop done;
+  internal review (1 Major rebutted: S3-before-commit ordering is deliberate — see #366);
+  cross-family opencode/GLM round 1 REQUEST_CHANGES → fixes (password step-up, 409
+  mid-generation guard, core user DELETE, audit log, rate limit) → round 2 APPROVE;
+  mutation checks: 4 killed, 1 infeasible (billing cascade DB-enforced, documented): full pytest from apps/api (`uv run pytest tests/`), ruff, coverage ≥85;
   deslop; internal review + cross-family (opencode/GLM) review; PR; demo; CI; merge.
 
 ## Acceptance criteria (from issue)

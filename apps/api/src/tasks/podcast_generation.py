@@ -717,7 +717,7 @@ def finalize_episode_generation_task(
                     db.rollback()
                 except Exception as rollback_err:
                     logger.error(
-                        f"Rollback before failure-status write failed for "
+                        "Rollback before failure-status write failed for "
                         f"episode {episode_id}: {rollback_err}"
                     )
                 try:

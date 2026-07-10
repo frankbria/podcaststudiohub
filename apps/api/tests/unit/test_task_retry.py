@@ -614,23 +614,28 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 		result = self._run_with_broken_session(mock_db)
 
 		assert result["status"] == "failed"
-		assert "error" in result
+		assert "Database connection lost" in result["error"]
 
 	def test_cleanup_proceeds_when_rollback_itself_fails(self):
-		"""A rollback failure is logged but must not prevent the cleanup write
-		from being attempted (issue #311)."""
-		episode = MagicMock()
-		episode.generation_progress = {}
+		"""A rollback failure is logged but must not abort the handler: the
+		cleanup write is still attempted and the task returns a failed result
+		instead of raising (issue #311)."""
+		from sqlalchemy.exc import PendingRollbackError
 
 		mock_db = MagicMock()
-		mock_db.get.side_effect = [RuntimeError("Database connection lost"), episode]
+		# Faithful to SQLAlchemy semantics: rollback failed, so the transaction
+		# is still aborted and the cleanup get() raises too.
+		mock_db.get.side_effect = [
+			RuntimeError("Database connection lost"),
+			PendingRollbackError("transaction still aborted"),
+		]
 		mock_db.rollback.side_effect = RuntimeError("rollback failed too")
 		mock_db.__enter__ = MagicMock(return_value=mock_db)
 		mock_db.__exit__ = MagicMock(return_value=False)
 
 		result = self._run_with_broken_session(mock_db)
 
-		assert mock_db.get.call_count == 2, "cleanup get() must still run"
-		assert episode.generation_status == "failed"
-		mock_db.commit.assert_called_once()
+		assert mock_db.get.call_count == 2, "cleanup get() must still be attempted"
+		mock_db.commit.assert_not_called()
 		assert result["status"] == "failed"
+		assert "Database connection lost" in result["error"]

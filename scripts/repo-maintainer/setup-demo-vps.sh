@@ -248,11 +248,15 @@ module.exports = {
       },
     },
     {
+      // -B: embedded beat. No separate process starts a standalone beat, so
+      // without it nothing schedules reap_stuck_episodes or
+      // drain_storage_deletion_outbox (issue #366). Only safe because this is
+      // the single worker process for this deployment.
       name: 'demo-celery',
       cwd: '$DEMO_PATH/repo/apps/api',
       interpreter: 'none',
       script: '\$HOME/.cargo/bin/uv',
-      args: 'run celery -A src.worker:celery_app worker --loglevel=info',
+      args: 'run celery -A src.worker:celery_app worker -B --loglevel=info',
       env_file: '$DEMO_PATH/.env.demo',
     },
   ],

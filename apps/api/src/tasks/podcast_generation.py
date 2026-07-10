@@ -785,7 +785,12 @@ def build_generation_workflow(
 
 	# Stage: audio composition (optional)
 	if enable_composition:
-		composed_output = output_path or f"/tmp/composed_{episode_id}.mp3"
+		# Derive from gettempdir(), not a literal /tmp: the cleanup guard in
+		# _cleanup_temp_file is scoped to gettempdir(), so a TMPDIR override
+		# would otherwise leave every composed file outside its reach (#309).
+		composed_output = output_path or os.path.join(
+			tempfile.gettempdir(), f"composed_{episode_id}.mp3"
+		)
 		composition_sig = merge_audio_snippets_task.si(
 			episode_id=episode_id,
 			timeline=composition_timeline or [],

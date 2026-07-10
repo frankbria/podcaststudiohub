@@ -316,6 +316,30 @@ def test_terminal_failure_cleans_up_run_dir():
 		shutil.rmtree(run_dir, ignore_errors=True)
 
 
+def test_soft_timeout_cleans_up_run_dir():
+	"""SoftTimeLimitExceeded is a separate terminal branch (it bypasses the
+	generic except) — it must also remove the attempt's run dir."""
+	from celery.exceptions import SoftTimeLimitExceeded
+
+	run_dir = tempfile.mkdtemp(prefix="podcastfy-run-")
+	try:
+		mock_client, mock_modules = _mock_podcastfy_modules()
+		mock_client.generate_podcast = create_autospec(
+			real_generate_podcast, side_effect=SoftTimeLimitExceeded()
+		)
+		with patch.object(generate_podcast_task, 'update_state'), \
+			 patch.dict(sys.modules, mock_modules), \
+			 patch('src.tasks.podcast_generation.tempfile.mkdtemp', return_value=run_dir):
+			result = generate_podcast_task.run(
+				episode_id=str(uuid4()),
+				urls=["https://example.com"],
+			)
+		assert result["status"] == "failed"
+		assert not os.path.exists(run_dir)
+	finally:
+		shutil.rmtree(run_dir, ignore_errors=True)
+
+
 class TestBuildPodcastS3Key:
 	"""Canonical S3 key helper (issue #215)."""
 

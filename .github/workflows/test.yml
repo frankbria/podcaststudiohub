@@ -75,7 +75,9 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy
           SECRET_KEY: test-secret-key-for-ci
           ENCRYPTION_KEY: test-encryption-key-for-ci-00000
-          JWT_SECRET_KEY: test-jwt-secret-for-ci
+          # >=32 bytes: PyJWT warns on shorter HS256 keys (RFC 7518 §3.2) and
+          # filterwarnings=error would fail the suite (#306).
+          JWT_SECRET_KEY: test-jwt-secret-for-ci-0000000000
           CELERY_BROKER_URL: redis://localhost:6379/0
           CELERY_RESULT_BACKEND: redis://localhost:6379/0
         run: |

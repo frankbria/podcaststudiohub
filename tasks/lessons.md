@@ -278,3 +278,13 @@ first compile); fresh CI venvs recompile. Clear __pycache__ to reproduce compile
   script and restore by re-running the same script inverted, or commit first.
 - opencode post-PR reviews on full PR diffs can exceed a 10-min foreground
   timeout; run `ask-opencode.sh` in the background writing to a file, then post.
+
+## 2026-07-10 (#310, PR #369)
+- **`showboat` syntax gotchas:** it's `exec <file> <lang> [code]` (fork/exec, no
+  shell — multi-line strings and `VAR=$(...)` fail without a `bash` lang arg), and
+  `pop` removes the *most recent* entry, so repairing an earlier bad entry means
+  popping everything after it too — count entries before popping.
+- Issue plans can be stale by the time they're implemented: most of #310's plan
+  (deprecated `utcnow()` replacement) was already shipped in #348. Re-verify each
+  plan step against current code before implementing (only the TZ-aware filter
+  param bug remained).

@@ -21,4 +21,4 @@ asyncpg raises "cannot compare timestamp with/without time zone".
 - [x] GLM pre-PR review: APPROVE. Took its two minor suggestions: shared helper
       (also fixes pre-existing non-UTC-offset bug in episode_service) and
       load-bearing +03:00 offset tests (analytics + episodes).
-- [ ] Gates: full pytest, PR, post-PR review, demo, CI, merge.
+- [x] Gates all passed — SHIPPED via PR #369 (1701 tests + coverage gate, GLM APPROVE pre+post-PR + CI review no-defects, live demo verified, CI green, squash-merged, issue #310 closed).

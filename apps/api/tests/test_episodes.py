@@ -358,6 +358,152 @@ async def test_delete_nonexistent_episode(client, project_and_auth):
 	assert response.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_delete_episode_with_s3_key_calls_storage_delete(
+	client, project_and_auth, set_system_fields
+):
+	"""Deleting an episode with an s3_key removes the S3 object (#308)."""
+	from unittest.mock import AsyncMock, patch
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "S3 Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+	await set_system_fields(episode_id, s3_key="podcasts/episode.mp3")
+
+	with patch("src.services.storage_service.StorageService") as MockStorage:
+		mock_instance = MockStorage.return_value
+		mock_instance.delete_file = AsyncMock()
+		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 204
+	mock_instance.delete_file.assert_called_once_with("podcasts/episode.mp3")
+
+
+@pytest.mark.asyncio
+async def test_delete_episode_without_s3_key_skips_storage_delete(
+	client, project_and_auth
+):
+	"""Deleting an episode with no s3_key makes no S3 call (#308)."""
+	from unittest.mock import AsyncMock, patch
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "No S3 Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	with patch("src.services.storage_service.StorageService") as MockStorage:
+		mock_instance = MockStorage.return_value
+		mock_instance.delete_file = AsyncMock()
+		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 204
+	mock_instance.delete_file.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_episode_s3_failure_does_not_block_delete(
+	client, project_and_auth, set_system_fields
+):
+	"""An S3 delete failure is best-effort: the episode row is still removed (#308)."""
+	from unittest.mock import AsyncMock, patch
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Flaky S3 Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+	await set_system_fields(episode_id, s3_key="podcasts/episode.mp3")
+
+	with patch("src.services.storage_service.StorageService") as MockStorage:
+		mock_instance = MockStorage.return_value
+		mock_instance.delete_file = AsyncMock(side_effect=Exception("S3 unavailable"))
+		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 204
+
+	get_response = await client.get(f"/episodes/{episode_id}", headers=headers)
+	assert get_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_episode_removes_local_files(
+	client, project_and_auth, set_system_fields, tmp_path
+):
+	"""Deleting an episode removes its local audio and transcript files (#308)."""
+	import os
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Local Files Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	audio_path = tmp_path / "episode-local.mp3"
+	audio_path.write_bytes(b"AUDIO")
+	transcript_path = tmp_path / "episode-transcript.txt"
+	transcript_path.write_text("transcript")
+
+	await set_system_fields(
+		episode_id,
+		file_path=str(audio_path),
+		transcript_path=str(transcript_path),
+	)
+
+	response = await client.delete(f"/episodes/{episode_id}", headers=headers)
+	assert response.status_code == 204
+
+	assert not os.path.exists(audio_path)
+	assert not os.path.exists(transcript_path)
+
+
+@pytest.mark.asyncio
+async def test_delete_episode_also_deletes_composition_s3_key(
+	client, project_and_auth, test_db
+):
+	"""Deleting an episode also deletes its EpisodeComposition's S3 audio (#308)."""
+	from unittest.mock import AsyncMock, patch
+	from src.models.episode_composition import EpisodeComposition
+	from src.services.auth_service import verify_jwt_token
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Composed Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	token = headers["Authorization"].split(" ")[1]
+	claims = verify_jwt_token(token)
+
+	test_db.add(EpisodeComposition(
+		episode_id=episode_id,
+		tenant_id=claims["tenant_id"],
+		timeline=[],
+		composed_s3_key="compositions/final.mp3",
+	))
+	await test_db.flush()
+
+	with patch("src.services.storage_service.StorageService") as MockStorage:
+		mock_instance = MockStorage.return_value
+		mock_instance.delete_file = AsyncMock()
+		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 204
+	mock_instance.delete_file.assert_called_once_with("compositions/final.mp3")
+
+
 # ============================================================================
 # PROJECT RELATIONSHIP TESTS
 # ============================================================================

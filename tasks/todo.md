@@ -1,4 +1,4 @@
-# #308 — Episode delete orphans S3 audio; no tenant-offboarding / GDPR erasure path
+# #308 — SHIPPED via PR #367 (all gates passed: tests, diff-cover 98%, cross-family APPROVE, bot review clean, demo verified, CI green)
 
 **Plan source**: self-authored (no plan comment on issue), derived from code exploration 2026-07-09.
 **Branch**: `feature/issue-308-episode-delete-s3-erasure`

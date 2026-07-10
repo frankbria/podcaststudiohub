@@ -293,6 +293,7 @@ podcaststudiohub/
 - `POST /api/auth/login` - Login user
 - `POST /api/auth/logout` - Logout user
 - `GET /api/auth/me` - Get current user
+- `DELETE /api/auth/me` - Permanently erase the account (GDPR; requires password re-entry)
 
 ### Projects
 - `GET /api/projects` - List user's projects

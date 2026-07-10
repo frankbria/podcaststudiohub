@@ -716,7 +716,9 @@ def finalize_episode_generation_task(
                     f"{'s3_key=' + s3_key if s3_key else 'file_path=' + str(finalized_local_path)} "
                     "for deletion instead of orphaning it"
                 )
-                _queue_orphaned_storage(s3_key=s3_key, file_path=finalized_local_path if not s3_key else None)
+                # s3_key and finalized_local_path are mutually exclusive by
+                # construction (only one of the two branches above runs).
+                _queue_orphaned_storage(s3_key=s3_key, file_path=finalized_local_path)
                 return {
                     "status": "absorbed",
                     "episode_id": episode_id,

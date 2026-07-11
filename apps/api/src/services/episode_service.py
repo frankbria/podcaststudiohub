@@ -17,6 +17,7 @@ from typing import Optional, List
 from fastapi import HTTPException, status
 
 from ..models import Episode, Project
+from ..models.content_source import ContentSource
 from ..models.episode_composition import EpisodeComposition
 from ..models.storage_deletion_outbox import StorageDeletionOutbox
 from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
@@ -347,10 +348,24 @@ async def delete_episode(
 	)
 	composition = composition_result.scalar_one_or_none()
 
+	# Content sources cascade-delete with the episode; their uploaded source
+	# objects (PDFs/images) are referenced only via source_data["s3_key"], so
+	# they must be queued too. Unlocked read: the key is written at upload
+	# time by API requests, never by late Celery tasks (same reasoning as
+	# erase_user's content-source collection).
+	sources_result = await db.execute(
+		select(ContentSource.source_data).where(ContentSource.episode_id == episode.id)
+	)
+	source_keys = [
+		key for (source_data,) in sources_result.all()
+		if (key := (source_data or {}).get("s3_key"))
+	]
+
 	s3_keys = [
 		key for key in (
 			episode.s3_key,
 			composition.composed_s3_key if composition else None,
+			*source_keys,
 		) if key
 	]
 	for key in s3_keys:

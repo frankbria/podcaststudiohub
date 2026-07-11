@@ -626,6 +626,53 @@ async def test_delete_episode_queues_s3_key_persisted_after_fetch(
 		"late-persisted s3_key was not queued for deletion — orphaned object"
 	)
 
+
+@pytest.mark.asyncio
+async def test_delete_episode_queues_content_source_s3_keys(
+	client, project_and_auth, test_db
+):
+	"""Content sources cascade-delete with the episode, so their uploaded
+	source objects (source_data["s3_key"], e.g. PDFs/images) must be queued
+	for deletion too — erase_user already does this; episode delete must match
+	(#366)."""
+	from unittest.mock import patch
+	from uuid import UUID
+
+	from sqlalchemy import select
+
+	from src.models.content_source import ContentSource
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
+	from src.services.episode_service import get_episode_by_id
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "PDF Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+	episode = await get_episode_by_id(test_db, UUID(episode_id))
+
+	test_db.add(ContentSource(
+		episode_id=episode.id,
+		tenant_id=episode.tenant_id,
+		source_type="pdf",
+		source_data={"filename": "doc.pdf", "s3_key": "uploads/doc.pdf"},
+		extraction_status="pending",
+	))
+	await test_db.flush()
+
+	with patch("src.services.episode_service.drain_storage_deletion_outbox"):
+		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 204
+	result = await test_db.execute(
+		select(StorageDeletionOutbox).where(StorageDeletionOutbox.s3_key == "uploads/doc.pdf")
+	)
+	assert result.scalar_one_or_none() is not None, (
+		"content-source s3_key was not queued — orphaned source object"
+	)
+
 # ============================================================================
 # PROJECT RELATIONSHIP TESTS
 # ============================================================================

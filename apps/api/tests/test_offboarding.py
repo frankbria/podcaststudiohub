@@ -152,8 +152,11 @@ async def test_delete_me_queues_one_outbox_row_per_s3_key(seeded_user, client, t
 		)
 
 	assert response.status_code == 204
+	# Scoped to this user's tenant (outbox has no RLS — a global read is
+	# fragile against concurrent writers).
 	result = await test_db.execute(select(StorageDeletionOutbox.s3_key).where(
-		StorageDeletionOutbox.s3_key.isnot(None)
+		StorageDeletionOutbox.s3_key.isnot(None),
+		StorageDeletionOutbox.tenant_id == seeded_user["tenant_id"],
 	))
 	queued_keys = {row[0] for row in result.all()}
 	assert queued_keys == seeded_user["s3_keys"]

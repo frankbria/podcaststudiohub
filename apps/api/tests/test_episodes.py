@@ -437,7 +437,16 @@ async def test_delete_episode_without_s3_key_queues_no_outbox_row(
 
 	assert response.status_code == 204
 
-	result = await test_db.execute(select(StorageDeletionOutbox))
+	# Scoped to this episode's tenant: the outbox has no RLS, so a global
+	# "table is empty" assertion is fragile against any concurrent writer.
+	from uuid import UUID as _UUID
+	from src.services.project_service import get_project_by_id
+	project = await get_project_by_id(test_db, _UUID(project_id))
+	result = await test_db.execute(
+		select(StorageDeletionOutbox).where(
+			StorageDeletionOutbox.tenant_id == project.tenant_id
+		)
+	)
 	assert result.scalars().all() == []
 
 
@@ -507,7 +516,13 @@ async def test_delete_episode_queues_local_file_paths_for_outbox(
 	assert os.path.exists(audio_path)
 	assert os.path.exists(transcript_path)
 
-	result = await test_db.execute(select(StorageDeletionOutbox.file_path))
+	# Scoped to the paths this test created (outbox has no RLS — a global
+	# read is fragile against concurrent writers).
+	result = await test_db.execute(
+		select(StorageDeletionOutbox.file_path).where(
+			StorageDeletionOutbox.file_path.in_([str(audio_path), str(transcript_path)])
+		)
+	)
 	queued_paths = {row[0] for row in result.all()}
 	assert queued_paths == {str(audio_path), str(transcript_path)}
 

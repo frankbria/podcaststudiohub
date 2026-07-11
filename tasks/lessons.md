@@ -316,3 +316,11 @@ first compile); fresh CI venvs recompile. Clear __pycache__ to reproduce compile
   degradation path, or the test breeds false confidence. (Caught by post-PR GLM.)
 - `showboat exec` signature is `<file> <lang> [code]` — omitting the lang makes
   it treat the whole command string as argv[0] and fail with fork/exec noise.
+- `pytest | tail && git commit && git push` commits on FAILING tests — the
+  pipeline's exit code is tail's (0), not pytest's. Always `set -o pipefail`
+  (or check pytest's status separately) before chaining a test run into
+  commit/push. Cost: a broken push to a PR branch on #366.
+- Tests on tables without RLS (e.g. storage_deletion_outbox) must scope
+  assertions to the test's own tenant/keys, never assert global table
+  emptiness/equality — any concurrent writer to the shared dev DB (demo
+  agents, second pytest session) breaks them.

@@ -58,9 +58,13 @@ periodic GC worker; no plan comment existed).
 - [x] 6. Deployment: add `-B` to celery worker command in `.github/workflows/deploy-dev.yml`,
   `deployment/README.md`, `scripts/repo-maintainer/setup-demo-vps.sh` (single-worker
   assumption noted).
-- [x] 7. Full suite + coverage ≥85 + ruff. (1746 passed, 7 pre-existing skips, 94.07% coverage,
-  ruff clean on all touched files.) Deslop / opencode-GLM pre-PR review / internal review not
-  yet run — left to the orchestrator.
+- [x] 7. Quality gate done: 1751 passed / 7 pre-existing skips; diff coverage 100% (0 missing
+  lines); ruff clean; mutation check 4/4 killed; deslop clean (1 observation fixed: tenant_id
+  threaded into finalize absorb). Reviews: internal Critical fixed (content-source s3_keys
+  orphaned on episode delete); codex cross-family P2 fixed (absorb outbox insert now retried
+  inline + CRITICAL last-resort log); my own review fixed GC zero-progress hot loop + locked
+  the delete-flow key reads (TOCTOU). opencode timed out twice → codex served as the
+  cross-family reviewer.
 - [ ] 8. PR → post-PR review comment → demo (hard gate) → CI green → docs sync → merge.
 
 ## Acceptance criteria

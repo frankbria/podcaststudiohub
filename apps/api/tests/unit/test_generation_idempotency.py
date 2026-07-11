@@ -7,9 +7,10 @@ already-complete or in-flight episodes before any paid call, and (3) use a Redis
 lock to block concurrent/duplicate in-flight runs while self-healing via TTL.
 """
 
-import sys
 import types
 from unittest.mock import MagicMock, create_autospec, patch
+
+from tests.module_patching import patch_modules
 from uuid import uuid4
 
 from podcastfy.client import generate_podcast as real_generate_podcast
@@ -123,7 +124,7 @@ def _run_with_status(status, *, retries=0, acquire=True):
              patch("src.tasks.podcast_generation.acquire_generation_lock", return_value=acquire), \
              patch("src.tasks.podcast_generation.release_generation_lock"), \
              patch("src.tasks.podcast_generation._update_episode"), \
-             patch.dict(sys.modules, mock_modules), \
+             patch_modules(mock_modules), \
              patch("src.tasks.podcast_generation.os.path.getsize", return_value=1024), \
              patch("src.tasks.podcast_generation.AudioSegment") as mock_audio, \
              patch("src.tasks.podcast_generation.finalize_episode_generation_task"):

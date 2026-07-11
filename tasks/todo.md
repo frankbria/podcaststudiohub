@@ -1,81 +1,37 @@
-# Issue #366 — Durable storage-erasure queue (outbox/GC) for delete flows (P3.10)
+# Issue #372 — Test isolation: mocked-podcastfy workflow tests poison psycopg Jsonb adaptation
 
-**Problem** (follow-up to #308): S3/local cleanup in `delete_episode` and `erase_user` is
-best-effort and runs **before** the DB commit. Two windows: (1) commit fails after storage
-deletion → rows point at deleted audio; (2) in-flight generation TOCTOU → a task finishing
-after the 409 check / episode delete uploads audio that is orphaned forever (IAM has no
-`s3:ListBucket`, so orphans are unfindable).
+## Root cause (verified with import-audit diagnostic)
 
-**Plan source**: self-authored (issue prescribes the architecture: durable deletion outbox +
-periodic GC worker; no plan comment existed).
+`unittest.mock.patch.dict(sys.modules, {...})` restores the dict on exit by
+**clearing it and re-applying the snapshot** — evicting every module imported
+*during* the window, not just the patched keys. The first poisoning test in
+`tests/test_celery_workflow.py` lazily imports the entire `psycopg` tree
+(~80 modules incl. the `psycopg_binary` C extension) inside the window;
+eviction + later re-import creates a new `psycopg.types.json.Jsonb` class that
+psycopg's already-registered adapters map (held by the previously imported
+SQLAlchemy dialect) doesn't recognize → `cannot adapt type 'Jsonb'`.
 
-## Design (autonomous decisions)
+Diagnostic evidence: audit-hook plugin showed test 1 of `TestFullWorkflowChain`
+evicts all `psycopg*` modules at patch exit.
 
-- **Pure outbox**: delete flows stop touching storage entirely. They insert
-  `storage_deletion_outbox` rows (s3_key / file_path) **in the same transaction** as the row
-  deletes, then commit. Commit fails → nothing was deleted from storage (closes window 1).
-- **Prompt drain**: post-commit, best-effort `drain_storage_deletion_outbox.delay()` so audio
-  disappears promptly; the beat schedule is the durable backstop.
-- **GC task** in existing `src/tasks/maintenance.py` (same module as the reaper): batch
-  `SELECT … FOR UPDATE SKIP LOCKED`, delete via `StorageService.delete_file` / `os.remove`
-  (missing local file = success; S3 delete_object is idempotent), delete row on success,
-  `attempts += 1` + `last_attempt_at` on failure. Loops while a full batch was processed.
-- **Absorb late uploads** (closes window 2): where upload results are persisted and the episode
-  row is found missing (`finalize_episode_generation_task`, `callbacks.on_upload_complete`, and
-  composition persist if applicable), insert an outbox row for the just-uploaded key instead of
-  only logging.
-- **No RLS on the outbox table** (deliberate): internal, never API-exposed; the Celery worker
-  must drain cross-tenant. `tenant_id` kept as a plain nullable UUID for audit. GRANT to
-  `podcastfy_app` in the migration.
-- **Beat actually runs**: `beat_schedule` exists but no deployment starts a beat process (the
-  reaper never fires in prod!). Add `-B` (embedded beat) to the single celery worker command in
-  deploy configs.
-- Keep: erase_user 409 guard (defense in depth); episode delete stays guard-free (it's the only
-  abort mechanism — per issue comment); absorb covers its orphan window.
+Same pattern exists in 5 more files (25 sites total):
+`tests/test_celery_workflow.py` (10), `tests/unit/test_podcast_generation_task.py` (5),
+`tests/unit/test_audio_composition_task.py` (4), `tests/unit/test_task_retry.py` (5),
+`tests/unit/test_generation_idempotency.py` (1).
 
-## Steps
+## Plan (TDD)
 
-- [x] 1. Migration `017_add_storage_deletion_outbox` (+ structure unit test): table
-  (id UUID PK, tenant_id UUID null, s3_key Text null, file_path Text null,
-  CHECK s3_key/file_path not both null, attempts int default 0, created_at, last_attempt_at),
-  ix on created_at, GRANT, downgrade. Model `src/models/storage_deletion_outbox.py`,
-  registered in `models/__init__.py`.
-- [x] 2. `delete_episode` (episode_service.py:313-365): replace inline `storage.delete_file` /
-  `os.remove` loops with outbox inserts in-session; delete + commit; post-commit best-effort
-  `.delay()`. Update existing tests asserting inline deletion.
-- [x] 3. `erase_user` (offboarding_service.py): same rewire — existing key collection stays,
-  inserts replace inline deletion, cascade delete + audit + commit, post-commit `.delay()`.
-  Return shape becomes "queued" counts (endpoint returns 204; contract-safe).
-- [x] 4. `drain_storage_deletion_outbox` task in maintenance.py + `task_routes` entry +
-  `beat_schedule` entry (interval setting in config.py, mirror reaper's). Tests mirror
-  `test_maintenance.py` (mock SyncSessionLocal + StorageService).
-- [x] 5. Absorb late uploads in `finalize_episode_generation_task` + `on_upload_complete`
-  (+ composition callback if it persists keys): missing episode row → outbox insert via sync
-  session. Tests: upload completes after delete → key lands in outbox. Composition callback
-  confirmed N/A — `merge_audio_snippets_task` never uploads to S3 and `composed_s3_key` is
-  never written anywhere in the codebase (only declared and read by the delete flows), so
-  there's no composition-path orphan window to absorb.
-- [x] 6. Deployment: add `-B` to celery worker command in `.github/workflows/deploy-dev.yml`,
-  `deployment/README.md`, `scripts/repo-maintainer/setup-demo-vps.sh` (single-worker
-  assumption noted).
-- [x] 7. Quality gate done: 1751 passed / 7 pre-existing skips; diff coverage 100% (0 missing
-  lines); ruff clean; mutation check 4/4 killed; deslop clean (1 observation fixed: tenant_id
-  threaded into finalize absorb). Reviews: internal Critical fixed (content-source s3_keys
-  orphaned on episode delete); codex cross-family P2 fixed (absorb outbox insert now retried
-  inline + CRITICAL last-resort log); my own review fixed GC zero-progress hot loop + locked
-  the delete-flow key reads (TOCTOU). opencode timed out twice → codex served as the
-  cross-family reviewer.
-- [x] 8. PR #373 squash-merged 2026-07-11; issue #366 auto-closed. Post-PR codex review
-  (starvation P2 fixed in 7afb131) + repo bug-hunt bot (1 Critical rebutted with empirical
-  evidence: StaleDataError DOES fire on psycopg without version_id_col — bot re-verified
-  against SQLAlchemy source and cleared it). Demo hard gate: all 6 ACs verified with real
-  outcome evidence (real Postgres/beat/HTTP). CI 12/12 green. Docs synced (CLAUDE.md 017).
+- [ ] RED: `tests/test_sync_jsonb_isolation.py` — sync-session ORM flush of a
+      `User` row (JSONB `encrypted_api_keys`); file sorts after
+      `test_celery_workflow.py`. Confirm it FAILS after workflow tests, PASSES alone.
+- [ ] GREEN: add `tests/module_patching.py` with `patch_modules(mapping)` — a
+      context manager that sets the given `sys.modules` keys and on exit restores
+      **only those keys** (leaving modules imported during the window intact).
+      Replace all 25 `patch.dict(sys.modules, ...)` sites with it.
+- [ ] Verify: issue repro commands pass in both orders; full API test suite green;
+      ruff clean.
 
-## Acceptance criteria
+## Scope note
 
-- [x] AC1: DB commit failure during a delete flow leaves storage untouched (no deletion before commit).
-- [x] AC2: Intended deletions are durably recorded and retried until success (attempts tracked).
-- [x] AC3: Late Celery upload after episode/account deletion gets absorbed into the outbox (no permanent orphan).
-- [x] AC4: GC runs periodically in deployed env (beat process actually scheduled) and promptly post-delete.
-- [x] AC5: Only `delete_object` on known keys — no `s3:ListBucket` dependency.
-- [x] AC6: erase_user 409 guard unchanged; episode delete remains guard-free.
+Fixing all 6 files (not just test_celery_workflow.py) — identical latent bug,
+mechanical swap, per bug-ownership rule.

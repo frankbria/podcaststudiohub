@@ -10,6 +10,8 @@ infrastructure is required.
 import uuid
 from unittest.mock import MagicMock, patch
 
+from tests.module_patching import patch_modules
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -80,7 +82,6 @@ class TestFullWorkflowChain:
 
     def test_workflow_chain_dispatched_when_composition_enabled(self):
         """When enable_composition=True, build_generation_workflow is called."""
-        import sys
         import types
 
         episode_id = str(uuid.uuid4())
@@ -99,7 +100,7 @@ class TestFullWorkflowChain:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
@@ -128,7 +129,6 @@ class TestFullWorkflowChain:
 
     def test_workflow_chain_dispatched_when_distribution_enabled(self):
         """When enable_distribution=True with platforms, build_generation_workflow is called."""
-        import sys
         import types
 
         episode_id = str(uuid.uuid4())
@@ -148,7 +148,7 @@ class TestFullWorkflowChain:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=2000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
@@ -180,7 +180,6 @@ class TestFullWorkflowChain:
         runs would otherwise lose file_path/transcript_path/duration_seconds/
         file_size_bytes that the default finalize path records (issue #211).
         """
-        import sys
         import types
 
         episode_id = str(uuid.uuid4())
@@ -203,7 +202,7 @@ class TestFullWorkflowChain:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=2000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=MagicMock()),
@@ -227,7 +226,6 @@ class TestFullWorkflowChain:
 
     def test_finalize_task_used_when_no_composition_or_distribution(self):
         """Default path (no composition, no distribution) uses finalize_episode_generation_task."""
-        import sys
         import types
 
         episode_id = str(uuid.uuid4())
@@ -244,7 +242,7 @@ class TestFullWorkflowChain:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
@@ -268,7 +266,6 @@ class TestFullWorkflowChain:
 
     def test_finalize_task_used_when_distribution_enabled_but_no_platforms(self):
         """enable_distribution=True but platforms=None falls back to finalize task."""
-        import sys
         import types
 
         episode_id = str(uuid.uuid4())
@@ -285,7 +282,7 @@ class TestFullWorkflowChain:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
@@ -541,7 +538,6 @@ class TestConditionalComposition:
 
     def test_generate_task_passes_composition_timeline(self):
         """Task passes composition_timeline to build_generation_workflow."""
-        import sys
         import types
 
         episode_id = str(uuid.uuid4())
@@ -563,7 +559,7 @@ class TestConditionalComposition:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
@@ -593,7 +589,6 @@ class TestErrorHandling:
 
     def test_workflow_chain_not_called_on_generation_failure(self):
         """If podcast generation fails, build_generation_workflow is never called."""
-        import sys
         import types
 
         episode_id = str(uuid.uuid4())
@@ -606,7 +601,7 @@ class TestErrorHandling:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
             patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
             patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=_mock_session_with_episode()),
@@ -628,7 +623,6 @@ class TestErrorHandling:
 
     def test_broker_error_during_workflow_dispatch_does_not_fail_generation(self):
         """A broker failure when dispatching the workflow chain does not change generation result."""
-        import sys
         import types
 
         episode_id = str(uuid.uuid4())
@@ -648,7 +642,7 @@ class TestErrorHandling:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain),
@@ -671,7 +665,6 @@ class TestErrorHandling:
         """Fail closed: if the episode/user_id cannot be resolved, the upload
         chain is never dispatched, so nothing is written outside the
         podcasts/user-*/ tenant prefix (issue #215)."""
-        import sys
         import types
 
         episode_id = str(uuid.uuid4())
@@ -693,7 +686,7 @@ class TestErrorHandling:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch.dict(sys.modules, {"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,

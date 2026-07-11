@@ -506,6 +506,21 @@ class TestResolveCompositionTimeline:
 
 		assert [seg["segment_type"] for seg in timeline] == ["intro", "main_content"]
 
+	def test_all_snippets_s3_only_yields_main_segment_only(self) -> None:
+		"""Current production shape: file_path always holds the S3 key, so every
+		snippet is skipped and composition passes the generated audio through."""
+		from src.tasks import podcast_generation as pg
+
+		snippets = [
+			self._snippet("intro", "audio-snippets/u1/s1.mp3"),
+			self._snippet("outro", "audio-snippets/u1/s2.mp3"),
+		]
+
+		with patch.object(pg, "SyncSessionLocal", return_value=self._mock_session(snippets)):
+			timeline = pg.resolve_composition_timeline(uuid4(), "/tmp/gen.mp3")
+
+		assert timeline == [{"file_path": "/tmp/gen.mp3", "segment_type": "main_content"}]
+
 	def test_none_project_id_yields_main_segment_only(self) -> None:
 		"""No project scope → no snippet query; timeline is just the main segment."""
 		from src.tasks import podcast_generation as pg

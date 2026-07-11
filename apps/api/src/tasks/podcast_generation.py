@@ -112,9 +112,10 @@ def resolve_composition_timeline(
     The router never supplies ``composition_timeline`` (the generated file's
     path doesn't exist at dispatch time), so it is resolved here: the project's
     reusable snippets ordered intro/music → generated audio (``main_content``)
-    → outro/midroll/ad/other. The generated segment is always included, so the
-    returned timeline is never empty. Any snippet-lookup failure degrades to a
-    main-only timeline rather than failing composition.
+    → outro/midroll/ad/other; within each group snippets play in creation
+    order. The generated segment is always included, so the returned timeline
+    is never empty. Any snippet-lookup failure degrades to a main-only
+    timeline rather than failing composition.
     """
     main_segment = {"file_path": audio_file_path, "segment_type": "main_content"}
     if project_id is None:
@@ -153,6 +154,12 @@ def resolve_composition_timeline(
                     pre.append(entry)
                 else:
                     post.append(entry)
+            if snippets and not pre and not post:
+                logger.warning(
+                    "Composition: project %s has %d snippet(s) but none are on "
+                    "local disk — composing the generated audio only",
+                    project_id, len(snippets),
+                )
     except Exception as exc:
         logger.error(
             "Composition timeline resolution failed for project %s; composing "

@@ -129,9 +129,10 @@ class TestFullWorkflowChain:
         assert call_kwargs["composition_timeline"] == [{"file_path": "/tmp/intro.mp3"}]
         mock_chain.apply_async.assert_called_once()
 
-    def test_timeline_resolved_when_composition_enabled_without_timeline(self):
-        """No caller-supplied timeline → the task resolves one that is non-empty
-        and carries the generated audio as main_content (issue #313)."""
+    def test_timeline_resolved_when_composition_enabled_without_timeline(self, tmp_path):
+        """No caller-supplied timeline → the task resolves one that is non-empty,
+        carries the generated audio as main_content, and includes locally
+        available project snippets in order (issue #313)."""
         import types
 
         episode_id = str(uuid.uuid4())
@@ -147,8 +148,14 @@ class TestFullWorkflowChain:
 
         mock_chain = MagicMock()
         session = _mock_session_with_episode()
-        # Snippet query returns no rows → resolver falls back to main-only timeline.
-        session.execute.return_value.scalars.return_value.all.return_value = []
+        session.get.return_value.project_id = uuid.uuid4()
+        # Seed the snippet query: one intro with a real local file.
+        intro_path = tmp_path / "intro.mp3"
+        intro_path.write_bytes(b"x")
+        intro = types.SimpleNamespace(
+            id=uuid.uuid4(), snippet_type="intro", file_path=str(intro_path)
+        )
+        session.execute.return_value.scalars.return_value.all.return_value = [intro]
 
         from src.tasks.podcast_generation import generate_podcast_task
 
@@ -174,7 +181,10 @@ class TestFullWorkflowChain:
         mock_builder.assert_called_once()
         timeline = mock_builder.call_args.kwargs["composition_timeline"]
         assert timeline, "resolved composition timeline must never be empty"
-        assert {"file_path": mock_audio_path, "segment_type": "main_content"} in timeline
+        assert timeline == [
+            {"file_path": str(intro_path), "segment_type": "intro"},
+            {"file_path": mock_audio_path, "segment_type": "main_content"},
+        ]
 
     def test_workflow_chain_dispatched_when_distribution_enabled(self):
         """When enable_distribution=True with platforms, build_generation_workflow is called."""

@@ -130,6 +130,7 @@ def drain_storage_deletion_outbox(self: Task) -> int:
             if not rows:
                 break
 
+            batch_drained = 0
             for row in rows:
                 ok = True
 
@@ -159,14 +160,18 @@ def drain_storage_deletion_outbox(self: Task) -> int:
 
                 if ok:
                     db.delete(row)
-                    drained += 1
+                    batch_drained += 1
                 else:
                     row.attempts += 1
                     row.last_attempt_at = utcnow()
 
             db.commit()
+            drained += batch_drained
 
-            if len(rows) < STORAGE_GC_BATCH_SIZE:
+            # A full batch with zero progress means every row is failing right
+            # now (e.g. S3 outage) — stop instead of hammering storage until
+            # the task time limit kills us; the beat tick retries later.
+            if len(rows) < STORAGE_GC_BATCH_SIZE or batch_drained == 0:
                 break
 
     if drained:

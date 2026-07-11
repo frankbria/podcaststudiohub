@@ -334,8 +334,16 @@ async def delete_episode(
 		db: Database session
 		episode: Episode instance to delete
 	"""
+	# Re-read the episode (and composition) under lock before collecting keys:
+	# a Celery task can persist s3_key between the caller's fetch and this
+	# delete. The lock serializes against the callbacks' SELECT ... FOR UPDATE
+	# and finalize's UPDATE, so either the fresh key is collected here, or the
+	# task sees the row gone and absorbs the orphan itself (issue #366).
+	await db.refresh(episode, with_for_update=True)
 	composition_result = await db.execute(
-		select(EpisodeComposition).where(EpisodeComposition.episode_id == episode.id)
+		select(EpisodeComposition)
+		.where(EpisodeComposition.episode_id == episode.id)
+		.with_for_update()
 	)
 	composition = composition_result.scalar_one_or_none()
 

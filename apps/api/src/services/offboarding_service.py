@@ -70,7 +70,15 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 	projects_result = await db.execute(select(Project.id).where(Project.user_id == user.id))
 	project_ids = [row[0] for row in projects_result.all()]
 
-	episodes_result = await db.execute(select(Episode).where(Episode.user_id == user.id))
+	# Episodes and compositions are read FOR UPDATE: a Celery task can persist
+	# s3_key between an unlocked read and the commit below. The lock serializes
+	# against the callbacks' SELECT ... FOR UPDATE and finalize's UPDATE, so
+	# either the fresh key is collected here, or the task sees the rows gone
+	# and absorbs the orphan itself (issue #366). Snippets/RSS/content sources
+	# are only written by API requests, not late tasks — no lock needed.
+	episodes_result = await db.execute(
+		select(Episode).where(Episode.user_id == user.id).with_for_update()
+	)
 	episodes = episodes_result.scalars().all()
 	episode_ids = [episode.id for episode in episodes]
 
@@ -78,7 +86,9 @@ async def erase_user(db: AsyncSession, user: User) -> dict:
 	content_sources = []
 	if episode_ids:
 		compositions_result = await db.execute(
-			select(EpisodeComposition).where(EpisodeComposition.episode_id.in_(episode_ids))
+			select(EpisodeComposition)
+			.where(EpisodeComposition.episode_id.in_(episode_ids))
+			.with_for_update()
 		)
 		compositions = compositions_result.scalars().all()
 

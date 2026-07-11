@@ -578,6 +578,54 @@ async def test_delete_episode_triggers_drain_task(
 	mock_drain.delay.assert_called_once_with()
 
 
+@pytest.mark.asyncio
+async def test_delete_episode_queues_s3_key_persisted_after_fetch(
+	client, project_and_auth, test_db
+):
+	"""A callback can persist s3_key between the caller's fetch and the delete
+	commit (#366 TOCTOU): delete_episode must re-read the row under lock so the
+	freshly-persisted key still lands in the outbox instead of being orphaned."""
+	from unittest.mock import patch
+	from uuid import UUID
+
+	from sqlalchemy import select, update
+
+	from src.models.episode import Episode
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
+	from src.services.episode_service import delete_episode, get_episode_by_id
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Late Upload Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+
+	# Stale snapshot, as the router would hold it — s3_key not yet persisted.
+	episode = await get_episode_by_id(test_db, UUID(episode_id))
+	assert episode.s3_key is None
+
+	# Simulate on_upload_complete committing AFTER that fetch: a core UPDATE
+	# with synchronize_session off, so the in-memory object stays stale (the
+	# real callback runs in a different process entirely).
+	await test_db.execute(
+		update(Episode)
+		.where(Episode.id == episode.id)
+		.values(s3_key="podcasts/late.mp3")
+		.execution_options(synchronize_session=False)
+	)
+
+	with patch("src.services.episode_service.drain_storage_deletion_outbox"):
+		await delete_episode(test_db, episode)
+
+	result = await test_db.execute(
+		select(StorageDeletionOutbox).where(StorageDeletionOutbox.s3_key == "podcasts/late.mp3")
+	)
+	assert result.scalar_one_or_none() is not None, (
+		"late-persisted s3_key was not queued for deletion — orphaned object"
+	)
+
 # ============================================================================
 # PROJECT RELATIONSHIP TESTS
 # ============================================================================

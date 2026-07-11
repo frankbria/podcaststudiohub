@@ -219,3 +219,28 @@ def test_drain_task_has_beat_schedule_entry():
 	assert "drain-storage-deletion-outbox" in celery_app.conf.beat_schedule
 	entry = celery_app.conf.beat_schedule["drain-storage-deletion-outbox"]
 	assert entry["task"] == "drain_storage_deletion_outbox"
+
+def test_drain_stops_when_full_batch_makes_no_progress():
+	"""A full batch where every deletion fails must terminate the drain loop
+	instead of re-fetching the same failing rows until the task time limit
+	kills it (e.g. an S3 outage during a large erasure) — the beat tick and
+	the next delete flow's trigger retry later (#366)."""
+	from src.tasks import maintenance
+
+	rows = [
+		_make_row(s3_key=f"podcasts/ep-{i}.mp3")
+		for i in range(maintenance.STORAGE_GC_BATCH_SIZE)
+	]
+	session = _session_yielding_rows(rows)
+	mock_storage = MagicMock()
+
+	with patch("src.tasks.maintenance.SyncSessionLocal", return_value=session), \
+		patch("src.tasks.maintenance.StorageService", return_value=mock_storage), \
+		patch("src.tasks.maintenance.asyncio.run", side_effect=Exception("S3 down")):
+		drained = maintenance.drain_storage_deletion_outbox.run()
+
+	assert drained == 0
+	# One fetch, then stop: zero progress on a full batch must not refetch.
+	session.execute.assert_called_once()
+	for row in rows:
+		assert row.attempts == 1

@@ -5,9 +5,10 @@ Covers issue #116: happy path merging, normalize/fade flags,
 empty timeline edge case, and error-path return shape.
 """
 
-import sys
 import types
 from unittest.mock import MagicMock, patch
+
+from tests.module_patching import patch_modules
 
 from src.tasks.audio_composition import merge_audio_snippets_task
 
@@ -49,7 +50,7 @@ class TestMergeAudioSnippetsTask:
 		]
 
 		with patch.object(merge_audio_snippets_task, "update_state") as mock_update, \
-			 patch.dict(sys.modules, mock_modules), \
+			 patch_modules(mock_modules), \
 			 patch("os.path.getsize", return_value=4096):
 
 			result = merge_audio_snippets_task.run(
@@ -92,7 +93,7 @@ class TestMergeAudioSnippetsTask:
 		]
 
 		with patch.object(merge_audio_snippets_task, "update_state"), \
-			 patch.dict(sys.modules, mock_modules), \
+			 patch_modules(mock_modules), \
 			 patch("os.path.getsize", return_value=2048):
 
 			result = merge_audio_snippets_task.run(
@@ -113,7 +114,7 @@ class TestMergeAudioSnippetsTask:
 		mock_cls.empty.return_value = empty_seg
 
 		with patch.object(merge_audio_snippets_task, "update_state"), \
-			 patch.dict(sys.modules, mock_modules), \
+			 patch_modules(mock_modules), \
 			 patch("os.path.getsize", return_value=0):
 
 			result = merge_audio_snippets_task.run(
@@ -136,7 +137,7 @@ class TestMergeAudioSnippetsTask:
 		timeline = [{"file_path": "/tmp/bad.mp3"}]
 
 		with patch.object(merge_audio_snippets_task, "update_state"), \
-			 patch.dict(sys.modules, mock_modules), \
+			 patch_modules(mock_modules), \
 			 patch.object(
 				merge_audio_snippets_task,
 				"retry",

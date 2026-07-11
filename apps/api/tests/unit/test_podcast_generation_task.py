@@ -14,12 +14,13 @@ YouTube URLs arrive via ``urls``; file/PDF sources arrive pre-extracted via
 import inspect
 import os
 import shutil
-import sys
 import tempfile
 import types
 from typing import Any
 from unittest.mock import MagicMock, create_autospec, patch
 from uuid import uuid4
+
+from tests.module_patching import patch_modules
 
 # Real podcastfy function — imported so tests assert against the ACTUAL
 # installed signature (not a permissive MagicMock). This is the drift guard.
@@ -56,7 +57,7 @@ def _run_task(**task_kwargs: Any) -> tuple[dict[str, Any], MagicMock]:
 	audio_instance.__len__ = MagicMock(return_value=60000)
 
 	with patch.object(generate_podcast_task, 'update_state'), \
-		 patch.dict(sys.modules, mock_modules), \
+		 patch_modules(mock_modules), \
 		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=1024), \
 		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
 		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
@@ -191,7 +192,7 @@ def test_task_returns_success_result():
 	audio_instance.__len__ = MagicMock(return_value=120000)
 
 	with patch.object(generate_podcast_task, 'update_state'), \
-		 patch.dict(sys.modules, mock_modules), \
+		 patch_modules(mock_modules), \
 		 patch('src.tasks.podcast_generation.os.path.getsize', return_value=2048), \
 		 patch('src.tasks.podcast_generation.AudioSegment') as mock_audio, \
 		 patch('src.tasks.podcast_generation.finalize_episode_generation_task'):
@@ -217,7 +218,7 @@ def test_task_returns_failed_result_on_exception():
 	)
 
 	with patch.object(generate_podcast_task, 'update_state'), \
-		 patch.dict(sys.modules, mock_modules), \
+		 patch_modules(mock_modules), \
 		 patch.object(
 			generate_podcast_task,
 			"retry",
@@ -299,7 +300,7 @@ def test_terminal_failure_cleans_up_run_dir():
 			real_generate_podcast, side_effect=RuntimeError("boom")
 		)
 		with patch.object(generate_podcast_task, 'update_state'), \
-			 patch.dict(sys.modules, mock_modules), \
+			 patch_modules(mock_modules), \
 			 patch('src.tasks.podcast_generation.tempfile.mkdtemp', return_value=run_dir), \
 			 patch.object(
 				generate_podcast_task,
@@ -328,7 +329,7 @@ def test_soft_timeout_cleans_up_run_dir():
 			real_generate_podcast, side_effect=SoftTimeLimitExceeded()
 		)
 		with patch.object(generate_podcast_task, 'update_state'), \
-			 patch.dict(sys.modules, mock_modules), \
+			 patch_modules(mock_modules), \
 			 patch('src.tasks.podcast_generation.tempfile.mkdtemp', return_value=run_dir):
 			result = generate_podcast_task.run(
 				episode_id=str(uuid4()),

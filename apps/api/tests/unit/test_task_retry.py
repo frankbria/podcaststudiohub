@@ -8,9 +8,10 @@ Verifies that:
 - Non-retryable errors are handled appropriately per task
 """
 
-import sys
 import types
 from unittest.mock import MagicMock, patch
+
+from tests.module_patching import patch_modules
 
 from botocore.exceptions import ClientError
 
@@ -256,7 +257,7 @@ class TestMergeAudioSnippetsTaskRetry:
 		timeline = [{"file_path": "/tmp/seg.mp3"}]
 
 		with (
-			patch.dict(sys.modules, mock_modules),
+			patch_modules(mock_modules),
 			patch.object(merge_audio_snippets_task, "update_state"),
 			patch.object(
 				merge_audio_snippets_task,
@@ -283,7 +284,7 @@ class TestMergeAudioSnippetsTaskRetry:
 		mock_cls.from_file.side_effect = RuntimeError("Disk full")
 
 		with (
-			patch.dict(sys.modules, mock_modules),
+			patch_modules(mock_modules),
 			patch.object(merge_audio_snippets_task, "update_state"),
 			patch.object(
 				merge_audio_snippets_task,
@@ -414,7 +415,7 @@ class TestGeneratePodcastTaskRetry:
 		mock_gen.side_effect = RuntimeError("LLM API unavailable")
 
 		with (
-			patch.dict(sys.modules, mock_modules),
+			patch_modules(mock_modules),
 			patch.object(generate_podcast_task, "update_state"),
 			patch.object(
 				generate_podcast_task,
@@ -440,7 +441,7 @@ class TestGeneratePodcastTaskRetry:
 		mock_gen.side_effect = RuntimeError("LLM API unavailable")
 
 		with (
-			patch.dict(sys.modules, mock_modules),
+			patch_modules(mock_modules),
 			patch.object(generate_podcast_task, "update_state"),
 			patch.object(
 				generate_podcast_task,
@@ -465,7 +466,7 @@ class TestGeneratePodcastTaskRetry:
 		mock_gen.side_effect = RuntimeError("Persistent failure")
 
 		with (
-			patch.dict(sys.modules, mock_modules),
+			patch_modules(mock_modules),
 			patch.object(generate_podcast_task, "update_state"),
 			patch.object(
 				generate_podcast_task,

@@ -14,21 +14,21 @@ SQLAlchemy dialect) doesn't recognize → `cannot adapt type 'Jsonb'`.
 Diagnostic evidence: audit-hook plugin showed test 1 of `TestFullWorkflowChain`
 evicts all `psycopg*` modules at patch exit.
 
-Same pattern exists in 5 more files (25 sites total):
-`tests/test_celery_workflow.py` (10), `tests/unit/test_podcast_generation_task.py` (5),
+Same pattern exists in 5 more files (24 call sites total):
+`tests/test_celery_workflow.py` (9), `tests/unit/test_podcast_generation_task.py` (5),
 `tests/unit/test_audio_composition_task.py` (4), `tests/unit/test_task_retry.py` (5),
 `tests/unit/test_generation_idempotency.py` (1).
 
 ## Plan (TDD)
 
-- [ ] RED: `tests/test_sync_jsonb_isolation.py` — sync-session ORM flush of a
+- [x] RED: `tests/test_sync_jsonb_isolation.py` — sync-session ORM flush of a
       `User` row (JSONB `encrypted_api_keys`); file sorts after
       `test_celery_workflow.py`. Confirm it FAILS after workflow tests, PASSES alone.
-- [ ] GREEN: add `tests/module_patching.py` with `patch_modules(mapping)` — a
+- [x] GREEN: add `tests/module_patching.py` with `patch_modules(mapping)` — a
       context manager that sets the given `sys.modules` keys and on exit restores
       **only those keys** (leaving modules imported during the window intact).
-      Replace all 25 `patch.dict(sys.modules, ...)` sites with it.
-- [ ] Verify: issue repro commands pass in both orders; full API test suite green;
+      Replace all 24 `patch.dict(sys.modules, ...)` sites with it.
+- [x] Verify: issue repro commands pass in both orders; full API test suite green;
       ruff clean.
 
 ## Scope note

@@ -9,9 +9,10 @@ produced a fresh ``Jsonb`` class unknown to the already-registered adapter
 map, so any later sync-session ORM insert with a JSONB column failed with
 ``cannot adapt type 'Jsonb'``.
 
-This file sorts after ``tests/test_celery_workflow.py`` so, in a shared
-pytest session (including the full suite), the insert below exercises the
-exact poisoned path from the issue repro.
+This file sorts after ``tests/test_celery_workflow.py`` under pytest's
+default alphabetical collection, so in a full-suite run the insert below is
+a canary for the issue's repro path. The deterministic, ordering-independent
+guard is ``tests/unit/test_module_patching.py``.
 """
 import uuid
 

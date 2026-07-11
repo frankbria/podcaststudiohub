@@ -18,9 +18,9 @@ import tempfile
 import types
 from typing import Any
 from unittest.mock import MagicMock, create_autospec, patch
+from uuid import uuid4
 
 from tests.module_patching import patch_modules
-from uuid import uuid4
 
 # Real podcastfy function — imported so tests assert against the ACTUAL
 # installed signature (not a permissive MagicMock). This is the drift guard.

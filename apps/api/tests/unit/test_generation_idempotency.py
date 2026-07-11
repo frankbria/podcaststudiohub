@@ -9,9 +9,9 @@ lock to block concurrent/duplicate in-flight runs while self-healing via TTL.
 
 import types
 from unittest.mock import MagicMock, create_autospec, patch
+from uuid import uuid4
 
 from tests.module_patching import patch_modules
-from uuid import uuid4
 
 from podcastfy.client import generate_podcast as real_generate_podcast
 

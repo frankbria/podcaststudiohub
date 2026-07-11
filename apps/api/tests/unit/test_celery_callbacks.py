@@ -806,7 +806,6 @@ class TestQueueOrphanedStorage:
 	def test_logs_critical_with_key_after_exhausting_retries(self):
 		"""After all attempts fail, the key/path is logged at CRITICAL — the
 		log line is the only remaining trace of the orphan (no ListBucket)."""
-		import logging
 
 		from src.tasks.callbacks import _queue_orphaned_storage
 

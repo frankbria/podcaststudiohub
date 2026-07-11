@@ -23,6 +23,7 @@ def _make_mock_episode(episode_id: str, user_id: str = None) -> MagicMock:
     episode = MagicMock()
     episode.id = uuid.UUID(episode_id)
     episode.user_id = uuid.UUID(user_id) if user_id else uuid.uuid4()
+    episode.tenant_id = uuid.uuid4()
     episode.generation_status = "generating"
     episode.generation_progress = {}
     episode.file_path = None
@@ -536,7 +537,9 @@ class TestFinalizeEpisodeGenerationTask:
             result = self._invoke_finalize(episode_id, generation_result, mock_db)
 
         assert result["status"] == "absorbed"
-        mock_queue.assert_called_once_with(s3_key=upload_result["s3_key"], file_path=None)
+        mock_queue.assert_called_once_with(
+            s3_key=upload_result["s3_key"], file_path=None, tenant_id=episode.tenant_id
+        )
 
     def test_absorbs_orphaned_local_file_when_episode_deleted_mid_finalization_no_s3(
         self, tmp_path
@@ -568,7 +571,9 @@ class TestFinalizeEpisodeGenerationTask:
 
         assert result["status"] == "absorbed"
         expected_path = str(storage_dir / f"episode-{episode_id}.mp3")
-        mock_queue.assert_called_once_with(s3_key=None, file_path=expected_path)
+        mock_queue.assert_called_once_with(
+            s3_key=None, file_path=expected_path, tenant_id=episode.tenant_id
+        )
 
     def test_does_not_absorb_when_row_still_present_after_staledata_error(self):
         """Extremely defensive: if the post-error recheck still finds the row,

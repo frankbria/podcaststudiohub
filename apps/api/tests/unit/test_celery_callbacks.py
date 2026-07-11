@@ -101,8 +101,10 @@ class TestOnUploadComplete:
 		# Session should not have been entered at all
 		mock_ctx.__enter__.assert_not_called()
 
-	def test_handles_missing_episode_gracefully(self):
-		"""Callback logs error but does not raise if episode is not found."""
+	def test_absorbs_orphaned_upload_when_episode_missing(self):
+		"""If the episode was deleted after this upload started (issue #366),
+		the callback queues the now-orphaned S3 key for deletion instead of
+		only logging — never raises."""
 		episode_id = str(uuid.uuid4())
 		mock_ctx, mock_session = _make_sync_session(None)  # .get() returns None
 
@@ -118,7 +120,12 @@ class TestOnUploadComplete:
 			# Should not raise
 			_invoke_task(on_upload_complete, result=result, episode_id=episode_id)
 
-		mock_session.commit.assert_not_called()
+		added_rows = [
+			call.args[0] for call in mock_session.add.call_args_list
+		]
+		assert len(added_rows) == 1
+		assert added_rows[0].s3_key == "key.mp3"
+		mock_session.commit.assert_called_once()
 
 	def test_updates_generation_progress(self):
 		"""generation_progress is updated with 'upload: complete' on success."""
@@ -775,3 +782,41 @@ class TestUpdateEpisodeHelper:
 			result = _update_episode(episode_id, updates={})
 
 		assert result is False
+
+
+class TestQueueOrphanedStorage:
+	"""_queue_orphaned_storage must be durable itself (issue #366): if the
+	outbox insert fails, the artifact it was recording is orphaned forever."""
+
+	def test_retries_transient_insert_failure_then_succeeds(self):
+		"""A transient DB error on the first insert attempt is retried; the
+		row lands and the helper reports success."""
+		from src.tasks.callbacks import _queue_orphaned_storage
+
+		good_ctx, good_session = _make_sync_session(None)
+		with patch(
+			"src.tasks.callbacks.SyncSessionLocal",
+			side_effect=[Exception("db blip"), good_ctx],
+		), patch("src.tasks.callbacks.time.sleep"):
+			queued = _queue_orphaned_storage(s3_key="key.mp3")
+
+		assert queued is True
+		good_session.commit.assert_called_once()
+
+	def test_logs_critical_with_key_after_exhausting_retries(self):
+		"""After all attempts fail, the key/path is logged at CRITICAL — the
+		log line is the only remaining trace of the orphan (no ListBucket)."""
+
+		from src.tasks.callbacks import _queue_orphaned_storage
+
+		with patch(
+			"src.tasks.callbacks.SyncSessionLocal",
+			side_effect=Exception("db down"),
+		), patch("src.tasks.callbacks.time.sleep"), patch(
+			"src.tasks.callbacks.logger"
+		) as mock_logger:
+			queued = _queue_orphaned_storage(s3_key="key.mp3")
+
+		assert queued is False
+		mock_logger.critical.assert_called_once()
+		assert "key.mp3" in str(mock_logger.critical.call_args)

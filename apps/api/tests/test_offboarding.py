@@ -8,7 +8,7 @@ objects, and local file artifacts.
 
 import pytest
 from datetime import date
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -22,6 +22,7 @@ from src.models.episode_composition import EpisodeComposition
 from src.models.audio_snippet import AudioSnippet
 from src.models.rss_feed import RSSFeed
 from src.models.content_source import ContentSource
+from src.models.storage_deletion_outbox import StorageDeletionOutbox
 from src.services.auth_service import verify_jwt_token
 
 
@@ -131,9 +132,7 @@ async def seeded_user(client, test_db):
 @pytest.mark.asyncio
 async def test_delete_me_returns_204(seeded_user, client):
 	"""DELETE /auth/me erases the account and returns 204."""
-	with patch("src.services.offboarding_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+	with patch("src.services.offboarding_service.drain_storage_deletion_outbox"):
 		response = await client.request(
 			"DELETE", "/auth/me", headers=seeded_user["headers"],
 			json={"password": "SecurePass123!"},
@@ -143,29 +142,31 @@ async def test_delete_me_returns_204(seeded_user, client):
 
 
 @pytest.mark.asyncio
-async def test_delete_me_deletes_one_s3_object_per_key(seeded_user, client):
-	"""Every collected S3 key gets exactly one delete_file call."""
-	with patch("src.services.offboarding_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+async def test_delete_me_queues_one_outbox_row_per_s3_key(seeded_user, client, test_db):
+	"""Every collected S3 key is queued as exactly one durable outbox row
+	instead of being deleted from S3 synchronously (#366)."""
+	with patch("src.services.offboarding_service.drain_storage_deletion_outbox"):
 		response = await client.request(
 			"DELETE", "/auth/me", headers=seeded_user["headers"],
 			json={"password": "SecurePass123!"},
 		)
 
 	assert response.status_code == 204
-	called_keys = {call.args[0] for call in mock_instance.delete_file.call_args_list}
-	assert called_keys == seeded_user["s3_keys"]
-	assert mock_instance.delete_file.call_count == len(seeded_user["s3_keys"])
+	# Scoped to this user's tenant (outbox has no RLS — a global read is
+	# fragile against concurrent writers).
+	result = await test_db.execute(select(StorageDeletionOutbox.s3_key).where(
+		StorageDeletionOutbox.s3_key.isnot(None),
+		StorageDeletionOutbox.tenant_id == seeded_user["tenant_id"],
+	))
+	queued_keys = {row[0] for row in result.all()}
+	assert queued_keys == seeded_user["s3_keys"]
 
 
 @pytest.mark.asyncio
 async def test_delete_me_removes_user_and_cascaded_rows(seeded_user, client, test_db):
 	"""The user row and everything that cascades from it (project, episode,
 	composition, audio snippet, RSS feed, content source) are gone."""
-	with patch("src.services.offboarding_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+	with patch("src.services.offboarding_service.drain_storage_deletion_outbox"):
 		response = await client.request(
 			"DELETE", "/auth/me", headers=seeded_user["headers"],
 			json={"password": "SecurePass123!"},
@@ -235,9 +236,7 @@ async def test_delete_me_removes_billing_rows(seeded_user, client, test_db):
 	)
 	assert pre_usage.scalars().all()
 
-	with patch("src.services.offboarding_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+	with patch("src.services.offboarding_service.drain_storage_deletion_outbox"):
 		response = await client.request(
 			"DELETE", "/auth/me", headers=seeded_user["headers"],
 			json={"password": "SecurePass123!"},
@@ -260,9 +259,7 @@ async def test_delete_me_removes_billing_rows(seeded_user, client, test_db):
 @pytest.mark.asyncio
 async def test_delete_me_invalidates_old_token(seeded_user, client):
 	"""After erasure, the user's old bearer token is rejected."""
-	with patch("src.services.offboarding_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+	with patch("src.services.offboarding_service.drain_storage_deletion_outbox"):
 		response = await client.request(
 			"DELETE", "/auth/me", headers=seeded_user["headers"],
 			json={"password": "SecurePass123!"},
@@ -285,16 +282,14 @@ async def test_delete_me_wrong_password_rejected(seeded_user, client, test_db):
 	"""A wrong password confirmation is a 403 and nothing is erased."""
 	from uuid import UUID as _UUID
 
-	with patch("src.services.offboarding_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+	with patch("src.services.offboarding_service.drain_storage_deletion_outbox") as mock_drain:
 		response = await client.request(
 			"DELETE", "/auth/me", headers=seeded_user["headers"],
 			json={"password": "WrongPass456!"},
 		)
 
 	assert response.status_code == 403
-	mock_instance.delete_file.assert_not_called()
+	mock_drain.delay.assert_not_called()
 	user_result = await test_db.execute(
 		select(User).where(User.id == _UUID(seeded_user["user_id"]))
 	)
@@ -312,16 +307,14 @@ async def test_delete_me_refused_while_episode_generating(seeded_user, client, t
 	episode = await get_episode_by_id(test_db, _UUID(seeded_user["episode_id"]))
 	await set_episode_system_fields(test_db, episode, generation_status="generating")
 
-	with patch("src.services.offboarding_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock()
+	with patch("src.services.offboarding_service.drain_storage_deletion_outbox") as mock_drain:
 		response = await client.request(
 			"DELETE", "/auth/me", headers=seeded_user["headers"],
 			json={"password": "SecurePass123!"},
 		)
 
 	assert response.status_code == 409
-	mock_instance.delete_file.assert_not_called()
+	mock_drain.delay.assert_not_called()
 	user_result = await test_db.execute(
 		select(User).where(User.id == _UUID(seeded_user["user_id"]))
 	)
@@ -329,13 +322,13 @@ async def test_delete_me_refused_while_episode_generating(seeded_user, client, t
 
 
 @pytest.mark.asyncio
-async def test_delete_me_s3_failure_does_not_block_erasure(seeded_user, client, test_db):
-	"""S3 cleanup is best-effort: delete_file raising never blocks the erasure."""
+async def test_delete_me_succeeds_when_drain_delay_fails(seeded_user, client, test_db):
+	"""The post-commit best-effort drain trigger is best-effort: a broker-down
+	failure never blocks the erasure (#366)."""
 	from uuid import UUID as _UUID
 
-	with patch("src.services.offboarding_service.StorageService") as MockStorage:
-		mock_instance = MockStorage.return_value
-		mock_instance.delete_file = AsyncMock(side_effect=Exception("S3 unavailable"))
+	with patch("src.services.offboarding_service.drain_storage_deletion_outbox") as mock_drain:
+		mock_drain.delay.side_effect = Exception("broker unavailable")
 		response = await client.request(
 			"DELETE", "/auth/me", headers=seeded_user["headers"],
 			json={"password": "SecurePass123!"},
@@ -346,3 +339,17 @@ async def test_delete_me_s3_failure_does_not_block_erasure(seeded_user, client, 
 		select(User).where(User.id == _UUID(seeded_user["user_id"]))
 	)
 	assert user_result.scalar_one_or_none() is None
+
+
+@pytest.mark.asyncio
+async def test_delete_me_triggers_drain_task(seeded_user, client):
+	"""Erasing an account with queued keys best-effort triggers a prompt drain
+	so audio disappears promptly instead of waiting for the beat schedule (#366)."""
+	with patch("src.services.offboarding_service.drain_storage_deletion_outbox") as mock_drain:
+		response = await client.request(
+			"DELETE", "/auth/me", headers=seeded_user["headers"],
+			json={"password": "SecurePass123!"},
+		)
+
+	assert response.status_code == 204
+	mock_drain.delay.assert_called_once_with()

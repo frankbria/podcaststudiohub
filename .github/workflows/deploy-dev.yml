@@ -310,10 +310,15 @@ jobs:
             fi
 
             echo "Starting Celery worker..."
+            # -B runs beat embedded in this single worker process: no separate
+            # deployment starts a standalone beat process, so without it
+            # nothing schedules reap_stuck_episodes or drain_storage_deletion_outbox
+            # (issue #366). Only safe with exactly one worker process — running
+            # -B on more than one would double-schedule every beat task.
             pm2 start uv \
               --name podcaststudiohub-celery \
               --cwd $SERVER_PATH/api \
-              -- run celery -A src.worker:celery_app worker --loglevel=info
+              -- run celery -A src.worker:celery_app worker -B --loglevel=info
 
             pm2 save
 

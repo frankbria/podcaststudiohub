@@ -5,6 +5,7 @@ These tasks are triggered by Celery's link/link_error mechanism and update the
 Episode record in the database with the results of each workflow stage.
 """
 import logging
+import time
 import uuid as uuid_module
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -14,10 +15,57 @@ from sqlalchemy import select
 
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
+from src.models.storage_deletion_outbox import StorageDeletionOutbox
+from src.tasks.retry_utils import calculate_backoff
 from src.tasks.s3_upload import _cleanup_temp_file
 from src.worker import celery_app
 
 logger = logging.getLogger(__name__)
+
+_QUEUE_ORPHAN_ATTEMPTS = 3
+
+
+def _queue_orphaned_storage(
+	s3_key: Optional[str] = None,
+	file_path: Optional[str] = None,
+	tenant_id: Optional[uuid_module.UUID] = None,
+) -> bool:
+	"""Queue a still-existing storage artifact for deletion when its episode
+	row is gone (issue #366).
+
+	Closes the TOCTOU window where a Celery task persists an S3 object or
+	local file *after* the episode row it belongs to (and any keys a delete
+	flow collected) has already been deleted. Without this the artifact would
+	be orphaned forever — IAM has no s3:ListBucket, so orphans are unfindable.
+	Opens its own session: the caller's session may already be in a failed
+	transaction state.
+
+	The insert is retried inline (a Celery-level retry can't help: once the
+	episode row is gone the retried task can no longer derive the key). If
+	every attempt fails, the key/path is logged at CRITICAL — that log line
+	is deliberately the last-resort durable trace for manual cleanup.
+	"""
+	if not s3_key and not file_path:
+		return True
+	for attempt in range(_QUEUE_ORPHAN_ATTEMPTS):
+		try:
+			with SyncSessionLocal() as db:
+				db.add(StorageDeletionOutbox(tenant_id=tenant_id, s3_key=s3_key, file_path=file_path))
+				db.commit()
+			return True
+		except Exception as exc:
+			logger.warning(
+				"Outbox insert for orphaned storage failed (attempt %d/%d, s3_key=%s, file_path=%s): %s",
+				attempt + 1, _QUEUE_ORPHAN_ATTEMPTS, s3_key, file_path, exc, exc_info=True,
+			)
+			if attempt < _QUEUE_ORPHAN_ATTEMPTS - 1:
+				time.sleep(calculate_backoff(attempt, base=1))
+	logger.critical(
+		"PERMANENT ORPHAN RISK: could not queue orphaned storage after %d attempts "
+		"(s3_key=%s, file_path=%s) — manual deletion needed",
+		_QUEUE_ORPHAN_ATTEMPTS, s3_key, file_path,
+	)
+	return False
 
 
 def _utcnow_iso() -> str:
@@ -104,24 +152,38 @@ def on_upload_complete(self: Task, result: Dict[str, Any], episode_id: str) -> N
 		)
 		return
 
-	updated = _update_episode(
-		episode_id,
-		# Do NOT set generation_status here: upload has already completed, so
-		# "uploading" would briefly regress the status. The workflow chain's
-		# next task (or on_workflow_complete) owns status progression (issue #220).
-		updates={
-			"s3_url": result.get("s3_url"),
-			"s3_key": result.get("s3_key"),
-		},
-		progress_updates={
-			"upload": "complete",
-			"uploaded_at": _utcnow_iso(),
-		},
-	)
-	if updated:
-		logger.info(
-			"Episode %s updated with S3 URL: %s", episode_id, result.get("s3_url")
+	s3_key = result.get("s3_key")
+	try:
+		with SyncSessionLocal() as db:
+			episode = _get_episode_for_update(db, episode_id)
+			if episode is None:
+				# The episode was deleted after this upload started (issue #366):
+				# the object just landed in S3 with nothing left to reference it.
+				logger.error("Episode %s not found in database", episode_id)
+				_queue_orphaned_storage(s3_key=s3_key)
+				return
+
+			# Do NOT set generation_status here: upload has already completed, so
+			# "uploading" would briefly regress the status. The workflow chain's
+			# next task (or on_workflow_complete) owns status progression (issue #220).
+			episode.s3_url = result.get("s3_url")
+			episode.s3_key = s3_key
+			current_progress = dict(episode.generation_progress or {})
+			current_progress.update({
+				"upload": "complete",
+				"uploaded_at": _utcnow_iso(),
+			})
+			episode.generation_progress = current_progress
+			db.commit()
+	except Exception as exc:
+		logger.error(
+			"Failed to update episode %s: %s", episode_id, exc, exc_info=True
 		)
+		return
+
+	logger.info(
+		"Episode %s updated with S3 URL: %s", episode_id, result.get("s3_url")
+	)
 
 
 @celery_app.task(bind=True, name="on_composition_complete")

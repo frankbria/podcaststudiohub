@@ -158,13 +158,19 @@ EOF
 
 #### Step 4: Restart Celery
 
+`-B` runs beat embedded in this single worker process — no separate process
+starts a standalone beat, so without it nothing actually schedules
+`reap_stuck_episodes` or `drain_storage_deletion_outbox` (issue #366). This is
+only safe with exactly one worker process; running `-B` on more than one would
+double-schedule every beat task.
+
 ```bash
 ssh root@<SERVER_IP> << 'EOF'
 cd /opt/podcaststudiohub/api
 
 pm2 delete podcaststudiohub-celery 2>/dev/null || true
 pm2 start uv --name podcaststudiohub-celery --cwd /opt/podcaststudiohub/api \
-  -- run celery -A src.worker:celery_app worker --loglevel=info
+  -- run celery -A src.worker:celery_app worker -B --loglevel=info
 pm2 save
 EOF
 ```
@@ -589,10 +595,10 @@ pm2 start uv --name podcaststudiohub-api --cwd /opt/podcaststudiohub/api \
 cd /opt/podcaststudiohub/frontend
 PORT=3010 pm2 start npm --name podcaststudiohub-frontend --cwd /opt/podcaststudiohub/frontend -- start
 
-# Restart Celery
+# Restart Celery (-B: embedded beat — single worker process only, see Step 4)
 cd /opt/podcaststudiohub/api
 pm2 start uv --name podcaststudiohub-celery --cwd /opt/podcaststudiohub/api \
-  -- run celery -A src.worker:celery_app worker --loglevel=info
+  -- run celery -A src.worker:celery_app worker -B --loglevel=info
 
 pm2 save
 pm2 list

@@ -6,8 +6,16 @@ run slips past every in-task guard (worker crash, broker loss, OOM kill) the
 episode can sit in a non-terminal ``generation_status`` forever and the UI shows
 a perpetual 'queued'. This beat task fails any episode whose run started longer
 ago than ``EPISODE_REAP_THRESHOLD_SECONDS``.
+
+``drain_storage_deletion_outbox`` is the GC worker for issue #366: delete flows
+(delete_episode, erase_user) insert a row per S3 key / local file path into the
+durable ``storage_deletion_outbox`` table instead of deleting from storage
+inline, so a failed commit never leaves storage deleted out from under a row
+that's still there. This task retries the actual deletion until it succeeds.
 """
+import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from celery import Task
@@ -16,10 +24,17 @@ from sqlalchemy import and_, or_, select
 from src.config import settings
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
+from src.models.storage_deletion_outbox import StorageDeletionOutbox
+from src.services.storage_service import StorageService
 from src.tasks.callbacks import _update_episode, _utcnow_iso
+from src.utils.datetime_utils import utcnow
 from src.worker import celery_app
 
 logger = logging.getLogger(__name__)
+
+# Rows fetched per drain iteration. The task loops while a full batch was
+# processed, so a backlog larger than this drains in one invocation.
+STORAGE_GC_BATCH_SIZE = 100
 
 # Statuses that represent an in-flight run. 'draft' is excluded (not started),
 # as are the terminal 'complete'/'failed'.
@@ -81,3 +96,89 @@ def reap_stuck_episodes(self: Task) -> int:
     if reaped:
         logger.warning("Reaped %d stuck episode(s) past %ds threshold", reaped, threshold)
     return reaped
+
+
+@celery_app.task(bind=True, name="drain_storage_deletion_outbox")
+def drain_storage_deletion_outbox(self: Task) -> int:
+    """Retry queued storage deletions until they succeed (issue #366).
+
+    Batch-fetches rows with ``FOR UPDATE SKIP LOCKED`` so an overlapping
+    invocation (beat tick racing a delete flow's post-commit trigger) skips
+    rows already claimed instead of double-processing them. Deletion is
+    idempotent both ways (a missing local file, or a repeated S3
+    ``delete_object``, both count as success — issue #366 AC5), so a row is
+    only removed once every key/path it names is gone. A failure increments
+    ``attempts``/``last_attempt_at`` and leaves the row queued for the next
+    drain; no ``self.retry`` is used here since the beat schedule and the
+    delete flows' prompt trigger both already re-run this task.
+
+    Rows are fetched lowest-``attempts`` first so a head of long-failing rows
+    never starves newer, deletable work behind it; ``created_at`` breaks ties
+    for FIFO within a retry generation. Each row is attempted at most once per
+    invocation (``seen`` wrap-around detection), which both bounds the loop
+    when everything is failing (e.g. an S3 outage) and lets one invocation
+    drain an arbitrary backlog. Returns the number of rows drained.
+    """
+    storage: StorageService | None = None
+    drained = 0
+    seen: set = set()
+
+    while True:
+        with SyncSessionLocal() as db:
+            batch = db.execute(
+                select(StorageDeletionOutbox)
+                .order_by(
+                    StorageDeletionOutbox.attempts,
+                    StorageDeletionOutbox.created_at,
+                )
+                .with_for_update(skip_locked=True)
+                .limit(STORAGE_GC_BATCH_SIZE)
+            ).scalars().all()
+
+            rows = [row for row in batch if row.id not in seen]
+            if not rows:
+                break
+            seen.update(row.id for row in rows)
+
+            for row in rows:
+                ok = True
+
+                if row.s3_key:
+                    if storage is None:
+                        storage = StorageService()
+                    try:
+                        asyncio.run(storage.delete_file(row.s3_key))
+                    except Exception as exc:
+                        ok = False
+                        logger.warning(
+                            "Failed to delete S3 object %s (attempt %d): %s",
+                            row.s3_key, row.attempts + 1, exc,
+                        )
+
+                if ok and row.file_path:
+                    try:
+                        os.remove(row.file_path)
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        ok = False
+                        logger.warning(
+                            "Failed to remove local file %s (attempt %d): %s",
+                            row.file_path, row.attempts + 1, exc,
+                        )
+
+                if ok:
+                    db.delete(row)
+                    drained += 1
+                else:
+                    row.attempts += 1
+                    row.last_attempt_at = utcnow()
+
+            db.commit()
+
+            if len(batch) < STORAGE_GC_BATCH_SIZE:
+                break
+
+    if drained:
+        logger.info("Drained %d storage deletion(s) from the outbox", drained)
+    return drained

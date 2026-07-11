@@ -20,7 +20,7 @@ podcaststudiohub/
 ├── apps/
 │   ├── api/              # FastAPI backend (Python, uv)
 │   │   ├── src/          # Application code (api, routers, services, tasks, models, schemas, middleware, utils)
-│   │   ├── alembic/      # DB migrations (versions/ up to 014_…)
+│   │   ├── alembic/      # DB migrations (versions/ up to 017_…)
 │   │   ├── tests/        # pytest + pytest-bdd
 │   │   └── pyproject.toml
 │   └── web/              # Next.js 15 frontend (TypeScript, App Router)

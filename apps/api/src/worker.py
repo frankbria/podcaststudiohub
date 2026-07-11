@@ -66,6 +66,7 @@ celery_app.conf.task_routes = {
     "on_workflow_complete": {"queue": "callbacks"},
     "on_workflow_failure": {"queue": "callbacks"},
     "reap_stuck_episodes": {"queue": "callbacks"},
+    "drain_storage_deletion_outbox": {"queue": "callbacks"},
 }
 
 # Beat schedule — periodic reaper that fails episodes stuck in a non-terminal
@@ -75,6 +76,14 @@ celery_app.conf.beat_schedule = {
     "reap-stuck-episodes": {
         "task": "reap_stuck_episodes",
         "schedule": timedelta(seconds=settings.REAP_STUCK_EPISODES_INTERVAL_SECONDS),
+    },
+    # Durable backstop for the storage-deletion outbox (issue #366): delete
+    # flows also trigger a prompt drain post-commit, but that trigger is
+    # best-effort (broker down must never fail the request), so this periodic
+    # tick is what guarantees a queued deletion is retried until it succeeds.
+    "drain-storage-deletion-outbox": {
+        "task": "drain_storage_deletion_outbox",
+        "schedule": timedelta(seconds=settings.STORAGE_GC_INTERVAL_SECONDS),
     },
 }
 

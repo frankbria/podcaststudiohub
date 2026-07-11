@@ -5,6 +5,7 @@ These tasks are triggered by Celery's link/link_error mechanism and update the
 Episode record in the database with the results of each workflow stage.
 """
 import logging
+import time
 import uuid as uuid_module
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -15,17 +16,20 @@ from sqlalchemy import select
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
 from src.models.storage_deletion_outbox import StorageDeletionOutbox
+from src.tasks.retry_utils import calculate_backoff
 from src.tasks.s3_upload import _cleanup_temp_file
 from src.worker import celery_app
 
 logger = logging.getLogger(__name__)
+
+_QUEUE_ORPHAN_ATTEMPTS = 3
 
 
 def _queue_orphaned_storage(
 	s3_key: Optional[str] = None,
 	file_path: Optional[str] = None,
 	tenant_id: Optional[uuid_module.UUID] = None,
-) -> None:
+) -> bool:
 	"""Queue a still-existing storage artifact for deletion when its episode
 	row is gone (issue #366).
 
@@ -35,18 +39,33 @@ def _queue_orphaned_storage(
 	be orphaned forever — IAM has no s3:ListBucket, so orphans are unfindable.
 	Opens its own session: the caller's session may already be in a failed
 	transaction state.
+
+	The insert is retried inline (a Celery-level retry can't help: once the
+	episode row is gone the retried task can no longer derive the key). If
+	every attempt fails, the key/path is logged at CRITICAL — that log line
+	is deliberately the last-resort durable trace for manual cleanup.
 	"""
 	if not s3_key and not file_path:
-		return
-	try:
-		with SyncSessionLocal() as db:
-			db.add(StorageDeletionOutbox(tenant_id=tenant_id, s3_key=s3_key, file_path=file_path))
-			db.commit()
-	except Exception as exc:
-		logger.error(
-			"Failed to queue orphaned storage (s3_key=%s, file_path=%s) for deletion: %s",
-			s3_key, file_path, exc, exc_info=True,
-		)
+		return True
+	for attempt in range(_QUEUE_ORPHAN_ATTEMPTS):
+		try:
+			with SyncSessionLocal() as db:
+				db.add(StorageDeletionOutbox(tenant_id=tenant_id, s3_key=s3_key, file_path=file_path))
+				db.commit()
+			return True
+		except Exception as exc:
+			logger.warning(
+				"Outbox insert for orphaned storage failed (attempt %d/%d, s3_key=%s, file_path=%s): %s",
+				attempt + 1, _QUEUE_ORPHAN_ATTEMPTS, s3_key, file_path, exc, exc_info=True,
+			)
+			if attempt < _QUEUE_ORPHAN_ATTEMPTS - 1:
+				time.sleep(calculate_backoff(attempt, base=1))
+	logger.critical(
+		"PERMANENT ORPHAN RISK: could not queue orphaned storage after %d attempts "
+		"(s3_key=%s, file_path=%s) — manual deletion needed",
+		_QUEUE_ORPHAN_ATTEMPTS, s3_key, file_path,
+	)
+	return False
 
 
 def _utcnow_iso() -> str:

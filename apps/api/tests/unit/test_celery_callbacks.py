@@ -782,3 +782,42 @@ class TestUpdateEpisodeHelper:
 			result = _update_episode(episode_id, updates={})
 
 		assert result is False
+
+
+class TestQueueOrphanedStorage:
+	"""_queue_orphaned_storage must be durable itself (issue #366): if the
+	outbox insert fails, the artifact it was recording is orphaned forever."""
+
+	def test_retries_transient_insert_failure_then_succeeds(self):
+		"""A transient DB error on the first insert attempt is retried; the
+		row lands and the helper reports success."""
+		from src.tasks.callbacks import _queue_orphaned_storage
+
+		good_ctx, good_session = _make_sync_session(None)
+		with patch(
+			"src.tasks.callbacks.SyncSessionLocal",
+			side_effect=[Exception("db blip"), good_ctx],
+		), patch("src.tasks.callbacks.time.sleep"):
+			queued = _queue_orphaned_storage(s3_key="key.mp3")
+
+		assert queued is True
+		good_session.commit.assert_called_once()
+
+	def test_logs_critical_with_key_after_exhausting_retries(self):
+		"""After all attempts fail, the key/path is logged at CRITICAL — the
+		log line is the only remaining trace of the orphan (no ListBucket)."""
+		import logging
+
+		from src.tasks.callbacks import _queue_orphaned_storage
+
+		with patch(
+			"src.tasks.callbacks.SyncSessionLocal",
+			side_effect=Exception("db down"),
+		), patch("src.tasks.callbacks.time.sleep"), patch(
+			"src.tasks.callbacks.logger"
+		) as mock_logger:
+			queued = _queue_orphaned_storage(s3_key="key.mp3")
+
+		assert queued is False
+		mock_logger.critical.assert_called_once()
+		assert "key.mp3" in str(mock_logger.critical.call_args)

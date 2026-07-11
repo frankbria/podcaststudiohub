@@ -435,3 +435,92 @@ class TestUploadToS3WithRetries:
 		assert "down" in result["error"]
 		assert up.call_count == 3
 		assert slept.call_count == 2  # backoff between attempts, none after the last
+
+
+# ============================================================================
+# COMPOSITION TIMELINE RESOLVER (issue #313) — the timeline must always include
+# the generated audio and must never come back empty.
+# ============================================================================
+
+class TestResolveCompositionTimeline:
+	"""resolve_composition_timeline builds the ordered merge timeline."""
+
+	def _mock_session(self, snippets: list) -> MagicMock:
+		session = MagicMock()
+		session.execute.return_value.scalars.return_value.all.return_value = snippets
+		session.__enter__ = MagicMock(return_value=session)
+		session.__exit__ = MagicMock(return_value=False)
+		return session
+
+	def _snippet(self, snippet_type: str, file_path: str) -> types.SimpleNamespace:
+		return types.SimpleNamespace(
+			id=uuid4(), snippet_type=snippet_type, file_path=file_path
+		)
+
+	def test_no_snippets_yields_main_segment_only(self) -> None:
+		"""With no project snippets the timeline is exactly the generated audio."""
+		from src.tasks import podcast_generation as pg
+
+		with patch.object(pg, "SyncSessionLocal", return_value=self._mock_session([])):
+			timeline = pg.resolve_composition_timeline(uuid4(), "/tmp/gen.mp3")
+
+		assert timeline == [{"file_path": "/tmp/gen.mp3", "segment_type": "main_content"}]
+
+	def test_orders_intro_and_music_before_main_and_rest_after(self, tmp_path) -> None:
+		"""intro/music precede main_content; outro/midroll/ad/other follow it."""
+		from src.tasks import podcast_generation as pg
+
+		paths = {}
+		for name in ("intro", "music", "outro", "ad"):
+			p = tmp_path / f"{name}.mp3"
+			p.write_bytes(b"x")
+			paths[name] = str(p)
+
+		snippets = [
+			self._snippet("outro", paths["outro"]),
+			self._snippet("intro", paths["intro"]),
+			self._snippet("ad", paths["ad"]),
+			self._snippet("music", paths["music"]),
+		]
+
+		with patch.object(pg, "SyncSessionLocal", return_value=self._mock_session(snippets)):
+			timeline = pg.resolve_composition_timeline(uuid4(), "/tmp/gen.mp3")
+
+		segment_types = [seg["segment_type"] for seg in timeline]
+		assert segment_types == ["intro", "music", "main_content", "outro", "ad"]
+		assert timeline[2]["file_path"] == "/tmp/gen.mp3"
+
+	def test_skips_snippets_without_local_file(self, tmp_path) -> None:
+		"""Snippets whose file_path is not on local disk (S3-only) are skipped."""
+		from src.tasks import podcast_generation as pg
+
+		local = tmp_path / "intro.mp3"
+		local.write_bytes(b"x")
+		snippets = [
+			self._snippet("intro", str(local)),
+			self._snippet("outro", "audio-snippets/only-in-s3.mp3"),
+		]
+
+		with patch.object(pg, "SyncSessionLocal", return_value=self._mock_session(snippets)):
+			timeline = pg.resolve_composition_timeline(uuid4(), "/tmp/gen.mp3")
+
+		assert [seg["segment_type"] for seg in timeline] == ["intro", "main_content"]
+
+	def test_none_project_id_yields_main_segment_only(self) -> None:
+		"""No project scope → no snippet query; timeline is just the main segment."""
+		from src.tasks import podcast_generation as pg
+
+		with patch.object(pg, "SyncSessionLocal") as session_cls:
+			timeline = pg.resolve_composition_timeline(None, "/tmp/gen.mp3")
+
+		session_cls.assert_not_called()
+		assert timeline == [{"file_path": "/tmp/gen.mp3", "segment_type": "main_content"}]
+
+	def test_db_error_degrades_to_main_segment_only(self) -> None:
+		"""A snippet-query failure must not fail composition: main audio still merges."""
+		from src.tasks import podcast_generation as pg
+
+		with patch.object(pg, "SyncSessionLocal", side_effect=ConnectionError("db down")):
+			timeline = pg.resolve_composition_timeline(uuid4(), "/tmp/gen.mp3")
+
+		assert timeline == [{"file_path": "/tmp/gen.mp3", "segment_type": "main_content"}]

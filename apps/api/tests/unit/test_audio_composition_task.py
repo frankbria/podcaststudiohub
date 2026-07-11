@@ -8,6 +8,8 @@ empty timeline edge case, and error-path return shape.
 import types
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tests.module_patching import patch_modules
 
 from src.tasks.audio_composition import merge_audio_snippets_task
@@ -107,26 +109,41 @@ class TestMergeAudioSnippetsTask:
 		seg_instance.fade_in.assert_called_once_with(500)
 		seg_instance.fade_out.assert_called_once_with(300)
 
-	def test_empty_timeline_returns_success(self):
-		"""Empty timeline exports an empty AudioSegment and returns success."""
+	def test_empty_timeline_raises_value_error(self):
+		"""Empty timeline must fail loudly, never export a silent file (issue #313)."""
 		mock_cls, mock_modules = _mock_pydub_modules()
 		empty_seg = _make_mock_audio_segment(duration_ms=0)
 		mock_cls.empty.return_value = empty_seg
 
 		with patch.object(merge_audio_snippets_task, "update_state"), \
-			 patch_modules(mock_modules), \
-			 patch("os.path.getsize", return_value=0):
+			 patch_modules(mock_modules):
 
-			result = merge_audio_snippets_task.run(
-				episode_id="ep-003",
-				timeline=[],
-				output_path="/tmp/empty.mp3",
-			)
+			with pytest.raises(ValueError):
+				merge_audio_snippets_task.run(
+					episode_id="ep-003",
+					timeline=[],
+					output_path="/tmp/empty.mp3",
+				)
 
-		assert result["status"] == "success"
-		assert result["duration_seconds"] == 0.0
-		assert mock_cls.from_file.call_count == 0
-		empty_seg.export.assert_called_once()
+		empty_seg.export.assert_not_called()
+
+	def test_none_timeline_raises_value_error(self):
+		"""A None timeline is as empty as [] and must also fail loudly (issue #313)."""
+		mock_cls, mock_modules = _mock_pydub_modules()
+		empty_seg = _make_mock_audio_segment(duration_ms=0)
+		mock_cls.empty.return_value = empty_seg
+
+		with patch.object(merge_audio_snippets_task, "update_state"), \
+			 patch_modules(mock_modules):
+
+			with pytest.raises(ValueError):
+				merge_audio_snippets_task.run(
+					episode_id="ep-003",
+					timeline=None,
+					output_path="/tmp/empty.mp3",
+				)
+
+		empty_seg.export.assert_not_called()
 
 	def test_error_path_returns_correct_shape(self):
 		"""When from_file raises, task retries and returns failed status after exhaustion."""

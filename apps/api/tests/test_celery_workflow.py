@@ -125,7 +125,56 @@ class TestFullWorkflowChain:
         assert call_kwargs["audio_file_path"] == mock_audio_path
         assert call_kwargs["enable_composition"] is True
         assert call_kwargs["enable_distribution"] is False
+        # A caller-supplied timeline is passed through untouched (issue #313).
+        assert call_kwargs["composition_timeline"] == [{"file_path": "/tmp/intro.mp3"}]
         mock_chain.apply_async.assert_called_once()
+
+    def test_timeline_resolved_when_composition_enabled_without_timeline(self):
+        """No caller-supplied timeline → the task resolves one that is non-empty
+        and carries the generated audio as main_content (issue #313)."""
+        import types
+
+        episode_id = str(uuid.uuid4())
+        mock_audio_path = "/tmp/test_podcast.mp3"
+
+        mock_audio_segment = MagicMock()
+        mock_audio_segment.__len__ = MagicMock(return_value=60_000)
+
+        mock_client = MagicMock()
+        mock_podcastfy = types.ModuleType("podcastfy")
+        mock_podcastfy.client = mock_client
+        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+
+        mock_chain = MagicMock()
+        session = _mock_session_with_episode()
+        # Snippet query returns no rows → resolver falls back to main-only timeline.
+        session.execute.return_value.scalars.return_value.all.return_value = []
+
+        from src.tasks.podcast_generation import generate_podcast_task
+
+        with (
+            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
+            patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
+            patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
+            patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=session),
+        ):
+            mock_audio_cls.from_file.return_value = mock_audio_segment
+
+            result = _invoke_task(
+                generate_podcast_task,
+                episode_id=episode_id,
+                urls=["https://example.com"],
+                enable_composition=True,
+                enable_distribution=False,
+            )
+
+        assert result["status"] == "success"
+        mock_builder.assert_called_once()
+        timeline = mock_builder.call_args.kwargs["composition_timeline"]
+        assert timeline, "resolved composition timeline must never be empty"
+        assert {"file_path": mock_audio_path, "segment_type": "main_content"} in timeline
 
     def test_workflow_chain_dispatched_when_distribution_enabled(self):
         """When enable_distribution=True with platforms, build_generation_workflow is called."""

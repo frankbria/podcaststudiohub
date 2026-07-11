@@ -65,7 +65,11 @@ periodic GC worker; no plan comment existed).
   inline + CRITICAL last-resort log); my own review fixed GC zero-progress hot loop + locked
   the delete-flow key reads (TOCTOU). opencode timed out twice → codex served as the
   cross-family reviewer.
-- [ ] 8. PR → post-PR review comment → demo (hard gate) → CI green → docs sync → merge.
+- [x] 8. PR #373 squash-merged 2026-07-11; issue #366 auto-closed. Post-PR codex review
+  (starvation P2 fixed in 7afb131) + repo bug-hunt bot (1 Critical rebutted with empirical
+  evidence: StaleDataError DOES fire on psycopg without version_id_col — bot re-verified
+  against SQLAlchemy source and cleared it). Demo hard gate: all 6 ACs verified with real
+  outcome evidence (real Postgres/beat/HTTP). CI 12/12 green. Docs synced (CLAUDE.md 017).
 
 ## Acceptance criteria
 

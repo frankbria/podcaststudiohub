@@ -112,25 +112,34 @@ def drain_storage_deletion_outbox(self: Task) -> int:
     drain; no ``self.retry`` is used here since the beat schedule and the
     delete flows' prompt trigger both already re-run this task.
 
-    Loops while a full batch was processed so a backlog drains in one
-    invocation. Returns the total number of rows successfully drained.
+    Rows are fetched lowest-``attempts`` first so a head of long-failing rows
+    never starves newer, deletable work behind it; ``created_at`` breaks ties
+    for FIFO within a retry generation. Each row is attempted at most once per
+    invocation (``seen`` wrap-around detection), which both bounds the loop
+    when everything is failing (e.g. an S3 outage) and lets one invocation
+    drain an arbitrary backlog. Returns the number of rows drained.
     """
     storage: StorageService | None = None
     drained = 0
+    seen: set = set()
 
     while True:
         with SyncSessionLocal() as db:
-            rows = db.execute(
+            batch = db.execute(
                 select(StorageDeletionOutbox)
-                .order_by(StorageDeletionOutbox.created_at)
+                .order_by(
+                    StorageDeletionOutbox.attempts,
+                    StorageDeletionOutbox.created_at,
+                )
                 .with_for_update(skip_locked=True)
                 .limit(STORAGE_GC_BATCH_SIZE)
             ).scalars().all()
 
+            rows = [row for row in batch if row.id not in seen]
             if not rows:
                 break
+            seen.update(row.id for row in rows)
 
-            batch_drained = 0
             for row in rows:
                 ok = True
 
@@ -160,18 +169,14 @@ def drain_storage_deletion_outbox(self: Task) -> int:
 
                 if ok:
                     db.delete(row)
-                    batch_drained += 1
+                    drained += 1
                 else:
                     row.attempts += 1
                     row.last_attempt_at = utcnow()
 
             db.commit()
-            drained += batch_drained
 
-            # A full batch with zero progress means every row is failing right
-            # now (e.g. S3 outage) — stop instead of hammering storage until
-            # the task time limit kills us; the beat tick retries later.
-            if len(rows) < STORAGE_GC_BATCH_SIZE or batch_drained == 0:
+            if len(batch) < STORAGE_GC_BATCH_SIZE:
                 break
 
     if drained:

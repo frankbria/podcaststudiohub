@@ -188,8 +188,9 @@ def test_drain_stops_after_partial_batch():
 
 
 def test_drain_query_uses_skip_locked_order_by_created_at():
-	"""The batch SELECT must use FOR UPDATE SKIP LOCKED ordered by created_at
-	so concurrent drain invocations don't contend on the same rows."""
+	"""The batch SELECT must use FOR UPDATE SKIP LOCKED (concurrent drains
+	don't contend) ordered by attempts THEN created_at, so long-failing rows
+	sink behind newer, deletable work instead of starving it (#366)."""
 	from src.tasks import maintenance
 
 	session = _session_yielding_rows([])
@@ -203,7 +204,8 @@ def test_drain_query_uses_skip_locked_order_by_created_at():
 		dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}
 	))
 	assert "SKIP LOCKED" in sql.upper()
-	assert "ORDER BY" in sql.upper()
+	order_clause = sql.upper().split("ORDER BY")[1]
+	assert order_clause.index("ATTEMPTS") < order_clause.index("CREATED_AT")
 
 
 @pytest.mark.parametrize("registered_name", ["drain_storage_deletion_outbox"])
@@ -240,7 +242,44 @@ def test_drain_stops_when_full_batch_makes_no_progress():
 		drained = maintenance.drain_storage_deletion_outbox.run()
 
 	assert drained == 0
-	# One fetch, then stop: zero progress on a full batch must not refetch.
-	session.execute.assert_called_once()
+	# Two fetches: one that attempts every row, then the wrap-around fetch
+	# that finds nothing unseen and stops — never a third.
+	assert session.execute.call_count == 2
 	for row in rows:
 		assert row.attempts == 1
+
+
+def test_drain_continues_past_fully_failing_batch_to_newer_rows():
+	"""A full batch of failing rows must not starve newer deletable rows
+	behind it (#366): the drain continues to the next batch in the same
+	invocation instead of stopping at the failing head."""
+	from src.tasks import maintenance
+
+	failing = [
+		_make_row(s3_key=f"podcasts/stuck-{i}.mp3")
+		for i in range(maintenance.STORAGE_GC_BATCH_SIZE)
+	]
+	# Missing local file counts as success (idempotent) — deletable rows.
+	deletable = [_make_row(file_path=f"/nonexistent/fresh-{i}.mp3") for i in range(3)]
+
+	session = MagicMock()
+	session.__enter__ = MagicMock(return_value=session)
+	session.__exit__ = MagicMock(return_value=False)
+	results = []
+	for batch in (failing, deletable):
+		r = MagicMock()
+		r.scalars.return_value.all.return_value = batch
+		results.append(r)
+	session.execute.side_effect = results
+	mock_storage = MagicMock()
+
+	with patch("src.tasks.maintenance.SyncSessionLocal", return_value=session), \
+		patch("src.tasks.maintenance.StorageService", return_value=mock_storage), \
+		patch("src.tasks.maintenance.asyncio.run", side_effect=Exception("S3 down")):
+		drained = maintenance.drain_storage_deletion_outbox.run()
+
+	assert drained == 3
+	for row in failing:
+		assert row.attempts == 1
+	for row in deletable:
+		session.delete.assert_any_call(row)

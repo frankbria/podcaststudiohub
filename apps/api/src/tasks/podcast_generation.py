@@ -616,10 +616,11 @@ def finalize_episode_generation_task(
 
             s3_url = None
             s3_key = None
-            # Tracks the durable local artifact when no S3 bucket is configured,
-            # so it can be queued for deletion (issue #366) without depending on
-            # the possibly-expired `episode` ORM object after a rollback below.
+            # Captured now so the absorb branch below can use them without
+            # depending on the `episode` ORM object, which is expired (and its
+            # row gone) after the rollback there (issue #366).
             finalized_local_path = None
+            episode_tenant_id = episode.tenant_id
 
             # S3 upload (skip gracefully if bucket not configured)
             if settings.AWS_S3_BUCKET:
@@ -718,7 +719,11 @@ def finalize_episode_generation_task(
                 )
                 # s3_key and finalized_local_path are mutually exclusive by
                 # construction (only one of the two branches above runs).
-                _queue_orphaned_storage(s3_key=s3_key, file_path=finalized_local_path)
+                _queue_orphaned_storage(
+                    s3_key=s3_key,
+                    file_path=finalized_local_path,
+                    tenant_id=episode_tenant_id,
+                )
                 return {
                     "status": "absorbed",
                     "episode_id": episode_id,

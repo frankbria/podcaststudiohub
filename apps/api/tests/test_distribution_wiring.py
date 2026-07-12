@@ -440,6 +440,40 @@ async def test_generate_preflight_warning_hides_internal_errors(client):
 
 
 @pytest.mark.asyncio
+async def test_generate_preflight_db_error_does_not_poison_the_request(client):
+    """A DB-level failure inside the pre-flight (e.g. the unique-RSSFeed race
+    between two concurrent generations) must roll the session back so the
+    subsequent 'queued' commit still succeeds — 202 + warning, never a 500."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_apple_target(client, headers, project_id)
+
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy import text
+
+    async def _poison_session(db, project_id, user_id):
+        # Real failing statement on the request session: leaves the session in
+        # a pending-rollback state exactly like an IntegrityError would.
+        await db.execute(text("SELECT * FROM nonexistent_table_issue_378"))
+
+    service = AsyncMock()
+    service.get_rss_feed.return_value = None
+    service.generate_rss_for_project.side_effect = _poison_session
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    assert resp.status_code == 202, resp.text
+    assert "platforms" not in mock_delay.call_args.kwargs["kwargs"]
+    warnings = resp.json()["warnings"]
+    assert len(warnings) == 1
+    assert "nonexistent_table_issue_378" not in warnings[0]  # internals masked
+
+
+@pytest.mark.asyncio
 async def test_generate_no_regeneration_when_feed_exists(client):
     """An already-generated feed short-circuits the pre-flight."""
     headers = await _register(client)

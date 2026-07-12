@@ -223,7 +223,7 @@ describe('EpisodePage generate flow', () => {
 
   it('surfaces distribution warnings returned by the generate endpoint (#378)', async () => {
     const warning =
-      'Skipped apple_podcasts distribution: the RSS feed has not been generated.'
+      "Skipped Apple Podcasts distribution: these platforms ingest episodes via the project's RSS feed, which has not been generated and could not be auto-generated."
     const fetchMock = withOverride(
       mockEpisodeFetchRouter(),
       (url, init) => url.includes('/generate') && init?.method === 'POST',

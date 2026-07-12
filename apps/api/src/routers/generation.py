@@ -290,7 +290,13 @@ async def generate_podcast(
                 rss_service = RSSGenerationService()
                 # The whole pre-flight is non-fatal: a failure here must skip
                 # the RSS-model platforms with a warning, never 500 the
-                # generation kickoff itself.
+                # generation kickoff itself. It runs under a SAVEPOINT so a
+                # DB-level failure (e.g. the unique-RSSFeed race between two
+                # concurrent generations) aborts only the pre-flight work: a
+                # whole-session rollback would poison the later 'queued'
+                # commit path by expiring loaded instances (and, under the
+                # test harness's shared-session wrapping, wipe prior writes).
+                preflight_sp = await db.begin_nested()
                 try:
                     feed = await rss_service.get_rss_feed(db, episode.project_id)
                     if feed is None or not feed.public_url:
@@ -302,7 +308,13 @@ async def generate_podcast(
                             "project %s ahead of %s distribution.",
                             episode_id, episode.project_id, ", ".join(rss_platforms),
                         )
+                    # The service commits internally on success, consuming the
+                    # savepoint; release it only if it is still open.
+                    if preflight_sp.is_active:
+                        await preflight_sp.commit()
                 except Exception as exc:
+                    if preflight_sp.is_active:
+                        await preflight_sp.rollback()
                     for p in rss_platforms:
                         del platforms[p]
                     # ValueError carries a user-actionable validation message

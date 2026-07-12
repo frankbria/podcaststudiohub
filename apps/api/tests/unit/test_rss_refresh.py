@@ -37,7 +37,7 @@ class TestRefreshProjectRssFeed:
         service = _mock_service(feed=MagicMock())
 
         with (
-            patch("src.tasks.rss_refresh.AsyncSessionLocal", return_value=ctx),
+            patch("src.tasks.rss_refresh.celery_async_session", return_value=ctx),
             patch("src.tasks.rss_refresh.RSSGenerationService", return_value=service),
         ):
             assert refresh_project_rss_feed(project_id, user_id) is True
@@ -53,7 +53,7 @@ class TestRefreshProjectRssFeed:
         service = _mock_service(feed=None)
 
         with (
-            patch("src.tasks.rss_refresh.AsyncSessionLocal", return_value=ctx),
+            patch("src.tasks.rss_refresh.celery_async_session", return_value=ctx),
             patch("src.tasks.rss_refresh.RSSGenerationService", return_value=service),
         ):
             assert refresh_project_rss_feed(uuid.uuid4(), uuid.uuid4()) is False
@@ -69,7 +69,7 @@ class TestRefreshProjectRssFeed:
         )
 
         with (
-            patch("src.tasks.rss_refresh.AsyncSessionLocal", return_value=ctx),
+            patch("src.tasks.rss_refresh.celery_async_session", return_value=ctx),
             patch("src.tasks.rss_refresh.RSSGenerationService", return_value=service),
         ):
             assert refresh_project_rss_feed(uuid.uuid4(), uuid.uuid4()) is False
@@ -77,7 +77,7 @@ class TestRefreshProjectRssFeed:
     def test_swallows_session_errors(self):
         """Even a broken DB session must not raise out of the helper."""
         with patch(
-            "src.tasks.rss_refresh.AsyncSessionLocal",
+            "src.tasks.rss_refresh.celery_async_session",
             side_effect=RuntimeError("pool gone"),
         ):
             assert refresh_project_rss_feed(uuid.uuid4(), uuid.uuid4()) is False
@@ -90,7 +90,7 @@ class TestRefreshProjectRssFeed:
         service = _mock_service(feed=MagicMock())
 
         with (
-            patch("src.tasks.rss_refresh.AsyncSessionLocal", return_value=ctx),
+            patch("src.tasks.rss_refresh.celery_async_session", return_value=ctx),
             patch("src.tasks.rss_refresh.RSSGenerationService", return_value=service),
         ):
             assert refresh_project_rss_feed(str(project_id), str(user_id)) is True

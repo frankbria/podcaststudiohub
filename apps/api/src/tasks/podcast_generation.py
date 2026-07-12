@@ -821,8 +821,15 @@ def finalize_episode_generation_task(
 
             # The feed on S3 predates this episode; refresh it so RSS-model
             # platforms (Spotify/Apple) pick the episode up (issue #382).
-            # Best-effort: never fails the already-committed completion.
-            refresh_project_rss_feed(episode.project_id, episode.user_id)
+            # Best-effort, and guarded locally: the surrounding except calls
+            # self.retry, and a feed problem must never re-run finalization
+            # of an already-committed completion.
+            try:
+                refresh_project_rss_feed(episode.project_id, episode.user_id)
+            except Exception as rss_exc:
+                logger.error(
+                    f"RSS refresh after finalizing episode {episode_id} failed: {rss_exc}"
+                )
 
             return {
                 "status": "success",

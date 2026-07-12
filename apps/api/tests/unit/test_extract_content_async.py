@@ -3,7 +3,7 @@ Unit tests for _extract_content_async helper in content_extraction task.
 
 The existing test_content_extraction_task.py tests the Celery task surface by
 mocking asyncio.run, so _extract_content_async (lines 46-62) is never called.
-These tests call _extract_content_async directly with a mocked AsyncSessionLocal
+These tests call _extract_content_async directly with a mocked celery_async_session
 and mocked ContentExtractionService to cover those lines.
 
 Tests cover:
@@ -54,7 +54,7 @@ async def test_extract_async_url_calls_extract_from_url():
 	mock_db = AsyncMock()
 	service_result = _make_service_result(success=True, word_count=150)
 
-	with patch("src.database.AsyncSessionLocal", return_value=_make_async_context_manager(mock_db)), \
+	with patch("src.database.celery_async_session", return_value=_make_async_context_manager(mock_db)), \
 	     patch("src.services.content_extraction_service.ContentExtractionService") as MockSvc:
 		mock_instance = AsyncMock()
 		mock_instance.extract_from_url.return_value = service_result
@@ -75,7 +75,7 @@ async def test_extract_async_pdf_calls_extract_from_pdf():
 	mock_db = AsyncMock()
 	service_result = _make_service_result(success=True, word_count=300)
 
-	with patch("src.database.AsyncSessionLocal", return_value=_make_async_context_manager(mock_db)), \
+	with patch("src.database.celery_async_session", return_value=_make_async_context_manager(mock_db)), \
 	     patch("src.services.content_extraction_service.ContentExtractionService") as MockSvc:
 		mock_instance = AsyncMock()
 		mock_instance.extract_from_pdf.return_value = service_result
@@ -95,7 +95,7 @@ async def test_extract_async_text_calls_extract_from_text():
 	mock_db = AsyncMock()
 	service_result = _make_service_result(success=False, word_count=0, error="Too short")
 
-	with patch("src.database.AsyncSessionLocal", return_value=_make_async_context_manager(mock_db)), \
+	with patch("src.database.celery_async_session", return_value=_make_async_context_manager(mock_db)), \
 	     patch("src.services.content_extraction_service.ContentExtractionService") as MockSvc:
 		mock_instance = AsyncMock()
 		mock_instance.extract_from_text.return_value = service_result
@@ -114,7 +114,7 @@ async def test_extract_async_unsupported_type_raises_value_error():
 
 	mock_db = AsyncMock()
 
-	with patch("src.database.AsyncSessionLocal", return_value=_make_async_context_manager(mock_db)), \
+	with patch("src.database.celery_async_session", return_value=_make_async_context_manager(mock_db)), \
 	     patch("src.services.content_extraction_service.ContentExtractionService"):
 		with pytest.raises(ValueError, match="Unsupported source type"):
 			await _extract_content_async(str(uuid4()), "video")

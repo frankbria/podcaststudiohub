@@ -17,7 +17,7 @@ import asyncio
 import logging
 from uuid import UUID
 
-from src.database import AsyncSessionLocal
+from src.database import celery_async_session
 from src.services.rss_generation_service import RSSGenerationService
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ def refresh_project_rss_feed(project_id, user_id) -> bool:
 
 async def _refresh_async(project_id: UUID, user_id: UUID) -> bool:
     service = RSSGenerationService()
-    async with AsyncSessionLocal() as db:
+    async with celery_async_session() as db:
         # Celery sessions don't arm the tenant GUC; like the other task-side
         # queries, isolation comes from the explicit project_id filter.
         feed = await service.get_rss_feed(db, project_id)

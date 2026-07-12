@@ -29,8 +29,9 @@ async def _extract_content_async(
 	"""
 	Async helper that runs the ContentExtractionService.
 
-	Uses AsyncSessionLocal to create an async database session compatible
-	with the service's async interface.
+	Uses celery_async_session to create an async database session compatible
+	with the service's async interface (per-call engine — the shared pool
+	cannot be reused across asyncio.run() event loops).
 
 	Args:
 		content_source_id: UUID string of the content source to extract
@@ -43,13 +44,13 @@ async def _extract_content_async(
 		ValueError: If content source not found or type mismatch
 		Exception: On extraction errors (caller handles retry)
 	"""
-	from src.database import AsyncSessionLocal
+	from src.database import celery_async_session
 	from src.services.content_extraction_service import ContentExtractionService
 
 	service = ContentExtractionService()
 	content_uuid = uuid_module.UUID(content_source_id)
 
-	async with AsyncSessionLocal() as db:
+	async with celery_async_session() as db:
 		if source_type == 'url':
 			result = await service.extract_from_url(db, content_uuid)
 		elif source_type == 'pdf':

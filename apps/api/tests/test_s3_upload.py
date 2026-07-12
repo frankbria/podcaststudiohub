@@ -633,6 +633,35 @@ class TestFinalizeEpisodeGenerationTask:
         assert episode.generation_status == "complete"
         mock_refresh.assert_called_once_with(episode.project_id, episode.user_id)
 
+    def test_rss_refresh_error_does_not_retry_finalization(self, tmp_path):
+        """A refresh blow-up must not trigger self.retry on an episode that
+        already completed (issue #382): the surrounding except calls retry."""
+        from src.tasks.podcast_generation import finalize_episode_generation_task
+
+        episode_id = str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id)
+        src_audio = tmp_path / "episode-abc.mp3"
+        src_audio.write_bytes(b"FAKE_MP3")
+        generation_result = self._make_generation_result(audio_file_path=str(src_audio))
+        mock_db = self._make_db_context_manager(episode)
+
+        with (
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+            patch("src.tasks.podcast_generation.settings") as mock_settings,
+            patch(
+                "src.tasks.podcast_generation.refresh_project_rss_feed",
+                side_effect=RuntimeError("S3 unreachable"),
+            ),
+            patch.object(finalize_episode_generation_task, "retry") as mock_retry,
+        ):
+            mock_settings.AWS_S3_BUCKET = None
+            mock_settings.LOCAL_AUDIO_STORAGE_PATH = str(tmp_path / "audio")
+            result = self._invoke_finalize(episode_id, generation_result, mock_db)
+
+        assert result["status"] == "success"
+        assert episode.generation_status == "complete"
+        mock_retry.assert_not_called()
+
     def test_no_rss_refresh_when_generation_failed(self):
         """A failed generation never touches the feed (issue #382)."""
         episode_id = str(uuid.uuid4())

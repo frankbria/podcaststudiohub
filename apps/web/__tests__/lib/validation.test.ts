@@ -244,6 +244,35 @@ describe("contentSourceSchema - PDF type", () => {
     }
   })
 
+  it("accepts a .pdf file with a missing MIME type (backend is extension-based)", () => {
+    const result = contentSourceSchema.safeParse({
+      sourceType: "pdf",
+      file: [makePdf({ type: "" })],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("accepts a .pdf file reported as application/octet-stream", () => {
+    const result = contentSourceSchema.safeParse({
+      sourceType: "pdf",
+      file: [makePdf({ type: "application/octet-stream" })],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects a file without a .pdf extension even if typed application/pdf", () => {
+    const file = new File(["%PDF-1.4"], "doc.txt", { type: "application/pdf" })
+    const result = contentSourceSchema.safeParse({
+      sourceType: "pdf",
+      file: [file],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const fileError = result.error.issues.find((i) => i.path.includes("file"))
+      expect(fileError?.message).toBe("File must be a PDF")
+    }
+  })
+
   it("rejects a PDF over 50MB", () => {
     const result = contentSourceSchema.safeParse({
       sourceType: "pdf",

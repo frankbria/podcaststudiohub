@@ -339,7 +339,16 @@ export default function EpisodePage() {
         reset()
         loadContentSources()
       } else {
-        showErrorToast("Failed to add content source: " + response.statusText)
+        // Backend puts the actionable message (size/format limits) in JSON detail
+        let detail: string | undefined
+        try {
+          detail = (await response.json())?.detail
+        } catch {
+          // no JSON body
+        }
+        showErrorToast(
+          "Failed to add content source: " + (detail || response.statusText || "Request failed")
+        )
       }
     } catch (error) {
       console.error("Failed to add content source:", error)

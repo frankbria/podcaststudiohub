@@ -106,7 +106,13 @@ export const contentSourceSchema = z
         })
         return
       }
-      if (file.type !== "application/pdf") {
+      // Mirrors the backend validate_pdf_format: .pdf extension required,
+      // MIME type lenient (browsers may report empty or octet-stream)
+      const validType =
+        !file.type ||
+        file.type === "application/pdf" ||
+        file.type === "application/octet-stream"
+      if (!file.name.toLowerCase().endsWith(".pdf") || !validType) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message: "File must be a PDF",

@@ -572,7 +572,12 @@ describe('EpisodePage content sources', () => {
     const fetchMock = withOverride(
       mockEpisodeFetchRouter({ contentSources: [] }),
       (url, init) => /\/api\/proxy\/episodes\/[^/]+\/content\/upload$/.test(url) && init?.method === 'POST',
-      () => Promise.resolve({ ok: false, statusText: 'Payload Too Large' })
+      () =>
+        Promise.resolve({
+          ok: false,
+          statusText: 'Payload Too Large',
+          json: async () => ({ detail: 'File too large. Maximum allowed size is 50 MB' }),
+        })
     )
     global.fetch = fetchMock
     render(<EpisodePage />)
@@ -585,8 +590,11 @@ describe('EpisodePage content sources', () => {
     const submitButtons = screen.getAllByRole('button', { name: /add content/i })
     await userEvent.click(submitButtons[submitButtons.length - 1])
 
+    // Prefers the backend's actionable JSON detail over the bare statusText
     await waitFor(() =>
-      expect(showErrorToast).toHaveBeenCalledWith('Failed to add content source: Payload Too Large')
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'Failed to add content source: File too large. Maximum allowed size is 50 MB'
+      )
     )
   })
 

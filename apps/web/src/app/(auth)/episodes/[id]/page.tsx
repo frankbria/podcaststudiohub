@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Progress } from "@/components/ui/progress"
 import { contentSourceSchema, type ContentSourceFormData } from "@/lib/validation"
 import { showSuccessToast, showErrorToast } from "@/lib/toast"
 import { RobustEventSource, startPolling, ConnectionStatus } from "@/lib/event-source-manager"
@@ -19,7 +20,17 @@ import { AudioPlayerSkeleton } from "@/components/skeletons/AudioPlayerSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
 import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { FileEditIcon, Alert02Icon, Delete02Icon } from "@hugeicons/core-free-icons"
+import {
+  FileEditIcon,
+  Alert02Icon,
+  Delete02Icon,
+  Analytics01Icon,
+  Chart01Icon,
+  Download01Icon,
+  PlayIcon,
+  GlobeIcon,
+  Loading03Icon,
+} from "@hugeicons/core-free-icons"
 import { DownloadButton } from "@/components/DownloadButton"
 
 interface GenerationProgress {
@@ -52,6 +63,40 @@ interface TTSConfig {
   name: string
   provider: string
   is_default: boolean
+}
+
+interface EpisodeAnalyticsMetrics {
+  total_downloads: number
+  total_plays: number
+  total_streams: number
+  average_listen_duration_seconds: number
+  // Fraction 0-1 (see apps/api/src/services/analytics_service.py) — scaled to
+  // 0-100 before rendering, since <Progress> expects a percentage.
+  completion_rate: number
+}
+
+interface EpisodeAnalyticsData {
+  episode_id: string
+  period: { from: string; to: string }
+  metrics: EpisodeAnalyticsMetrics
+  device_breakdown: { mobile: number; desktop: number; tablet: number; unknown: number }
+  app_breakdown: Record<string, number>
+  top_countries: Array<{ country: string; downloads: number }>
+}
+
+function formatListenDuration(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds))
+  const mins = Math.floor(total / 60)
+  const secs = total % 60
+  return `${mins}:${secs.toString().padStart(2, "0")}`
+}
+
+function isAllZeroMetrics(metrics: EpisodeAnalyticsMetrics): boolean {
+  return (
+    metrics.total_downloads === 0 &&
+    metrics.total_plays === 0 &&
+    metrics.total_streams === 0
+  )
 }
 
 // Radix <Select.Item> forbids empty-string values, so the "no override" option
@@ -111,9 +156,13 @@ export default function EpisodePage() {
   const [newTtsVoice1Id, setNewTtsVoice1Id] = useState<string>("")
   const [newTtsVoice2Id, setNewTtsVoice2Id] = useState<string>("")
   const [savingTts, setSavingTts] = useState(false)
+  const [analytics, setAnalytics] = useState<EpisodeAnalyticsData | null>(null)
+  const [analyticsLoading, setAnalyticsLoading] = useState(true)
+  const [analyticsError, setAnalyticsError] = useState(false)
   const robustESRef = useRef<RobustEventSource | null>(null)
   const stopPollingRef = useRef<(() => void) | null>(null)
   const isMountedRef = useRef(true)
+  const hasFiredPlayEventRef = useRef(false)
 
   useEffect(() => {
     isMountedRef.current = true
@@ -182,6 +231,32 @@ export default function EpisodePage() {
     }
   }, [])
 
+  // Analytics is a supplementary, best-effort section: it has its own
+  // contained loading/error state and never blocks or errors the whole page.
+  const loadAnalytics = useCallback(async () => {
+    setAnalyticsLoading(true)
+    setAnalyticsError(false)
+    try {
+      const response = await fetch(
+        `/api/proxy/analytics/episodes/${params.id}`
+      )
+      if (response.ok) {
+        const data = await response.json() as EpisodeAnalyticsData
+        if (!isMountedRef.current) return
+        setAnalytics(data)
+      } else {
+        if (!isMountedRef.current) return
+        setAnalyticsError(true)
+      }
+    } catch (error) {
+      console.error("Failed to load analytics:", error)
+      if (!isMountedRef.current) return
+      setAnalyticsError(true)
+    } finally {
+      if (isMountedRef.current) setAnalyticsLoading(false)
+    }
+  }, [params.id])
+
   const {
     register,
     handleSubmit,
@@ -204,8 +279,9 @@ export default function EpisodePage() {
       loadEpisode()
       loadContentSources()
       loadTTSConfigs()
+      loadAnalytics()
     }
-  }, [authStatus, loadEpisode, loadContentSources, loadTTSConfigs])
+  }, [authStatus, loadEpisode, loadContentSources, loadTTSConfigs, loadAnalytics])
 
   useEffect(() => {
     if (!episode?.generation_status || !ACTIVE_STATUSES.includes(episode.generation_status)) {
@@ -483,6 +559,31 @@ export default function EpisodePage() {
     }
   }
 
+  // Best-effort, fire-and-forget in-app engagement tracking: never blocks the
+  // UI and never surfaces an error to the user on failure.
+  const trackAnalyticsEvent = useCallback((eventType: "play" | "download") => {
+    if (!episode) return
+    fetch("/api/proxy/analytics/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        event_type: eventType,
+        episode_id: episode.id,
+        project_id: episode.project_id,
+      }),
+    }).catch(() => {})
+  }, [episode])
+
+  const handleAudioPlay = () => {
+    if (hasFiredPlayEventRef.current) return
+    hasFiredPlayEventRef.current = true
+    trackAnalyticsEvent("play")
+  }
+
+  const handleDownloaded = () => {
+    trackAnalyticsEvent("download")
+  }
+
   const getStatusColor = (status: string) => {
     const colors: Record<string, string> = {
       draft: "text-muted-foreground",
@@ -595,16 +696,155 @@ export default function EpisodePage() {
 
             {audioUrl && (
               <div className="mt-4 space-y-2">
-                <audio controls className="w-full" aria-label={`Podcast audio: ${episodeTitle}`}>
+                <audio
+                  controls
+                  className="w-full"
+                  aria-label={`Podcast audio: ${episodeTitle}`}
+                  onPlay={handleAudioPlay}
+                >
                   <source src={audioUrl} type="audio/mpeg" />
                 </audio>
                 <DownloadButton
                   audioUrl={audioUrl}
                   episodeTitle={episodeTitle}
                   isLoading={generating}
+                  onDownloaded={handleDownloaded}
                 />
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        <Card className="mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <HugeiconsIcon icon={Analytics01Icon} size={20} />
+              Analytics
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {analyticsLoading ? (
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <HugeiconsIcon icon={Loading03Icon} size={16} />
+                Loading analytics...
+              </p>
+            ) : analyticsError ? (
+              <p className="text-sm text-muted-foreground">Analytics unavailable</p>
+            ) : analytics ? (
+              isAllZeroMetrics(analytics.metrics) ? (
+                <p className="text-sm text-muted-foreground">No analytics yet</p>
+              ) : (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div className="bg-muted rounded p-3">
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <HugeiconsIcon icon={Download01Icon} size={14} />
+                        Downloads
+                      </div>
+                      <p className="text-lg font-semibold text-foreground">
+                        {analytics.metrics.total_downloads}
+                      </p>
+                    </div>
+                    <div className="bg-muted rounded p-3">
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <HugeiconsIcon icon={PlayIcon} size={14} />
+                        Plays
+                      </div>
+                      <p className="text-lg font-semibold text-foreground">
+                        {analytics.metrics.total_plays}
+                      </p>
+                    </div>
+                    <div className="bg-muted rounded p-3">
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <HugeiconsIcon icon={Chart01Icon} size={14} />
+                        Streams
+                      </div>
+                      <p className="text-lg font-semibold text-foreground">
+                        {analytics.metrics.total_streams}
+                      </p>
+                    </div>
+                    <div className="bg-muted rounded p-3">
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <HugeiconsIcon icon={Loading03Icon} size={14} />
+                        Avg Listen
+                      </div>
+                      <p className="text-lg font-semibold text-foreground">
+                        {formatListenDuration(analytics.metrics.average_listen_duration_seconds)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="text-muted-foreground">Completion Rate</span>
+                      <span className="text-foreground">
+                        {Math.round(analytics.metrics.completion_rate * 100)}%
+                      </span>
+                    </div>
+                    <Progress
+                      value={Math.round(analytics.metrics.completion_rate * 100)}
+                      aria-label="Completion rate"
+                    />
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-medium text-foreground mb-2">Device Breakdown</p>
+                    <ul className="space-y-1">
+                      {Object.entries(analytics.device_breakdown).map(([device, count]) => (
+                        <li
+                          key={device}
+                          className="flex justify-between text-sm text-muted-foreground"
+                        >
+                          <span className="capitalize">{device}</span>
+                          <span>{count}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-medium text-foreground mb-2">App Breakdown</p>
+                    {Object.keys(analytics.app_breakdown).length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No app data yet</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {Object.entries(analytics.app_breakdown).map(([app, count]) => (
+                          <li
+                            key={app}
+                            className="flex justify-between text-sm text-muted-foreground"
+                          >
+                            <span className="capitalize">{app.replace(/_/g, " ")}</span>
+                            <span>{count}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  <div>
+                    <p className="text-sm font-medium text-foreground mb-2 flex items-center gap-1">
+                      <HugeiconsIcon icon={GlobeIcon} size={16} />
+                      Top Countries
+                    </p>
+                    {analytics.top_countries.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No country data yet</p>
+                    ) : (
+                      <ul className="space-y-1">
+                        {analytics.top_countries.map((entry) => (
+                          <li
+                            key={entry.country}
+                            className="flex justify-between text-sm text-muted-foreground"
+                          >
+                            <span>{entry.country}</span>
+                            <span>{entry.downloads}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              )
+            ) : null}
           </CardContent>
         </Card>
 

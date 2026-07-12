@@ -117,4 +117,66 @@ describe('DownloadButton', () => {
       expect(screen.getByRole('button', { name: /download mp3/i })).not.toBeDisabled()
     })
   })
+
+  it('calls onDownloaded after a successful download', async () => {
+    const mockDownload = jest.mocked(downloadLib.downloadAudioFile)
+    mockDownload.mockResolvedValue(undefined)
+    const onDownloaded = jest.fn()
+
+    const user = userEvent.setup()
+    render(
+      <DownloadButton
+        audioUrl="https://example.com/audio.mp3"
+        episodeTitle="My Episode"
+        onDownloaded={onDownloaded}
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: /download mp3/i }))
+
+    await waitFor(() => {
+      expect(onDownloaded).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('does not call onDownloaded when the download fails', async () => {
+    const mockDownload = jest.mocked(downloadLib.downloadAudioFile)
+    mockDownload.mockRejectedValue(new Error('Network error'))
+    const onDownloaded = jest.fn()
+
+    const user = userEvent.setup()
+    render(
+      <DownloadButton
+        audioUrl="https://example.com/audio.mp3"
+        episodeTitle="My Episode"
+        onDownloaded={onDownloaded}
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: /download mp3/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /download mp3/i })).not.toBeDisabled()
+    })
+    expect(onDownloaded).not.toHaveBeenCalled()
+  })
+
+  it('remains backward compatible when onDownloaded is not provided', async () => {
+    const mockDownload = jest.mocked(downloadLib.downloadAudioFile)
+    mockDownload.mockResolvedValue(undefined)
+
+    const user = userEvent.setup()
+    render(
+      <DownloadButton
+        audioUrl="https://example.com/audio.mp3"
+        episodeTitle="My Episode"
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: /download mp3/i }))
+
+    await waitFor(() => {
+      expect(mockDownload).toHaveBeenCalled()
+    })
+  })
 })

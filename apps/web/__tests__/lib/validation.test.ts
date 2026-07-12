@@ -335,14 +335,14 @@ describe("webhookDistributionSchema", () => {
     expect(result.success).toBe(true)
   })
 
-  it("defaults method to POST", () => {
+  it("accepts a missing method (form default / backend default is POST)", () => {
     const result = webhookDistributionSchema.safeParse({
       name: "My hook",
       url: "https://example.com/hook",
     })
     expect(result.success).toBe(true)
     if (result.success) {
-      expect(result.data.method).toBe("POST")
+      expect(result.data.method).toBeUndefined()
     }
   })
 

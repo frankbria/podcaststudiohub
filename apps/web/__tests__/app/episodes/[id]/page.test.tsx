@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import EpisodePage from '@/app/(auth)/episodes/[id]/page'
+import * as downloadLib from '@/lib/download'
 import { withOverride } from '../../../../test-utils/fetch-router'
 
 const mockPush = jest.fn()
@@ -18,6 +19,11 @@ jest.mock('next-auth/react', () => ({
 jest.mock('@/lib/toast', () => ({
   showSuccessToast: jest.fn(),
   showErrorToast: jest.fn(),
+}))
+
+jest.mock('@/lib/download', () => ({
+  sanitizeFilename: jest.fn((title: string) => `${title.toLowerCase().replace(/\s/g, '_')}.mp3`),
+  downloadAudioFile: jest.fn(),
 }))
 
 // SSE/polling are only wired up for active statuses; stub them so a draft
@@ -85,16 +91,36 @@ const episodeWithSavedProgress = {
   tts_config_id: 'tts1',
 }
 
+// Zero-metrics analytics fixture — the default response for the mount-time
+// GET /api/proxy/analytics/episodes/{id} fetch so existing tests (which don't
+// care about analytics) keep working against a well-shaped payload.
+const zeroAnalytics = {
+  episode_id: 'ep1',
+  period: { from: '2024-01-01T00:00:00Z', to: '2024-01-31T00:00:00Z' },
+  metrics: {
+    total_downloads: 0,
+    total_plays: 0,
+    total_streams: 0,
+    average_listen_duration_seconds: 0,
+    completion_rate: 0,
+  },
+  device_breakdown: { mobile: 0, desktop: 0, tablet: 0, unknown: 0 },
+  app_breakdown: {} as Record<string, number>,
+  top_countries: [] as Array<{ country: string; downloads: number }>,
+}
+
 // Generic router for tests that just need a specific episode/content/tts
 // fixture returned, with optional per-endpoint failure overrides layered on.
 function mockEpisodeFetchRouter({
   episode = draftEpisode,
   contentSources = [{ id: 'c1', source_type: 'url', source_data: { url: 'https://example.com' }, extraction_status: 'complete' }],
   ttsConfigs = [] as Array<{ id: string; name: string; provider: string; is_default: boolean }>,
+  analytics = zeroAnalytics as typeof zeroAnalytics | Record<string, unknown>,
 }: {
   episode?: typeof draftEpisode
   contentSources?: Array<{ id: string; source_type: string; source_data: Record<string, string>; extraction_status: string }>
   ttsConfigs?: Array<{ id: string; name: string; provider: string; is_default: boolean }>
+  analytics?: typeof zeroAnalytics | Record<string, unknown>
 } = {}) {
   return jest.fn((url: string) => {
     if (url.includes('/generate')) {
@@ -105,6 +131,9 @@ function mockEpisodeFetchRouter({
     }
     if (url.includes('/tts-configs')) {
       return Promise.resolve({ ok: true, json: async () => ({ configs: ttsConfigs }) })
+    }
+    if (url.includes('/analytics/episodes/')) {
+      return Promise.resolve({ ok: true, json: async () => analytics })
     }
     return Promise.resolve({ ok: true, json: async () => episode })
   }) as jest.Mock
@@ -125,6 +154,9 @@ function mockFetchRouter() {
     if (url.includes('/tts-configs')) {
       return Promise.resolve({ ok: true, json: async () => ({ configs: [] }) })
     }
+    if (url.includes('/analytics/episodes/')) {
+      return Promise.resolve({ ok: true, json: async () => zeroAnalytics })
+    }
     // episode detail
     return Promise.resolve({ ok: true, json: async () => draftEpisode })
   }) as jest.Mock
@@ -142,6 +174,9 @@ function mockFetchRouterWithSavedConfig() {
         ok: true,
         json: async () => ({ configs: [{ id: 'tts1', name: 'My Voice', provider: 'openai', is_default: true }] }),
       })
+    }
+    if (url.includes('/analytics/episodes/')) {
+      return Promise.resolve({ ok: true, json: async () => zeroAnalytics })
     }
     return Promise.resolve({ ok: true, json: async () => draftEpisode })
   }) as jest.Mock
@@ -981,5 +1016,156 @@ describe('EpisodePage TTS config creation', () => {
     await waitFor(() =>
       expect(showErrorToast).toHaveBeenCalledWith('Failed to apply TTS settings: Network error')
     )
+  })
+})
+
+describe('EpisodePage analytics section', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  it('renders analytics metrics when the fetch succeeds', async () => {
+    const analytics = {
+      episode_id: 'ep1',
+      period: { from: '2024-01-01T00:00:00Z', to: '2024-01-31T00:00:00Z' },
+      metrics: {
+        total_downloads: 12,
+        total_plays: 40,
+        total_streams: 6,
+        average_listen_duration_seconds: 125,
+        completion_rate: 0.75,
+      },
+      device_breakdown: { mobile: 11, desktop: 22, tablet: 9, unknown: 3 },
+      app_breakdown: { apple_podcasts: 17, spotify: 23, other: 7 },
+      top_countries: [
+        { country: 'US', downloads: 8 },
+        { country: 'CA', downloads: 4 },
+      ],
+    }
+    global.fetch = mockEpisodeFetchRouter({ episode: completeEpisode, analytics })
+    render(<EpisodePage />)
+
+    await screen.findByText('Test Episode')
+    expect(await screen.findByText('Analytics')).toBeInTheDocument()
+    expect(await screen.findByText('12')).toBeInTheDocument() // downloads
+    expect(await screen.findByText('40')).toBeInTheDocument() // plays
+    expect(await screen.findByText('6')).toBeInTheDocument() // streams
+    expect(await screen.findByText('2:05')).toBeInTheDocument() // avg listen duration mm:ss
+    expect(await screen.findByText('75%')).toBeInTheDocument()
+    expect(screen.getByRole('progressbar', { name: /completion rate/i })).toBeInTheDocument()
+    expect(screen.getByText('US')).toBeInTheDocument()
+    expect(screen.getByText('CA')).toBeInTheDocument()
+  })
+
+  it('shows a muted error message when the analytics fetch returns non-ok', async () => {
+    const fetchMock = withOverride(
+      mockEpisodeFetchRouter({ episode: completeEpisode }),
+      (url) => url.includes('/analytics/episodes/'),
+      () => Promise.resolve({ ok: false, statusText: 'Internal Server Error' })
+    )
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+
+    await screen.findByText('Test Episode')
+    expect(await screen.findByText(/analytics unavailable/i)).toBeInTheDocument()
+    expect(showErrorToast).not.toHaveBeenCalled()
+  })
+
+  it('shows a muted error message when the analytics fetch rejects', async () => {
+    const fetchMock = withOverride(
+      mockEpisodeFetchRouter({ episode: completeEpisode }),
+      (url) => url.includes('/analytics/episodes/'),
+      () => Promise.reject(new Error('boom'))
+    )
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+
+    await screen.findByText('Test Episode')
+    expect(await screen.findByText(/analytics unavailable/i)).toBeInTheDocument()
+    expect(showErrorToast).not.toHaveBeenCalled()
+  })
+
+  it('shows "No analytics yet" for all-zero metrics', async () => {
+    global.fetch = mockEpisodeFetchRouter({ episode: completeEpisode, analytics: zeroAnalytics })
+    render(<EpisodePage />)
+
+    await screen.findByText('Test Episode')
+    expect(await screen.findByText(/no analytics yet/i)).toBeInTheDocument()
+  })
+})
+
+describe('EpisodePage in-app event tracking', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  it('fires the play analytics event exactly once across two play events', async () => {
+    const fetchMock = mockEpisodeFetchRouter({ episode: completeEpisode })
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+
+    const audio = await screen.findByLabelText(/podcast audio: test episode/i)
+
+    const { fireEvent } = await import('@testing-library/react')
+    fireEvent.play(audio)
+    fireEvent.play(audio)
+
+    await waitFor(() => {
+      const playCalls = fetchMock.mock.calls.filter(
+        ([url]: [string]) => url === '/api/proxy/analytics/events'
+      )
+      expect(playCalls).toHaveLength(1)
+    })
+
+    const [, init] = fetchMock.mock.calls.find(
+      ([url]: [string]) => url === '/api/proxy/analytics/events'
+    )!
+    expect(JSON.parse(init.body as string)).toEqual({
+      event_type: 'play',
+      episode_id: 'ep1',
+      project_id: 'p1',
+    })
+  })
+
+  it('fires the download analytics event after a successful download', async () => {
+    const mockDownload = jest.mocked(downloadLib.downloadAudioFile)
+    mockDownload.mockResolvedValue(undefined)
+
+    const fetchMock = mockEpisodeFetchRouter({ episode: completeEpisode })
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+
+    await screen.findByText('Test Episode')
+    await userEvent.click(screen.getByRole('button', { name: /download mp3/i }))
+
+    await waitFor(() => {
+      const downloadCalls = fetchMock.mock.calls.filter(
+        ([url, init]: [string, RequestInit?]) =>
+          url === '/api/proxy/analytics/events' &&
+          JSON.parse((init?.body as string) ?? '{}').event_type === 'download'
+      )
+      expect(downloadCalls).toHaveLength(1)
+    })
+  })
+
+  it('swallows analytics event tracking failures without a toast or crash', async () => {
+    const mockDownload = jest.mocked(downloadLib.downloadAudioFile)
+    mockDownload.mockResolvedValue(undefined)
+
+    const fetchMock = withOverride(
+      mockEpisodeFetchRouter({ episode: completeEpisode }),
+      (url) => url === '/api/proxy/analytics/events',
+      () => Promise.reject(new Error('network down'))
+    )
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+
+    await screen.findByText('Test Episode')
+    await userEvent.click(screen.getByRole('button', { name: /download mp3/i }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /download mp3/i })).not.toBeDisabled()
+    })
+    expect(showErrorToast).not.toHaveBeenCalled()
   })
 })

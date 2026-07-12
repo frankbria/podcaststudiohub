@@ -167,7 +167,10 @@ export const webhookDistributionSchema = z.object({
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: "URL must use HTTPS" })
       }
     }),
-  method: z.enum(["POST", "GET"]).default("POST"),
+  // Optional rather than .default(): a Zod default diverges the schema's
+  // input/output types, which react-hook-form's resolver typing rejects.
+  // The form supplies "POST" via defaultValues; the backend also defaults POST.
+  method: z.enum(["POST", "GET"]).optional(),
 })
 
 export type WebhookDistributionFormData = z.infer<typeof webhookDistributionSchema>

@@ -67,7 +67,9 @@ describe('WebhookConnectDialog', () => {
   })
 
   it('shows an error toast when connecting fails', async () => {
-    global.fetch = jest.fn().mockResolvedValue({ ok: false, statusText: 'Bad Request' }) as jest.Mock
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: false, statusText: 'Bad Request', json: async () => ({}) }) as jest.Mock
 
     render(<WebhookConnectDialog {...defaultProps} />)
     await userEvent.type(screen.getByLabelText(/name/i), 'My webhook')
@@ -78,6 +80,25 @@ describe('WebhookConnectDialog', () => {
       expect(showErrorToast).toHaveBeenCalledWith('Failed to connect webhook: Bad Request')
     )
     expect(defaultProps.onConnected).not.toHaveBeenCalled()
+  })
+
+  it('surfaces the backend SSRF-guard detail when the URL is rejected with 422', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      statusText: 'Unprocessable Entity',
+      json: async () => ({ detail: 'Webhook URL is not allowed: resolves to a private address' }),
+    }) as jest.Mock
+
+    render(<WebhookConnectDialog {...defaultProps} />)
+    await userEvent.type(screen.getByLabelText(/name/i), 'My webhook')
+    await userEvent.type(screen.getByLabelText(/url/i), 'https://internal.example.com/webhook')
+    await userEvent.click(screen.getByRole('button', { name: /^connect$/i }))
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'Failed to connect webhook: Webhook URL is not allowed: resolves to a private address'
+      )
+    )
   })
 
   it('shows a network error toast when connecting throws', async () => {

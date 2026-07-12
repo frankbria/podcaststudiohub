@@ -10,10 +10,13 @@ jest.mock('@/lib/toast', () => ({
 
 const { showErrorToast } = jest.requireMock('@/lib/toast')
 
+// Mirrors the real AppleAuthorizeResponse: message is prose, setup_instructions is a URL.
 const authorizeInfo = {
-  message: 'Connect your Apple Podcasts show',
+  message:
+    'Apple Podcasts requires a manually generated API key from Podcasts Connect. ' +
+    'Follow the setup instructions to obtain your API key.',
   podcasts_connect_url: 'https://podcastsconnect.apple.com/',
-  setup_instructions: 'Create an API key in Podcasts Connect and paste it below.',
+  setup_instructions: 'https://help.apple.com/itc/podcasts_connect/#/itcb54353390',
 }
 
 function mockFetchRouter({ authorizeOk = true }: { authorizeOk?: boolean } = {}) {
@@ -44,7 +47,12 @@ describe('AppleConnectDialog', () => {
     render(<AppleConnectDialog {...defaultProps} />)
 
     expect(screen.getByText('Connect Apple Podcasts')).toBeInTheDocument()
-    expect(await screen.findByText(authorizeInfo.setup_instructions)).toBeInTheDocument()
+    // message is the instructional prose; setup_instructions is a help-doc URL
+    expect(await screen.findByText(authorizeInfo.message)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /view setup instructions/i })).toHaveAttribute(
+      'href',
+      authorizeInfo.setup_instructions
+    )
     expect(screen.getByRole('link', { name: /open apple podcasts connect/i })).toHaveAttribute(
       'href',
       authorizeInfo.podcasts_connect_url
@@ -80,7 +88,7 @@ describe('AppleConnectDialog', () => {
   it('shows a validation error when show ID is cleared', async () => {
     global.fetch = mockFetchRouter()
     render(<AppleConnectDialog {...defaultProps} />)
-    await screen.findByText(authorizeInfo.setup_instructions)
+    await screen.findByText(authorizeInfo.message)
 
     const showIdInput = screen.getByLabelText(/show id/i)
     await userEvent.type(showIdInput, '123')
@@ -98,7 +106,7 @@ describe('AppleConnectDialog', () => {
     global.fetch = fetchMock
 
     render(<AppleConnectDialog {...defaultProps} />)
-    await screen.findByText(authorizeInfo.setup_instructions)
+    await screen.findByText(authorizeInfo.message)
 
     await userEvent.type(screen.getByLabelText(/show id/i), '12345')
     await userEvent.type(screen.getByLabelText(/api key/i), 'secret-key')
@@ -121,12 +129,12 @@ describe('AppleConnectDialog', () => {
     const fetchMock = withOverride(
       mockFetchRouter(),
       (url, init) => url === '/api/proxy/distribution-targets/apple' && (init?.method ?? 'GET') === 'POST',
-      () => Promise.resolve({ ok: false, statusText: 'Bad Request' })
+      () => Promise.resolve({ ok: false, statusText: 'Bad Request', json: async () => ({}) })
     )
     global.fetch = fetchMock
 
     render(<AppleConnectDialog {...defaultProps} />)
-    await screen.findByText(authorizeInfo.setup_instructions)
+    await screen.findByText(authorizeInfo.message)
 
     await userEvent.type(screen.getByLabelText(/show id/i), '12345')
     await userEvent.type(screen.getByLabelText(/api key/i), 'secret-key')
@@ -138,6 +146,33 @@ describe('AppleConnectDialog', () => {
     expect(defaultProps.onConnected).not.toHaveBeenCalled()
   })
 
+  it('surfaces the backend detail message when connecting fails with 422', async () => {
+    const fetchMock = withOverride(
+      mockFetchRouter(),
+      (url, init) => url === '/api/proxy/distribution-targets/apple' && (init?.method ?? 'GET') === 'POST',
+      () =>
+        Promise.resolve({
+          ok: false,
+          statusText: 'Unprocessable Entity',
+          json: async () => ({ detail: 'Invalid Apple Podcasts credentials' }),
+        })
+    )
+    global.fetch = fetchMock
+
+    render(<AppleConnectDialog {...defaultProps} />)
+    await screen.findByText(authorizeInfo.message)
+
+    await userEvent.type(screen.getByLabelText(/show id/i), '12345')
+    await userEvent.type(screen.getByLabelText(/api key/i), 'secret-key')
+    await userEvent.click(screen.getByRole('button', { name: /^connect$/i }))
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'Failed to connect Apple Podcasts: Invalid Apple Podcasts credentials'
+      )
+    )
+  })
+
   it('shows a network error toast when connecting throws', async () => {
     const fetchMock = withOverride(
       mockFetchRouter(),
@@ -147,7 +182,7 @@ describe('AppleConnectDialog', () => {
     global.fetch = fetchMock
 
     render(<AppleConnectDialog {...defaultProps} />)
-    await screen.findByText(authorizeInfo.setup_instructions)
+    await screen.findByText(authorizeInfo.message)
 
     await userEvent.type(screen.getByLabelText(/show id/i), '12345')
     await userEvent.type(screen.getByLabelText(/api key/i), 'secret-key')
@@ -161,7 +196,7 @@ describe('AppleConnectDialog', () => {
   it('calls onOpenChange(false) when Cancel is clicked', async () => {
     global.fetch = mockFetchRouter()
     render(<AppleConnectDialog {...defaultProps} />)
-    await screen.findByText(authorizeInfo.setup_instructions)
+    await screen.findByText(authorizeInfo.message)
 
     await userEvent.click(screen.getByRole('button', { name: /cancel/i }))
     expect(defaultProps.onOpenChange).toHaveBeenCalledWith(false)

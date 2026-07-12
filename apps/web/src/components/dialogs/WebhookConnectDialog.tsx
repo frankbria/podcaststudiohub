@@ -61,7 +61,11 @@ export function WebhookConnectDialog({ open, onOpenChange, onConnected }: Webhoo
         onConnected()
         onOpenChange(false)
       } else {
-        showErrorToast("Failed to connect webhook: " + response.statusText)
+        // Surface the backend's validation message (e.g. the SSRF guard's 422
+        // "Webhook URL is not allowed: ..." detail) when present.
+        const body = (await response.json().catch(() => null)) as { detail?: unknown } | null
+        const detail = typeof body?.detail === "string" ? body.detail : response.statusText
+        showErrorToast("Failed to connect webhook: " + detail)
       }
     } catch (error) {
       console.error("Failed to connect webhook:", error)

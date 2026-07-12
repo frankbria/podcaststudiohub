@@ -173,9 +173,10 @@ describe('DistributionPage', () => {
           Promise.resolve({
             ok: true,
             json: async () => ({
-              message: 'm',
+              // Mirrors the real contract: message is prose, setup_instructions is a URL
+              message: 'Do the thing',
               podcasts_connect_url: 'https://podcastsconnect.apple.com/',
-              setup_instructions: 'Do the thing',
+              setup_instructions: 'https://help.apple.com/itc/podcasts_connect/',
             }),
           })
       ),

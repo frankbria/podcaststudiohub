@@ -89,7 +89,10 @@ export function AppleConnectDialog({ open, onOpenChange, onConnected }: AppleCon
         onConnected()
         onOpenChange(false)
       } else {
-        showErrorToast("Failed to connect Apple Podcasts: " + response.statusText)
+        // Surface the backend's validation message (e.g. 422 detail) when present.
+        const body = (await response.json().catch(() => null)) as { detail?: unknown } | null
+        const detail = typeof body?.detail === "string" ? body.detail : response.statusText
+        showErrorToast("Failed to connect Apple Podcasts: " + detail)
       }
     } catch (error) {
       console.error("Failed to connect Apple Podcasts:", error)
@@ -125,15 +128,26 @@ export function AppleConnectDialog({ open, onOpenChange, onConnected }: AppleCon
 
         {instructions && (
           <div className="rounded-md border border-border bg-muted p-3 text-sm space-y-2">
-            <p>{instructions.setup_instructions}</p>
-            <a
-              href={instructions.podcasts_connect_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary underline"
-            >
-              Open Apple Podcasts Connect
-            </a>
+            <p>{instructions.message}</p>
+            <div className="flex flex-col gap-1">
+              {/* setup_instructions is a URL to Apple's help doc, not prose */}
+              <a
+                href={instructions.setup_instructions}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline"
+              >
+                View setup instructions
+              </a>
+              <a
+                href={instructions.podcasts_connect_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline"
+              >
+                Open Apple Podcasts Connect
+              </a>
+            </div>
           </div>
         )}
 

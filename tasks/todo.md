@@ -1,6 +1,8 @@
 # Issue #316 — Distribution, RSS feed, and analytics frontend surface
 
-Status: PR #380 open, demo passed, awaiting CI + merge. Plan source: CodeRabbit comment (adapted). Branch: `feature/issue-316-distribution-analytics-frontend`.
+Status: SHIPPED — merged 2026-07-12 as 9e87b32 via PR #380; issue #316 closed; follow-up #381 filed (metadata clear semantics).
+
+Plan source: CodeRabbit comment (adapted). Branch: `feature/issue-316-distribution-analytics-frontend` (deleted).
 
 ## Key adaptations vs the CodeRabbit plan
 

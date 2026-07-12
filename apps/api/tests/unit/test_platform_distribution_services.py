@@ -950,6 +950,17 @@ class TestRssFeedUrlResolution:
 
 		assert _rss_feed_url_for_project(db, "proj-1") is None
 
+	def test_resolver_returns_none_when_feed_not_yet_generated(self):
+		"""A feed row mid-generation (public_url still NULL) must not count as a feed."""
+		from src.tasks.platform_distribution import _rss_feed_url_for_project
+
+		feed = MagicMock()
+		feed.public_url = None
+		db = MagicMock()
+		db.execute.return_value.scalar_one_or_none.return_value = feed
+
+		assert _rss_feed_url_for_project(db, "proj-1") is None
+
 	@pytest.mark.parametrize(
 		"platform,helper_name",
 		[("spotify", "_distribute_to_spotify"), ("apple_podcasts", "_distribute_to_apple")],

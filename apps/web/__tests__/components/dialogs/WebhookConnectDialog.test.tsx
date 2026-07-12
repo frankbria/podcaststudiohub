@@ -83,10 +83,20 @@ describe('WebhookConnectDialog', () => {
   })
 
   it('surfaces the backend SSRF-guard detail when the URL is rejected with 422', async () => {
+    // Real FastAPI shape: Pydantic field_validator errors arrive as an ARRAY
+    // of {type, loc, msg} objects, not a string detail.
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       statusText: 'Unprocessable Entity',
-      json: async () => ({ detail: 'Webhook URL is not allowed: resolves to a private address' }),
+      json: async () => ({
+        detail: [
+          {
+            type: 'value_error',
+            loc: ['body', 'url'],
+            msg: 'Value error, Webhook URL is not allowed: resolves to a private address',
+          },
+        ],
+      }),
     }) as jest.Mock
 
     render(<WebhookConnectDialog {...defaultProps} />)
@@ -96,7 +106,7 @@ describe('WebhookConnectDialog', () => {
 
     await waitFor(() =>
       expect(showErrorToast).toHaveBeenCalledWith(
-        'Failed to connect webhook: Webhook URL is not allowed: resolves to a private address'
+        'Failed to connect webhook: Value error, Webhook URL is not allowed: resolves to a private address'
       )
     )
   })

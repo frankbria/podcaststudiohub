@@ -439,11 +439,19 @@ async def test_spotify_callback_works_without_request_tenant_context(client, aut
 
 @pytest.mark.asyncio
 async def test_spotify_callback_invalid_state(client, auth_headers):
-	"""Test that Spotify callback with invalid state returns 400."""
+	"""Invalid state redirects the browser back to the app with an error.
+
+	Contract change (#316/PR #380): the callback is a browser navigation, so
+	every outcome — including errors — 302s to {FRONTEND_URL}/distribution
+	instead of returning JSON the user would be stranded on.
+	"""
 	response = await client.get(
 		"/distribution-targets/spotify/callback?code=some-code&state=invalid-state-token"
 	)
-	assert response.status_code == 400
+	assert response.status_code == 302
+	location = response.headers["location"]
+	assert "/distribution?" in location
+	assert "error=" in location
 
 
 @pytest.mark.asyncio

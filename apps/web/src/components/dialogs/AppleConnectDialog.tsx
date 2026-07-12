@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { appleDistributionSchema, type AppleDistributionFormData } from "@/lib/validation"
 import { showErrorToast } from "@/lib/toast"
+import { extractApiErrorDetail } from "@/lib/api-error"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { AppleIcon } from "@hugeicons/core-free-icons"
 
@@ -90,9 +91,10 @@ export function AppleConnectDialog({ open, onOpenChange, onConnected }: AppleCon
         onOpenChange(false)
       } else {
         // Surface the backend's validation message (e.g. 422 detail) when present.
-        const body = (await response.json().catch(() => null)) as { detail?: unknown } | null
-        const detail = typeof body?.detail === "string" ? body.detail : response.statusText
-        showErrorToast("Failed to connect Apple Podcasts: " + detail)
+        const body = await response.json().catch(() => null)
+        showErrorToast(
+          "Failed to connect Apple Podcasts: " + extractApiErrorDetail(body, response.statusText)
+        )
       }
     } catch (error) {
       console.error("Failed to connect Apple Podcasts:", error)

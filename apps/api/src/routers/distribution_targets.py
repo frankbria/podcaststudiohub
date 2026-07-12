@@ -13,6 +13,7 @@ from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,6 +106,17 @@ async def spotify_authorize(
 	)
 
 
+def _spotify_callback_redirect(query: str) -> RedirectResponse:
+	"""Send the browser back to the app's distribution page with the outcome.
+
+	The callback is a browser navigation (no JWT, no fetch) — returning JSON
+	here would strand the user on the API origin, so every outcome redirects
+	to `{FRONTEND_URL}/distribution?...`, which toasts success/error (#316).
+	"""
+	base = settings.FRONTEND_URL.rstrip("/")
+	return RedirectResponse(url=f"{base}/distribution?{query}", status_code=302)
+
+
 @router.get("/spotify/callback")
 async def spotify_callback(
 	code: str = Query(..., description="Authorization code from Spotify"),
@@ -116,7 +128,8 @@ async def spotify_callback(
 
 	Validates the CSRF state token, exchanges the authorization code for
 	access and refresh tokens, encrypts them, and creates a DistributionTarget
-	record. Redirects to a success page on completion.
+	record. Always redirects the browser back to the frontend distribution
+	page with `?success=...` or `?error=...` in the query string.
 
 	Args:
 		code: Authorization code from Spotify
@@ -124,17 +137,13 @@ async def spotify_callback(
 		db: Database session
 
 	Returns:
-		Redirect to success page with target_id, or JSON response with target
-
-	Raises:
-		HTTPException: 400 if state is invalid or token exchange fails
+		302 redirect to `{FRONTEND_URL}/distribution` with the outcome
 	"""
 	# Validate CSRF state token
 	user_id_str = validate_oauth_state(state)
 	if not user_id_str:
-		raise HTTPException(
-			status_code=status.HTTP_400_BAD_REQUEST,
-			detail="Invalid or expired OAuth state token"
+		return _spotify_callback_redirect(
+			"error=" + urllib.parse.quote("Spotify authorization failed: invalid or expired state")
 		)
 
 	client_id = settings.SPOTIFY_CLIENT_ID
@@ -142,9 +151,8 @@ async def spotify_callback(
 	redirect_uri = settings.SPOTIFY_REDIRECT_URI
 
 	if not client_id or not client_secret or not redirect_uri:
-		raise HTTPException(
-			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-			detail="Spotify OAuth is not configured on this server"
+		return _spotify_callback_redirect(
+			"error=" + urllib.parse.quote("Spotify OAuth is not configured on this server")
 		)
 
 	# Exchange authorization code for tokens
@@ -157,9 +165,8 @@ async def spotify_callback(
 		)
 	except Exception as e:
 		logger.warning("Spotify token exchange failed: %s", type(e).__name__)
-		raise HTTPException(
-			status_code=status.HTTP_400_BAD_REQUEST,
-			detail="Failed to exchange Spotify authorization code"
+		return _spotify_callback_redirect(
+			"error=" + urllib.parse.quote("Failed to exchange Spotify authorization code")
 		)
 
 	access_token = token_data.get("access_token")
@@ -167,9 +174,8 @@ async def spotify_callback(
 	expires_in = token_data.get("expires_in", 3600)
 
 	if not access_token or not refresh_token:
-		raise HTTPException(
-			status_code=status.HTTP_400_BAD_REQUEST,
-			detail="Incomplete token response from Spotify"
+		return _spotify_callback_redirect(
+			"error=" + urllib.parse.quote("Incomplete token response from Spotify")
 		)
 
 	# Fetch show info to get show_id and name
@@ -188,10 +194,7 @@ async def spotify_callback(
 	db_user = user_result.one_or_none()
 
 	if not db_user:
-		raise HTTPException(
-			status_code=status.HTTP_400_BAD_REQUEST,
-			detail="User not found",
-		)
+		return _spotify_callback_redirect("error=" + urllib.parse.quote("User not found"))
 
 	# Arm + set the user's tenant so the distribution_targets INSERT below
 	# passes the scoped WITH CHECK policy.
@@ -199,7 +202,7 @@ async def spotify_callback(
 	await set_tenant_context(db, str(db_user.tenant_id))
 
 	# Create distribution target
-	target = await create_spotify_target(
+	await create_spotify_target(
 		db=db,
 		user_id=db_user.id,
 		tenant_id=db_user.tenant_id,
@@ -210,7 +213,7 @@ async def spotify_callback(
 		show_name=show_info.get("name", ""),
 	)
 
-	return DistributionTargetResponse.from_orm_model(target)
+	return _spotify_callback_redirect("success=" + urllib.parse.quote("Spotify connected"))
 
 
 # ============================================================================

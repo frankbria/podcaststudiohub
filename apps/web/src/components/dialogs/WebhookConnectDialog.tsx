@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { webhookDistributionSchema, type WebhookDistributionFormData } from "@/lib/validation"
 import { showErrorToast } from "@/lib/toast"
+import { extractApiErrorDetail } from "@/lib/api-error"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { WebhookIcon } from "@hugeicons/core-free-icons"
 
@@ -63,9 +64,10 @@ export function WebhookConnectDialog({ open, onOpenChange, onConnected }: Webhoo
       } else {
         // Surface the backend's validation message (e.g. the SSRF guard's 422
         // "Webhook URL is not allowed: ..." detail) when present.
-        const body = (await response.json().catch(() => null)) as { detail?: unknown } | null
-        const detail = typeof body?.detail === "string" ? body.detail : response.statusText
-        showErrorToast("Failed to connect webhook: " + detail)
+        const body = await response.json().catch(() => null)
+        showErrorToast(
+          "Failed to connect webhook: " + extractApiErrorDetail(body, response.statusText)
+        )
       }
     } catch (error) {
       console.error("Failed to connect webhook:", error)

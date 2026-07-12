@@ -69,8 +69,11 @@ class StorageService:
         if content_type:
             extra_args["ContentType"] = content_type
 
-        if public:
-            extra_args["ACL"] = "public-read"
+        # Public access comes from the bucket policy, not object ACLs: the
+        # bucket has ACLs disabled (S3 bucket-owner-enforced default), so
+        # sending ACL=public-read fails with AccessControlListNotSupported.
+        # The episode-audio upload path (tasks/s3_upload.py) already works
+        # this way; `public` is kept for caller-intent documentation.
 
         try:
             # boto3 is synchronous; run it off the event loop so concurrent

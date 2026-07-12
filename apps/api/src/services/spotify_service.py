@@ -59,10 +59,14 @@ class SpotifyService:
 		idempotency_key: Optional[str] = None,
 	) -> Dict[str, Any]:
 		"""
-		Publish a podcast episode to Spotify for Podcasters.
+		EXPERIMENTAL/UNVERIFIED: attempt a direct episode publish to Spotify.
 
-		Sends episode metadata and audio URL to the Spotify Web API.
-		The show must already exist on Spotify for Podcasters.
+		Spotify ingests episodes through the show's RSS feed — that is the
+		supported distribution mechanism (see issue #315). The Web API endpoint
+		used here does not accept episode submissions on any verified plan, so
+		this call is expected to fail (401/404/400) unless Spotify grants the
+		account such access. It only runs when ENABLE_DIRECT_PLATFORM_PUBLISH
+		is explicitly enabled.
 
 		Args:
 			show_id: Spotify show identifier (from DistributionTarget.config.show_id)

@@ -61,10 +61,14 @@ class ApplePodcastsService:
 		idempotency_key: Optional[str] = None,
 	) -> Dict[str, Any]:
 		"""
-		Publish a podcast episode to Apple Podcasts Connect.
+		EXPERIMENTAL/UNVERIFIED: attempt a direct episode publish to Apple.
 
-		Submits episode metadata and audio URL to the Apple Podcasts
-		Connect API using the JSONAPI request format.
+		Apple Podcasts ingests episodes through the show's RSS feed — that is
+		the supported distribution mechanism (see issue #315). The Podcasts
+		Connect endpoint used here is not a public episode-submission API, so
+		this call is expected to fail unless Apple grants the account such
+		access. It only runs when ENABLE_DIRECT_PLATFORM_PUBLISH is explicitly
+		enabled. Uses the JSONAPI request format.
 
 		Args:
 			show_id: Apple Podcasts show identifier (from DistributionTarget.config.show_id)

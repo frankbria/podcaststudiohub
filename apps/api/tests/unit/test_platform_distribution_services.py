@@ -42,6 +42,13 @@ def _make_celery_retry_exc(task):
 	return task.MaxRetriesExceededError()
 
 
+def _direct_publish_enabled():
+	"""Enable the experimental direct-publish path (issue #315) for one test."""
+	from src.config import settings
+
+	return patch.object(settings, "ENABLE_DIRECT_PLATFORM_PUBLISH", True)
+
+
 # ===========================================================================
 # SpotifyService tests
 # ===========================================================================
@@ -76,6 +83,47 @@ class TestSpotifyServicePublishEpisode:
 
 		assert result["episode_id"] == "sp_ep_abc123"
 		assert result["platform_url"] == "https://open.spotify.com/episode/sp_ep_abc123"
+
+	def test_sends_expected_request_url_headers_and_body(self):
+		"""Asserts the exact outbound endpoint, auth header and JSON body (issue #315)."""
+		from src.services.spotify_service import SpotifyService
+
+		mock_response = _make_httpx_response(200, {"id": "ep1", "external_urls": {}})
+
+		with patch("httpx.Client") as mock_client_cls:
+			mock_client = MagicMock()
+			mock_client.__enter__ = MagicMock(return_value=mock_client)
+			mock_client.__exit__ = MagicMock(return_value=False)
+			mock_client.post.return_value = mock_response
+			mock_client_cls.return_value = mock_client
+
+			SpotifyService().publish_episode(
+				show_id="show123",
+				access_token="token_abc",
+				metadata={
+					"title": "My Episode",
+					"description": "Desc",
+					"audio_url": "https://cdn.example.com/audio.mp3",
+					"duration_seconds": 61.5,
+					"publish_date": "2026-01-15",
+					"explicit": True,
+				},
+				idempotency_key="ep-001:spotify",
+			)
+
+		args, kwargs = mock_client.post.call_args
+		assert args[0] == "https://api.spotify.com/v1/shows/show123/episodes"
+		assert kwargs["headers"]["Authorization"] == "Bearer token_abc"
+		assert kwargs["headers"]["Content-Type"] == "application/json"
+		assert kwargs["headers"]["Idempotency-Key"] == "ep-001:spotify"
+		assert kwargs["json"] == {
+			"name": "My Episode",
+			"description": "Desc",
+			"explicit": True,
+			"release_date": "2026-01-15",
+			"duration_ms": 61500,
+			"audio_url": "https://cdn.example.com/audio.mp3",
+		}
 
 	def test_platform_url_fallback_when_external_urls_absent(self):
 		"""Constructs fallback URL when external_urls missing from response."""
@@ -326,6 +374,52 @@ class TestApplePodcastsServicePublishEpisode:
 		assert result["episode_id"] == "apple_ep_001"
 		assert "apple_ep_001" in result["platform_url"]
 
+	def test_sends_expected_request_url_headers_and_body(self):
+		"""Asserts the exact outbound endpoint, auth header and JSONAPI body (issue #315)."""
+		from src.services.apple_podcasts_service import ApplePodcastsService
+
+		body = {"data": {"id": "ep1", "type": "episodes", "attributes": {}}}
+		mock_response = _make_httpx_response(201, body)
+
+		with patch("httpx.Client") as mock_client_cls:
+			mock_client = MagicMock()
+			mock_client.__enter__ = MagicMock(return_value=mock_client)
+			mock_client.__exit__ = MagicMock(return_value=False)
+			mock_client.post.return_value = mock_response
+			mock_client_cls.return_value = mock_client
+
+			ApplePodcastsService().publish_episode(
+				show_id="apple_show_1",
+				api_key="ak_test",
+				metadata={
+					"title": "My Episode",
+					"description": "Desc",
+					"audio_url": "https://cdn.example.com/audio.mp3",
+					"publish_date": "2026-01-15T00:00:00+00:00",
+					"explicit": False,
+				},
+				idempotency_key="ep-002:apple_podcasts",
+			)
+
+		args, kwargs = mock_client.post.call_args
+		assert args[0] == "https://api.podcastsconnect.apple.com/v1/episodes"
+		assert kwargs["headers"]["Authorization"] == "Bearer ak_test"
+		assert kwargs["headers"]["Content-Type"] == "application/json"
+		assert kwargs["headers"]["Idempotency-Key"] == "ep-002:apple_podcasts"
+		assert kwargs["json"] == {
+			"data": {
+				"type": "episodes",
+				"attributes": {
+					"title": "My Episode",
+					"description": "Desc",
+					"showId": "apple_show_1",
+					"publishDate": "2026-01-15T00:00:00+00:00",
+					"explicit": False,
+					"audioUrl": "https://cdn.example.com/audio.mp3",
+				},
+			}
+		}
+
 	def test_platform_url_fallback_when_website_url_absent(self):
 		"""Constructs fallback URL from show_id and episode_id when websiteUrl absent."""
 		from src.services.apple_podcasts_service import ApplePodcastsService
@@ -475,8 +569,62 @@ class TestDistributeToSpotify:
 		task.update_state = MagicMock()
 		return _distribute_to_spotify("ep-001", config, metadata or {}, task)
 
+	def test_rss_default_returns_feed_url_without_publishing(self):
+		"""Default (flag off): no publish_episode call; returns the RSS feed URL (issue #315)."""
+		from src.services.spotify_service import SpotifyService
+
+		config = {"show_id": "show1", "oauth_tokens": {"access_token": "tok"}}
+		feed_url = "https://cdn.example.com/rss-feeds/proj-1/feed.xml"
+
+		with patch.object(SpotifyService, "publish_episode") as mock_publish:
+			result = self._invoke(config, metadata={"rss_feed_url": feed_url})
+
+		mock_publish.assert_not_called()
+		assert result == {
+			"status": "success",
+			"platform": "spotify",
+			"method": "rss_feed",
+			"platform_episode_id": None,
+			"platform_url": feed_url,
+			"rss_feed_url": feed_url,
+			"error": None,
+		}
+
+	def test_rss_default_fails_clearly_without_feed_url(self):
+		"""Default (flag off): missing RSS feed is a clear permanent failure, not fake success."""
+		with pytest.raises(ValueError, match="RSS feed"):
+			self._invoke(config={"show_id": "show1", "oauth_tokens": {"access_token": "tok"}})
+
+	def test_rss_default_does_not_require_oauth_credentials(self):
+		"""Default (flag off): RSS ingestion needs no OAuth token."""
+		result = self._invoke(
+			config={"show_id": "show1"},
+			metadata={"rss_feed_url": "https://cdn.example.com/feed.xml"},
+		)
+		assert result["method"] == "rss_feed"
+
+	def test_direct_publish_called_once_with_expected_args_when_enabled(self):
+		"""Flag on: publish_episode called exactly once with show_id, metadata, idempotency key."""
+		from src.services.spotify_service import SpotifyService
+
+		config = {"show_id": "show1", "oauth_tokens": {"access_token": "tok"}}
+
+		with _direct_publish_enabled(), patch.object(
+			SpotifyService,
+			"publish_episode",
+			return_value={"episode_id": "e1", "platform_url": "https://open.spotify.com/episode/e1"},
+		) as mock_publish:
+			self._invoke(config, metadata={"title": "T"})
+
+		mock_publish.assert_called_once_with(
+			show_id="show1",
+			access_token="tok",
+			metadata={"title": "T"},
+			idempotency_key="ep-001:spotify",
+		)
+
 	def test_success_returns_real_episode_id(self):
-		"""Returns real episode_id from SpotifyService on success."""
+		"""Returns real episode_id from SpotifyService on success (direct path)."""
 		from src.services.spotify_service import SpotifyService
 
 		config = {
@@ -484,7 +632,7 @@ class TestDistributeToSpotify:
 			"oauth_tokens": {"access_token": "tok"},
 		}
 
-		with patch.object(
+		with _direct_publish_enabled(), patch.object(
 			SpotifyService,
 			"publish_episode",
 			return_value={"episode_id": "real_ep_id", "platform_url": "https://open.spotify.com/episode/real_ep_id"},
@@ -505,7 +653,7 @@ class TestDistributeToSpotify:
 			"oauth_tokens": {"access_token": "tok"},
 		}
 
-		with patch.object(
+		with _direct_publish_enabled(), patch.object(
 			SpotifyService,
 			"publish_episode",
 			return_value={"episode_id": "real_id", "platform_url": "https://open.spotify.com/episode/real_id"},
@@ -520,9 +668,10 @@ class TestDistributeToSpotify:
 			self._invoke(config={"oauth_tokens": {"access_token": "tok"}})
 
 	def test_raises_value_error_when_access_token_missing(self):
-		"""Raises ValueError when access_token absent from config."""
-		with pytest.raises(ValueError, match="access token"):
-			self._invoke(config={"show_id": "s", "oauth_tokens": {}})
+		"""Raises ValueError when access_token absent from config (direct path)."""
+		with _direct_publish_enabled():
+			with pytest.raises(ValueError, match="access token"):
+				self._invoke(config={"show_id": "s", "oauth_tokens": {}})
 
 	def test_refreshes_expired_token_before_publish(self):
 		"""Calls refresh_access_token when expires_at is in the past."""
@@ -551,6 +700,7 @@ class TestDistributeToSpotify:
 				return_value={"episode_id": "ep1", "platform_url": "https://open.spotify.com/episode/ep1"},
 			) as mock_publish,
 		):
+			mock_settings.ENABLE_DIRECT_PLATFORM_PUBLISH = True
 			mock_settings.SPOTIFY_CLIENT_ID = "cid"
 			mock_settings.SPOTIFY_CLIENT_SECRET = "csec"
 
@@ -581,6 +731,7 @@ class TestDistributeToSpotify:
 		}
 
 		with (
+			_direct_publish_enabled(),
 			patch.object(SpotifyService, "refresh_access_token") as mock_refresh,
 			patch.object(
 				SpotifyService,
@@ -605,6 +756,7 @@ class TestDistributeToSpotify:
 		}
 
 		with patch("src.tasks.platform_distribution.settings") as mock_settings:
+			mock_settings.ENABLE_DIRECT_PLATFORM_PUBLISH = True
 			mock_settings.SPOTIFY_CLIENT_ID = None
 			mock_settings.SPOTIFY_CLIENT_SECRET = None
 
@@ -627,8 +779,54 @@ class TestDistributeToApple:
 		task.update_state = MagicMock()
 		return _distribute_to_apple("ep-002", config, metadata or {}, task)
 
+	def test_rss_default_returns_feed_url_without_publishing(self):
+		"""Default (flag off): no publish_episode call; returns the RSS feed URL (issue #315)."""
+		from src.services.apple_podcasts_service import ApplePodcastsService
+
+		config = {"show_id": "apple_show_1", "credentials": {"api_key": "ak_test"}}
+		feed_url = "https://cdn.example.com/rss-feeds/proj-1/feed.xml"
+
+		with patch.object(ApplePodcastsService, "publish_episode") as mock_publish:
+			result = self._invoke(config, metadata={"rss_feed_url": feed_url})
+
+		mock_publish.assert_not_called()
+		assert result == {
+			"status": "success",
+			"platform": "apple_podcasts",
+			"method": "rss_feed",
+			"platform_episode_id": None,
+			"platform_url": feed_url,
+			"rss_feed_url": feed_url,
+			"error": None,
+		}
+
+	def test_rss_default_fails_clearly_without_feed_url(self):
+		"""Default (flag off): missing RSS feed is a clear permanent failure, not fake success."""
+		with pytest.raises(ValueError, match="RSS feed"):
+			self._invoke(config={"show_id": "s", "credentials": {"api_key": "k"}})
+
+	def test_direct_publish_called_once_with_expected_args_when_enabled(self):
+		"""Flag on: publish_episode called exactly once with show_id, metadata, idempotency key."""
+		from src.services.apple_podcasts_service import ApplePodcastsService
+
+		config = {"show_id": "apple_show_1", "credentials": {"api_key": "ak_test"}}
+
+		with _direct_publish_enabled(), patch.object(
+			ApplePodcastsService,
+			"publish_episode",
+			return_value={"episode_id": "e1", "platform_url": "https://podcasts.apple.com/podcast/id1?i=e1"},
+		) as mock_publish:
+			self._invoke(config, metadata={"title": "T"})
+
+		mock_publish.assert_called_once_with(
+			show_id="apple_show_1",
+			api_key="ak_test",
+			metadata={"title": "T"},
+			idempotency_key="ep-002:apple_podcasts",
+		)
+
 	def test_success_returns_real_episode_id(self):
-		"""Returns real episode_id from ApplePodcastsService on success."""
+		"""Returns real episode_id from ApplePodcastsService on success (direct path)."""
 		from src.services.apple_podcasts_service import ApplePodcastsService
 
 		config = {
@@ -636,7 +834,7 @@ class TestDistributeToApple:
 			"credentials": {"api_key": "ak_test"},
 		}
 
-		with patch.object(
+		with _direct_publish_enabled(), patch.object(
 			ApplePodcastsService,
 			"publish_episode",
 			return_value={
@@ -660,7 +858,7 @@ class TestDistributeToApple:
 			"credentials": {"api_key": "k"},
 		}
 
-		with patch.object(
+		with _direct_publish_enabled(), patch.object(
 			ApplePodcastsService,
 			"publish_episode",
 			return_value={"episode_id": "real_id", "platform_url": "https://podcasts.apple.com/podcast/id123?i=real_id"},
@@ -675,9 +873,10 @@ class TestDistributeToApple:
 			self._invoke(config={"credentials": {"api_key": "k"}})
 
 	def test_raises_value_error_when_api_key_missing(self):
-		"""Raises ValueError when api_key absent from config."""
-		with pytest.raises(ValueError, match="API key"):
-			self._invoke(config={"show_id": "s", "credentials": {}})
+		"""Raises ValueError when api_key absent from config (direct path)."""
+		with _direct_publish_enabled():
+			with pytest.raises(ValueError, match="API key"):
+				self._invoke(config={"show_id": "s", "credentials": {}})
 
 	def test_auth_error_propagates_from_service(self):
 		"""AppleAuthError raised by service propagates out of the task function."""
@@ -688,7 +887,7 @@ class TestDistributeToApple:
 			"credentials": {"api_key": "bad_key"},
 		}
 
-		with patch.object(
+		with _direct_publish_enabled(), patch.object(
 			ApplePodcastsService,
 			"publish_episode",
 			side_effect=AppleAuthError("HTTP 401"),
@@ -705,13 +904,88 @@ class TestDistributeToApple:
 			"credentials": {"api_key": "key"},
 		}
 
-		with patch.object(
+		with _direct_publish_enabled(), patch.object(
 			ApplePodcastsService,
 			"publish_episode",
 			side_effect=AppleAPIError("HTTP 500"),
 		):
 			with pytest.raises(AppleAPIError):
 				self._invoke(config)
+
+
+# ===========================================================================
+# RSS feed URL resolution + injection into the distribution task (issue #315)
+# ===========================================================================
+
+
+class TestRssFeedUrlResolution:
+	"""Tests for _rss_feed_url_for_project() and its wiring into the task."""
+
+	def test_resolver_returns_public_url(self):
+		from src.tasks.platform_distribution import _rss_feed_url_for_project
+
+		feed = MagicMock()
+		feed.public_url = "https://cdn.example.com/rss-feeds/proj-1/feed.xml"
+		db = MagicMock()
+		db.execute.return_value.scalar_one_or_none.return_value = feed
+
+		assert (
+			_rss_feed_url_for_project(db, "proj-1")
+			== "https://cdn.example.com/rss-feeds/proj-1/feed.xml"
+		)
+
+	def test_resolver_returns_none_when_no_feed(self):
+		from src.tasks.platform_distribution import _rss_feed_url_for_project
+
+		db = MagicMock()
+		db.execute.return_value.scalar_one_or_none.return_value = None
+
+		assert _rss_feed_url_for_project(db, "proj-1") is None
+
+	def test_task_injects_feed_url_into_spotify_metadata(self):
+		"""distribute_to_platform_task resolves the project's feed URL and passes it on."""
+		import src.tasks.platform_distribution as pd
+
+		episode_id = "11111111-2222-3333-4444-555555555555"
+		episode = MagicMock()
+		episode.generation_progress = {}
+		episode.project_id = "proj-1"
+		episode.episode_metadata = {"title": "T", "description": "D"}
+		episode.duration_seconds = None
+		episode.s3_url = "https://cdn.example.com/audio.mp3"
+
+		captured = {}
+
+		def fake_spotify(eid, config, metadata, task):
+			captured["metadata"] = metadata
+			return {
+				"status": "success",
+				"platform": "spotify",
+				"method": "rss_feed",
+				"platform_episode_id": None,
+				"platform_url": metadata.get("rss_feed_url"),
+				"rss_feed_url": metadata.get("rss_feed_url"),
+				"error": None,
+			}
+
+		with (
+			patch.object(pd, "SyncSessionLocal") as mock_ssl,
+			patch.object(
+				pd, "_rss_feed_url_for_project", return_value="https://cdn.example.com/feed.xml"
+			) as mock_resolver,
+			patch.object(pd, "_distribute_to_spotify", side_effect=fake_spotify),
+			patch("src.tasks.callbacks.record_platform_distribution", return_value=True),
+			patch.object(pd.distribute_to_platform_task, "update_state"),
+		):
+			mock_ssl.return_value.__enter__.return_value.get.return_value = episode
+			result = pd.distribute_to_platform_task(
+				episode_id, "spotify", {"show_id": "s"}, {}
+			)
+
+		mock_resolver.assert_called_once()
+		assert mock_resolver.call_args.args[1] == "proj-1"
+		assert captured["metadata"]["rss_feed_url"] == "https://cdn.example.com/feed.xml"
+		assert result["rss_feed_url"] == "https://cdn.example.com/feed.xml"
 
 
 # ===========================================================================

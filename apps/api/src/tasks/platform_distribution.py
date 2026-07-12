@@ -4,7 +4,7 @@ Celery tasks for podcast platform distribution
 import copy
 from celery import Task
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 
 from src.worker import celery_app
@@ -58,6 +58,49 @@ def _decrypt_platform_config(config: Dict[str, Any], platform: str) -> Dict[str,
         session.close()
 
     return decrypted
+
+
+def _rss_feed_url_for_project(db: Any, project_id: Any) -> Optional[str]:
+    """
+    Return the project's public RSS feed URL, or None if no feed has been
+    generated yet (issue #315). Uses the caller's open sync session.
+    """
+    from sqlalchemy import select
+
+    from src.models.rss_feed import RSSFeed
+
+    feed = db.execute(
+        select(RSSFeed).where(RSSFeed.project_id == project_id)
+    ).scalar_one_or_none()
+    return feed.public_url if feed is not None else None
+
+
+def _rss_distribution_result(platform: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build the default RSS-based distribution result (issue #315).
+
+    Spotify and Apple Podcasts ingest episodes through the show's RSS feed,
+    not through direct audio-URL POSTs. Distribution therefore succeeds by
+    surfacing the project's feed URL; a missing feed is a permanent failure
+    (ValueError → not retried), never a fabricated platform success.
+    """
+    rss_feed_url = metadata.get("rss_feed_url")
+    if not rss_feed_url:
+        raise ValueError(
+            f"No RSS feed found for this project. {platform} ingests episodes via "
+            "the project's RSS feed — generate the feed first "
+            "(POST /projects/{project_id}/rss-feed/generate), or enable the "
+            "experimental ENABLE_DIRECT_PLATFORM_PUBLISH flag."
+        )
+    return {
+        "status": "success",
+        "platform": platform,
+        "method": "rss_feed",
+        "platform_episode_id": None,
+        "platform_url": rss_feed_url,
+        "rss_feed_url": rss_feed_url,
+        "error": None,
+    }
 
 
 def _idempotency_key(episode_id: str, platform: str) -> str:
@@ -163,6 +206,14 @@ def distribute_to_platform_task(
                     }
                 else:
                     episode_metadata = _merge_episode_metadata(episode, episode_metadata)
+                    # Spotify/Apple ingest via the project's RSS feed (issue
+                    # #315); resolve its URL here while the session is open.
+                    if platform in ("spotify", "apple_podcasts") and not episode_metadata.get(
+                        "rss_feed_url"
+                    ):
+                        feed_url = _rss_feed_url_for_project(db, episode.project_id)
+                        if feed_url:
+                            episode_metadata["rss_feed_url"] = feed_url
             else:
                 logger.warning(
                     "Episode %s not found while building distribution metadata",
@@ -285,7 +336,14 @@ def distribute_to_platform_task(
 
 
 def _distribute_to_spotify(episode_id: str, config: Dict, metadata: Dict, task: Task) -> Dict:
-    """Distribute to Spotify for Podcasters using the Spotify Web API."""
+    """
+    Distribute to Spotify.
+
+    Default: Spotify ingests episodes via the show's RSS feed, so return the
+    project's feed URL (issue #315). The direct Web-API publish below is
+    experimental/unverified and only runs when ENABLE_DIRECT_PLATFORM_PUBLISH
+    is set.
+    """
     from src.services.spotify_service import SpotifyService
 
     task.update_state(
@@ -294,13 +352,16 @@ def _distribute_to_spotify(episode_id: str, config: Dict, metadata: Dict, task: 
             'episode_id': episode_id,
             'platform': 'spotify',
             'progress': 25,
-            'status': 'Authenticating with Spotify...'
+            'status': 'Preparing Spotify distribution...'
         }
     )
 
     show_id = config.get("show_id")
     if not show_id:
         raise ValueError("Spotify show_id not configured for this distribution target")
+
+    if not settings.ENABLE_DIRECT_PLATFORM_PUBLISH:
+        return _rss_distribution_result("spotify", metadata)
 
     oauth_tokens = config.get("oauth_tokens", {})
     access_token = oauth_tokens.get("access_token")
@@ -378,7 +439,14 @@ def _distribute_to_spotify(episode_id: str, config: Dict, metadata: Dict, task: 
 
 
 def _distribute_to_apple(episode_id: str, config: Dict, metadata: Dict, task: Task) -> Dict:
-    """Distribute to Apple Podcasts Connect using the Apple Podcasts Connect API."""
+    """
+    Distribute to Apple Podcasts.
+
+    Default: Apple ingests episodes via the show's RSS feed, so return the
+    project's feed URL (issue #315). The direct Podcasts-Connect publish below
+    is experimental/unverified and only runs when ENABLE_DIRECT_PLATFORM_PUBLISH
+    is set.
+    """
     from src.services.apple_podcasts_service import ApplePodcastsService
 
     task.update_state(
@@ -387,13 +455,16 @@ def _distribute_to_apple(episode_id: str, config: Dict, metadata: Dict, task: Ta
             'episode_id': episode_id,
             'platform': 'apple_podcasts',
             'progress': 25,
-            'status': 'Authenticating with Apple Podcasts...'
+            'status': 'Preparing Apple Podcasts distribution...'
         }
     )
 
     show_id = config.get("show_id")
     if not show_id:
         raise ValueError("Apple Podcasts show_id not configured for this distribution target")
+
+    if not settings.ENABLE_DIRECT_PLATFORM_PUBLISH:
+        return _rss_distribution_result("apple_podcasts", metadata)
 
     credentials = config.get("credentials", {})
     api_key = credentials.get("api_key")

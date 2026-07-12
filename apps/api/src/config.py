@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     # Workflow feature flags
     ENABLE_AUDIO_COMPOSITION: bool = False
     ENABLE_PLATFORM_DISTRIBUTION: bool = False
+    # Spotify/Apple ingest episodes via the project's RSS feed; their direct
+    # publish endpoints are unverified (issue #315). Off = distribution returns
+    # the RSS feed URL; on = experimental direct API publish.
+    ENABLE_DIRECT_PLATFORM_PUBLISH: bool = False
 
     # Email / SMTP
     EMAIL_ENABLED: bool = False

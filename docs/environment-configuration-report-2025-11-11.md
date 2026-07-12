@@ -270,7 +270,7 @@ All optional or future scope:
 ### Recommended Development Order (Phase 2)
 
 **Week 1-2: Core Podcast Generation (No S3 Required)**
-- ✅ Ready: Content extraction (websites, YouTube, PDFs)
+- ✅ Ready: Content extraction (websites, PDFs, plain text)
 - ✅ Ready: LLM script generation (Gemini/OpenAI)
 - ✅ Ready: TTS audio generation (ElevenLabs)
 - ⚠️ Temporary: Store generated audio locally

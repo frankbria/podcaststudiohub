@@ -60,7 +60,7 @@ podcaststudiohub/
 ## Features
 
 ### Core Podcast Generation
-- Transform multi-modal content (websites, PDFs, images, YouTube) into engaging audio conversations
+- Transform content (websites, PDFs, plain text) into engaging audio conversations
 - Support for 100+ LLM models via LiteLLM (OpenAI, Anthropic, Google Gemini)
 - Multiple TTS providers (OpenAI, ElevenLabs, Google, Edge TTS)
 - Short-form (2-5 min) and long-form (30+ min) podcasts
@@ -70,7 +70,7 @@ podcaststudiohub/
 - **User Management**: Secure authentication with JWT tokens
 - **Project Organization**: Group episodes into projects
 - **Episode Management**: Create, track, and manage podcast episodes
-- **Content Sources**: Support for URLs, files, and user-provided topics
+- **Content Sources**: Support for web URLs, PDF uploads, and plain text
 - **Background Processing**: Async generation with progress tracking
 - **Multi-tenant**: Complete data isolation per user
 - **Storage**: Local filesystem with optional S3 integration

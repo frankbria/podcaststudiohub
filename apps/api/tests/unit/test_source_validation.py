@@ -537,6 +537,21 @@ async def test_validate_by_type_pdf_empty_key():
 		)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unsupported", ['youtube', 'image', 'topic', 'bogus'])
+async def test_validate_by_type_unsupported_type_raises(unsupported):
+	"""validate_by_type rejects unsupported types instead of silently passing."""
+	validator = make_validator()
+	with pytest.raises(ValueError) as exc_info:
+		await validator.validate_by_type(
+			source_type=unsupported,
+			source_data={},
+		)
+	message = str(exc_info.value)
+	assert unsupported in message
+	assert 'url' in message and 'pdf' in message and 'text' in message
+
+
 # ===========================================================================
 # Error message quality
 # ===========================================================================

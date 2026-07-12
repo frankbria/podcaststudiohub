@@ -409,7 +409,10 @@ async def trigger_content_extraction(
     if content_source.source_type not in ('url', 'pdf', 'text'):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Source type '{content_source.source_type}' does not support extraction"
+            detail=(
+                f"Source type '{content_source.source_type}' does not support extraction. "
+                "Supported types: url, pdf, text"
+            )
         )
 
     try:

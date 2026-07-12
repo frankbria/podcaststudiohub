@@ -1,50 +1,55 @@
-# Issue #313 — Wire the audio-composition timeline (P4.1) — SHIPPED via PR #375
+# Issue #314 — Multi-modal input scope-down to URL/Text/PDF (P4.2)
 
-Status: merged 2026-07-11 as 6ea063c. Follow-up: #376 (download S3-backed
-snippets to the worker so they actually compose).
+CodeRabbit plan chose the scope-down path (option 2): align every layer to the
+genuinely supported set (url, text, pdf), surface the already-built PDF upload
+backend in the web UI, and fix overstated copy/docs. No architectural fork.
 
-## Problem (verified against current code)
+## Plan adaptations (verified against current code, 2026-07-11)
 
-- `routers/generation.py:309-317` dispatches `generate_podcast_task` with
-  `enable_composition` but never `composition_timeline` → defaults to `None`.
-- `podcast_generation.py:417` forwards it to `build_generation_workflow`, which
-  passes `composition_timeline or []` into `merge_audio_snippets_task.si` (line 850).
-- `audio_composition.py:49-82`: empty timeline → `AudioSegment.empty()` exported
-  → zero-length silent MP3 replaces the generated audio at upload (composed file
-  is `final_audio_path`).
-- `tests/unit/test_audio_composition_task.py:110` codifies the bug
-  (`test_empty_timeline_returns_success`).
-
-## Plan adaptations vs CodeRabbit plan
-
-1. `audio_snippet_service.get_audio_snippets` is **async** (AsyncSession); Celery
-   uses `SyncSessionLocal`. Resolver does its own sync `select(AudioSnippet)` query.
-2. `AudioSnippet.file_path` stores the **S3 key** when S3 is configured (see
-   `upload_audio_snippet`), so a snippet file may not exist on the worker's disk.
-   Resolver includes only snippets whose `file_path` is a local file; skips others
-   with a warning. S3-snippet download = documented Known Limitation / follow-up.
-3. Empty-timeline `ValueError` raised **before** the merge task's try block so it
-   propagates (deterministic error — retrying is pointless) and the chain's
-   `link_error` (`on_workflow_failure`) marks the episode failed.
+1. **PDF backend already done** (PR #210/#242): upload endpoint
+   `POST /episodes/{episode_id}/content/upload` (routers/content.py:136-197),
+   S3 extraction, full test suite. Nothing to build server-side except the
+   validator `else` and message tweaks.
+2. **Frontend has no PDF at all**: `contentSourceSchema` is `z.enum(["url","text"])`
+   (validation.ts:32); dialog toggle at page.tsx:660-686; hint text at :708.
+   Work = ADD pdf, not remove youtube/image/topic (never existed client-side).
+3. **No web API client layer** (deleted in #264): use inline `fetch` with
+   `FormData` to `/api/proxy/episodes/{id}/content/upload` — proxy forwards
+   body/headers as-is, so multipart passes through.
+4. `validate_by_type` (source_validator_service.py:294-318) silently no-ops on
+   unknown types — add terminal `else` raising ValueError.
+5. `openapi.yaml` enum already `[url, pdf, text]`; `/content/upload` endpoint is
+   undocumented — add it.
+6. Docs drift: README:63,73 overstates (images/YouTube/topics); USER_GUIDE has
+   no PDF row; GAP_ANALYSIS GAP-024 stale (PDF extraction done), FR-002 "PDF
+   upload UI missing" fixed by this PR; env-config report:273 mentions YouTube.
 
 ## TDD checklist
 
-- [x] RED: invert `test_empty_timeline_returns_success` → `pytest.raises(ValueError)`;
-      add resolver unit tests (ordering, always-includes-main, skips-missing-file,
-      never-empty, degrades-to-main-only on DB error); add workflow test asserting
-      `build_generation_workflow` receives a non-empty timeline with the generated
-      audio as `main_content` when composition is enabled and no timeline supplied.
-- [x] GREEN: guard in `merge_audio_snippets_task` (before try);
-      `resolve_composition_timeline(db, project_id, audio_file_path)` in
-      `podcast_generation.py` — project snippets ordered intro/music → main_content
-      → outro/midroll/ad/other, each entry `{file_path, segment_type}`; wire into
-      `generate_podcast_task`'s existing episode-load block (caller-supplied
-      timeline wins; resolution failure degrades to `[main]`, never empty).
-- [x] Full pytest + ruff + coverage gates; review; PR; demo; CI; merge.
+### Backend (apps/api)
+- [ ] Test: `validate_by_type` with unsupported type (e.g. 'youtube') raises
+      ValueError naming supported set → add terminal `else` (RED→GREEN)
+- [ ] Update model comment content_source.py:24-33 (supported vs reserved types)
+- [ ] Error messages in routers/content.py:409 + tasks/content_extraction.py:60
+      reference supported list ['url', 'pdf', 'text']
+- [ ] openapi.yaml: document POST /episodes/{episode_id}/content/upload
 
-## Known limitations
+### Frontend (apps/web)
+- [ ] Tests: page.test.tsx — PDF toggle renders file input; PDF submit posts
+      FormData to /api/proxy/.../content/upload; oversize/wrong-type file shows
+      validation error (RED)
+- [ ] validation.ts: add "pdf" to enum + superRefine (file required,
+      application/pdf, ≤50MB)
+- [ ] page.tsx: PDF toggle button; file input (accept="application/pdf") with
+      RHF error pattern; FormData submit path incl. auto_extract; replace :708
+      hint with "Supports public HTTP/HTTPS article URLs" (GREEN)
 
-- Snippets stored only in S3 (no local file) are skipped, not downloaded.
-- Timeline resolved on the generation worker; assumes chain tasks share a host
-  filesystem (same assumption the existing chain already makes for
-  `final_audio_path`).
+### Docs
+- [ ] README.md:63,73 → websites, PDFs, plain text only
+- [ ] docs/USER_GUIDE.md: add PDF row to Supported Content Types
+- [ ] docs/GAP_ANALYSIS.md: GAP-024 closed; FR-002 complete
+- [ ] docs/environment-configuration-report-2025-11-11.md:273 drop YouTube
+
+### Gates
+- [ ] pytest + jest + lint green; deslop; internal review + opencode/GLM review
+- [ ] PR, demo (agent-browser PDF upload flow), CI green, merge

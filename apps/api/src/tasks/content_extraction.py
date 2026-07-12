@@ -57,7 +57,9 @@ async def _extract_content_async(
 		elif source_type == 'text':
 			result = await service.extract_from_text(db, content_uuid)
 		else:
-			raise ValueError(f"Unsupported source type: {source_type}")
+			raise ValueError(
+				f"Unsupported source type: {source_type}. Supported types: url, pdf, text"
+			)
 
 		return {
 			"status": "complete" if result.success else "failed",

@@ -316,3 +316,9 @@ class SourceValidatorService:
 		elif source_type == 'pdf':
 			s3_key = source_data.get('s3_key', '')
 			await self.validate_pdf_source(s3_key)
+
+		else:
+			raise ValueError(
+				f"Unsupported source type '{source_type}'. "
+				"Supported types: url, pdf, text"
+			)

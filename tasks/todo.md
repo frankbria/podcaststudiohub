@@ -1,6 +1,10 @@
 # Issue #378 — [P4.3.1] First Spotify/Apple distribution fails until the project RSS feed is generated
 
-Status: IN PROGRESS. Plan source: self-authored (no plan on the issue).
+Status: SHIPPED — merged 2026-07-12 via PR #384 (squash); issue #378 closed. Follow-ups filed: #382 (feed regen on completion), #383 (UI enable_distribution), #385 (feed public-read policy).
+
+Plan source: self-authored. Branch: `feature/issue-378-rss-preflight-distribution` (deleted).
+
+Post-plan addition (PR review round): the pre-flight runs under a SAVEPOINT (`begin_nested`) so DB failures (unique-RSSFeed race) degrade to skip+warning instead of poisoning the 'queued' commit.
 
 ## Design decision (autonomous — no architectural fork)
 
@@ -44,11 +48,11 @@ clearly told beforehand").
 
 ## Acceptance criteria
 
-- [ ] Project with valid podcast metadata: adding a Spotify/Apple target + generating an episode
+- [x] Project with valid podcast metadata: adding a Spotify/Apple target + generating an episode
       does NOT produce a first-attempt `distribution_failed` (feed auto-generated at kickoff).
-- [ ] Project without metadata: user is clearly told (API warning surfaced in UI; platforms
+- [x] Project without metadata: user is clearly told (API warning surfaced in UI; platforms
       skipped, episode generation still proceeds).
-- [ ] Existing feed / webhook-only / direct-publish-flag paths unchanged.
+- [x] Existing feed / webhook-only / direct-publish-flag paths unchanged.
 
 ## Known limitations (by design, noted for PR)
 

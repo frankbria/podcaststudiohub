@@ -805,6 +805,14 @@ class TestDistributeToApple:
 		with pytest.raises(ValueError, match="RSS feed"):
 			self._invoke(config={"show_id": "s", "credentials": {"api_key": "k"}})
 
+	def test_rss_default_does_not_require_api_credentials(self):
+		"""Default (flag off): RSS ingestion needs no Apple API key."""
+		result = self._invoke(
+			config={"show_id": "s"},
+			metadata={"rss_feed_url": "https://cdn.example.com/feed.xml"},
+		)
+		assert result["method"] == "rss_feed"
+
 	def test_direct_publish_called_once_with_expected_args_when_enabled(self):
 		"""Flag on: publish_episode called exactly once with show_id, metadata, idempotency key."""
 		from src.services.apple_podcasts_service import ApplePodcastsService
@@ -942,7 +950,11 @@ class TestRssFeedUrlResolution:
 
 		assert _rss_feed_url_for_project(db, "proj-1") is None
 
-	def test_task_injects_feed_url_into_spotify_metadata(self):
+	@pytest.mark.parametrize(
+		"platform,helper_name",
+		[("spotify", "_distribute_to_spotify"), ("apple_podcasts", "_distribute_to_apple")],
+	)
+	def test_task_injects_feed_url_into_metadata(self, platform, helper_name):
 		"""distribute_to_platform_task resolves the project's feed URL and passes it on."""
 		import src.tasks.platform_distribution as pd
 
@@ -956,11 +968,11 @@ class TestRssFeedUrlResolution:
 
 		captured = {}
 
-		def fake_spotify(eid, config, metadata, task):
+		def fake_helper(eid, config, metadata, task):
 			captured["metadata"] = metadata
 			return {
 				"status": "success",
-				"platform": "spotify",
+				"platform": platform,
 				"method": "rss_feed",
 				"platform_episode_id": None,
 				"platform_url": metadata.get("rss_feed_url"),
@@ -973,13 +985,13 @@ class TestRssFeedUrlResolution:
 			patch.object(
 				pd, "_rss_feed_url_for_project", return_value="https://cdn.example.com/feed.xml"
 			) as mock_resolver,
-			patch.object(pd, "_distribute_to_spotify", side_effect=fake_spotify),
+			patch.object(pd, helper_name, side_effect=fake_helper),
 			patch("src.tasks.callbacks.record_platform_distribution", return_value=True),
 			patch.object(pd.distribute_to_platform_task, "update_state"),
 		):
 			mock_ssl.return_value.__enter__.return_value.get.return_value = episode
 			result = pd.distribute_to_platform_task(
-				episode_id, "spotify", {"show_id": "s"}, {}
+				episode_id, platform, {"show_id": "s"}, {}
 			)
 
 		mock_resolver.assert_called_once()

@@ -22,6 +22,7 @@ def _episode(**overrides):
 		},
 		"duration_seconds": 123.0,
 		"s3_url": "https://bucket.s3.amazonaws.com/podcasts/episode-1.mp3",
+		"project_id": "00000000-0000-0000-0000-0000000000aa",
 	}
 	data.update(overrides)
 	return SimpleNamespace(**data)

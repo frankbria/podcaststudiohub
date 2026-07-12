@@ -89,7 +89,7 @@ def _rss_distribution_result(platform: str, metadata: Dict[str, Any]) -> Dict[st
         raise ValueError(
             f"No RSS feed found for this project. {platform} ingests episodes via "
             "the project's RSS feed — generate the feed first "
-            "(POST /projects/{project_id}/rss-feed/generate), or enable the "
+            "(POST /projects/<project_id>/rss-feed/generate), or enable the "
             "experimental ENABLE_DIRECT_PLATFORM_PUBLISH flag."
         )
     return {

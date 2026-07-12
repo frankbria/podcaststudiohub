@@ -40,6 +40,7 @@ def _episode(**overrides):
 		"duration_seconds": 10.0,
 		"s3_url": "https://bucket.s3.amazonaws.com/e.mp3",
 		"generation_progress": {},
+		"project_id": "00000000-0000-0000-0000-0000000000aa",
 	}
 	data.update(overrides)
 	return SimpleNamespace(**data)
@@ -127,6 +128,7 @@ class TestAppleIdempotencyHeader:
 
 class TestHelpersForwardIdempotencyKey:
 	def test_spotify_helper_forwards_key(self):
+		from src.config import settings
 		from src.tasks.platform_distribution import _distribute_to_spotify
 
 		service = MagicMock()
@@ -134,7 +136,9 @@ class TestHelpersForwardIdempotencyKey:
 			"episode_id": "sp_1",
 			"platform_url": "https://open.spotify.com/episode/sp_1",
 		}
-		with patch("src.services.spotify_service.SpotifyService", return_value=service):
+		with patch.object(
+			settings, "ENABLE_DIRECT_PLATFORM_PUBLISH", True
+		), patch("src.services.spotify_service.SpotifyService", return_value=service):
 			_distribute_to_spotify(
 				EPISODE_ID,
 				{"show_id": "show1", "oauth_tokens": {"access_token": "tok"}},
@@ -146,6 +150,7 @@ class TestHelpersForwardIdempotencyKey:
 		assert kwargs["idempotency_key"] == f"{EPISODE_ID}:spotify"
 
 	def test_apple_helper_forwards_key(self):
+		from src.config import settings
 		from src.tasks.platform_distribution import _distribute_to_apple
 
 		service = MagicMock()
@@ -153,7 +158,9 @@ class TestHelpersForwardIdempotencyKey:
 			"episode_id": "ap_1",
 			"platform_url": None,
 		}
-		with patch(
+		with patch.object(
+			settings, "ENABLE_DIRECT_PLATFORM_PUBLISH", True
+		), patch(
 			"src.services.apple_podcasts_service.ApplePodcastsService",
 			return_value=service,
 		):

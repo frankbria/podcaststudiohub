@@ -347,6 +347,46 @@ paths:
               schema:
                 $ref: '#/components/schemas/ContentSourceResponse'
 
+  /episodes/{episode_id}/content/upload:
+    parameters:
+      - $ref: '#/components/parameters/EpisodeIdParam'
+
+    post:
+      tags: [content]
+      summary: Upload PDF content source
+      description: Upload a PDF file as a content source (FR-002)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: PDF file (application/pdf, max 50MB)
+                description:
+                  type: string
+                  maxLength: 500
+                  description: Optional description
+                auto_extract:
+                  type: boolean
+                  default: true
+                  description: Trigger extraction immediately after upload
+      responses:
+        '201':
+          description: PDF uploaded and content source created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContentSourceResponse'
+        '413':
+          description: PDF exceeds the 50MB size limit
+        '422':
+          description: Invalid file format (not a PDF) or empty file
+
   # Podcast Generation
   /episodes/{episode_id}/generate:
     parameters:

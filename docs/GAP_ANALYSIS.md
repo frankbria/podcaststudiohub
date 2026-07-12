@@ -199,7 +199,7 @@ But the API uses JWT token-based auth, not cookies.
 | GAP-021 | StorageService async methods use sync boto3 | `services/storage_service.py:43-152` | HIGH |
 | GAP-022 | PodcastService methods return hardcoded lists | `services/podcast_service.py:20-30` | MEDIUM |
 | GAP-023 | Script generation has no timeout for Gemini API | `services/script_generation_service.py:170` | MEDIUM |
-| GAP-024 | S3 PDF extraction not implemented (TODO comment) | `services/content_extraction_service.py:187` | HIGH |
+| GAP-024 | ~~S3 PDF extraction not implemented~~ RESOLVED (#242): `extract_from_pdf` implemented | `services/content_extraction_service.py` | HIGH |
 | GAP-025 | Transcript validation is minimal (only checks tags) | `services/script_generation_service.py:314-326` | LOW |
 
 **StorageService Blocking Issue:**
@@ -429,7 +429,7 @@ def _distribute_to_apple(...):
 | Requirement | Status | What's Missing |
 |-------------|--------|----------------|
 | FR-001: GUI without CLI | PARTIAL | Many workflows need CLI knowledge |
-| FR-002: Import URLs, PDFs, text | PARTIAL | PDF upload UI missing |
+| FR-002: Import URLs, PDFs, text | COMPLETE | PDF upload UI added (#314); YouTube/image/topic out of scope |
 | FR-003: Multiple TTS providers | PARTIAL | No selection UI |
 | FR-004: Podcast formats | NOT IMPL | No format selector |
 | FR-005: Real-time progress | PARTIAL | Auth issues, basic UI |

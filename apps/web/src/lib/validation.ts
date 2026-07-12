@@ -29,8 +29,8 @@ export type EpisodeFormData = z.infer<typeof episodeSchema>
 // Content source validation
 export const contentSourceSchema = z
   .object({
-    sourceType: z.enum(["url", "text"], {
-      error: () => "Select URL or Text",
+    sourceType: z.enum(["url", "text", "pdf"], {
+      error: () => "Select URL, Text, or PDF",
     }),
     url: z
       .string()
@@ -38,6 +38,8 @@ export const contentSourceSchema = z
     content: z
       .string()
       .optional(),
+    // FileList from an <input type="file"> (array-like of File)
+    file: z.custom<FileList>().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.sourceType === "url") {
@@ -51,7 +53,7 @@ export const contentSourceSchema = z
       }
       try {
         const parsed = new URL(data.url)
-        // Accept http and https (YouTube and other common hosts use https)
+        // Accept http and https article URLs
         const isAllowed =
           parsed.protocol === "http:" ||
           parsed.protocol === "https:"
@@ -91,6 +93,32 @@ export const contentSourceSchema = z
           code: z.ZodIssueCode.custom,
           message: "Content must be under 50,000 characters",
           path: ["content"],
+        })
+      }
+    }
+    if (data.sourceType === "pdf") {
+      const file = data.file?.[0]
+      if (!file) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "PDF file is required",
+          path: ["file"],
+        })
+        return
+      }
+      if (file.type !== "application/pdf") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "File must be a PDF",
+          path: ["file"],
+        })
+      }
+      // Mirrors the backend MAX_PDF_SIZE_BYTES limit (50MB)
+      if (file.size > 50 * 1024 * 1024) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "PDF must be 50MB or less",
+          path: ["file"],
         })
       }
     }

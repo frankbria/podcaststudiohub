@@ -200,3 +200,67 @@ describe("contentSourceSchema - text type", () => {
     expect(result.success).toBe(true)
   })
 })
+
+describe("contentSourceSchema - PDF type", () => {
+  const makePdf = (overrides: { type?: string; size?: number } = {}) => {
+    const file = new File(["%PDF-1.4"], "doc.pdf", {
+      type: overrides.type ?? "application/pdf",
+    })
+    if (overrides.size !== undefined) {
+      Object.defineProperty(file, "size", { value: overrides.size })
+    }
+    return file
+  }
+
+  it("accepts a selected PDF file", () => {
+    const result = contentSourceSchema.safeParse({
+      sourceType: "pdf",
+      file: [makePdf()],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects when no file is selected", () => {
+    const result = contentSourceSchema.safeParse({
+      sourceType: "pdf",
+      file: [],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const fileError = result.error.issues.find((i) => i.path.includes("file"))
+      expect(fileError?.message).toBe("PDF file is required")
+    }
+  })
+
+  it("rejects a non-PDF file", () => {
+    const result = contentSourceSchema.safeParse({
+      sourceType: "pdf",
+      file: [makePdf({ type: "text/plain" })],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const fileError = result.error.issues.find((i) => i.path.includes("file"))
+      expect(fileError?.message).toBe("File must be a PDF")
+    }
+  })
+
+  it("rejects a PDF over 50MB", () => {
+    const result = contentSourceSchema.safeParse({
+      sourceType: "pdf",
+      file: [makePdf({ size: 50 * 1024 * 1024 + 1 })],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const fileError = result.error.issues.find((i) => i.path.includes("file"))
+      expect(fileError?.message).toBe("PDF must be 50MB or less")
+    }
+  })
+
+  it("accepts a PDF of exactly 50MB", () => {
+    const result = contentSourceSchema.safeParse({
+      sourceType: "pdf",
+      file: [makePdf({ size: 50 * 1024 * 1024 })],
+    })
+    expect(result.success).toBe(true)
+  })
+})

@@ -516,6 +516,90 @@ describe('EpisodePage content sources', () => {
     })
   })
 
+  it('adds a PDF content source via multipart upload', async () => {
+    const fetchMock = withOverride(
+      mockEpisodeFetchRouter({ contentSources: [] }),
+      (url, init) => /\/api\/proxy\/episodes\/[^/]+\/content\/upload$/.test(url) && init?.method === 'POST',
+      () => Promise.resolve({ ok: true, json: async () => ({}) })
+    )
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+    await screen.findByText('Test Episode')
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Add Content' })[0])
+    await userEvent.click(screen.getByRole('button', { name: 'PDF' }))
+    const pdfFile = new File(['%PDF-1.4'], 'doc.pdf', { type: 'application/pdf' })
+    await userEvent.upload(screen.getByLabelText(/pdf file/i), pdfFile)
+    const submitButtons = screen.getAllByRole('button', { name: /add content/i })
+    await userEvent.click(submitButtons[submitButtons.length - 1])
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/proxy/episodes/ep1/content/upload',
+        expect.objectContaining({ method: 'POST', body: expect.any(FormData) })
+      )
+    })
+    const uploadCall = fetchMock.mock.calls.find(
+      ([url]: [string]) => url === '/api/proxy/episodes/ep1/content/upload'
+    )
+    const formData = uploadCall![1].body as FormData
+    expect((formData.get('file') as File).name).toBe('doc.pdf')
+    expect(formData.get('auto_extract')).toBe('true')
+    expect(showSuccessToast).toHaveBeenCalledWith('Content source added')
+  })
+
+  it('rejects a non-PDF file with a validation error and does not upload', async () => {
+    const fetchMock = mockEpisodeFetchRouter({ contentSources: [] })
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+    await screen.findByText('Test Episode')
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Add Content' })[0])
+    await userEvent.click(screen.getByRole('button', { name: 'PDF' }))
+    const textFile = new File(['hello'], 'notes.txt', { type: 'text/plain' })
+    await userEvent.upload(screen.getByLabelText(/pdf file/i), textFile, { applyAccept: false })
+
+    expect(await screen.findByText('File must be a PDF')).toBeInTheDocument()
+    const submitButtons = screen.getAllByRole('button', { name: /add content/i })
+    expect(submitButtons[submitButtons.length - 1]).toBeDisabled()
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/proxy/episodes/ep1/content/upload',
+      expect.anything()
+    )
+  })
+
+  it('shows an error toast when the PDF upload fails', async () => {
+    const fetchMock = withOverride(
+      mockEpisodeFetchRouter({ contentSources: [] }),
+      (url, init) => /\/api\/proxy\/episodes\/[^/]+\/content\/upload$/.test(url) && init?.method === 'POST',
+      () => Promise.resolve({ ok: false, statusText: 'Payload Too Large' })
+    )
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+    await screen.findByText('Test Episode')
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Add Content' })[0])
+    await userEvent.click(screen.getByRole('button', { name: 'PDF' }))
+    const pdfFile = new File(['%PDF-1.4'], 'doc.pdf', { type: 'application/pdf' })
+    await userEvent.upload(screen.getByLabelText(/pdf file/i), pdfFile)
+    const submitButtons = screen.getAllByRole('button', { name: /add content/i })
+    await userEvent.click(submitButtons[submitButtons.length - 1])
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith('Failed to add content source: Payload Too Large')
+    )
+  })
+
+  it('does not advertise YouTube support in the URL hint', async () => {
+    global.fetch = mockEpisodeFetchRouter({ contentSources: [] })
+    render(<EpisodePage />)
+    await screen.findByText('Test Episode')
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Add Content' })[0])
+
+    expect(screen.queryByText(/youtube/i)).not.toBeInTheDocument()
+  })
+
   it('opens the add-content dialog from the empty state action', async () => {
     global.fetch = mockEpisodeFetchRouter({ contentSources: [] })
     render(<EpisodePage />)

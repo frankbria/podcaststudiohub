@@ -21,16 +21,16 @@ class ContentSource(Base):
     episode_id = Column(UUID(as_uuid=True), ForeignKey("episodes.id", ondelete="CASCADE"), nullable=False, index=True)
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
 
-    # Source type: 'url', 'pdf', 'youtube', 'text', 'image', 'topic'
+    # Source type. Currently supported (accepted by API, validator, extraction):
+    # 'url', 'pdf', 'text'. Reserved but UNIMPLEMENTED: 'youtube', 'image',
+    # 'topic' — allowed only by the DB CHECK constraint for future use; the API
+    # schema, validator, and extraction dispatch all reject them.
     source_type = Column(Text, nullable=False, index=True)
 
     # Source data - flexible structure based on source_type
     # For URL: {"url": "https://...", "title": "..."}
     # For PDF: {"filename": "doc.pdf", "s3_key": "uploads/...", "mime_type": "application/pdf"}
-    # For YouTube: {"url": "https://youtube.com/watch?v=...", "video_id": "..."}
     # For Text: {"content": "raw text content", "title": "..."}
-    # For Image: {"filename": "image.jpg", "s3_key": "uploads/...", "mime_type": "image/jpeg"}
-    # For Topic: {"topic": "AI in healthcare", "search_results": [...]}
     source_data = Column(JSONB, nullable=False)
 
     # Extraction status and results (separate columns per migration)

@@ -40,6 +40,7 @@ Podcastfy Studio Hub is a web-based platform that transforms your written conten
 |-------------|-------------|---------|
 | **Web URLs** | Any publicly accessible webpage | Blog posts, news articles, documentation |
 | **Plain Text** | Direct text input | Your own writing, research notes, scripts |
+| **PDF Files** | Uploaded PDF documents (up to 50MB) | Reports, papers, ebooks |
 
 ---
 
@@ -455,7 +456,7 @@ A: There's no limit on the number of projects or episodes you can create.
 A: Blog posts, articles, and documentation pages work best. Avoid:
 - Pages requiring login
 - Video-heavy pages without text
-- PDF links (direct PDF support coming soon)
+- PDF links (use the PDF upload option instead)
 - Social media posts
 
 **Q: Can I use paywalled content?**

@@ -299,26 +299,39 @@ export default function EpisodePage() {
 
   const onSubmitContent = async (data: ContentSourceFormData) => {
     try {
-      const body = data.sourceType === "url"
-        ? {
-            episode_id: params.id,
-            source_type: "url",
-            source_data: { url: data.url, title: "Web Article" },
-          }
-        : {
-            episode_id: params.id,
-            source_type: "text",
-            source_data: { content: data.content, title: "Custom Text" },
-          }
+      let response: Response
+      if (data.sourceType === "pdf") {
+        // The upload endpoint takes multipart/form-data; the browser sets the
+        // Content-Type boundary, so no headers here.
+        const formData = new FormData()
+        formData.append("file", data.file![0])
+        formData.append("auto_extract", "true")
+        response = await fetch(
+          `/api/proxy/episodes/${params.id}/content/upload`,
+          { method: "POST", body: formData }
+        )
+      } else {
+        const body = data.sourceType === "url"
+          ? {
+              episode_id: params.id,
+              source_type: "url",
+              source_data: { url: data.url, title: "Web Article" },
+            }
+          : {
+              episode_id: params.id,
+              source_type: "text",
+              source_data: { content: data.content, title: "Custom Text" },
+            }
 
-      const response = await fetch(
-        `/api/proxy/episodes/${params.id}/content`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        }
-      )
+        response = await fetch(
+          `/api/proxy/episodes/${params.id}/content`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+          }
+        )
+      }
 
       if (response.ok) {
         showSuccessToast("Content source added")
@@ -682,6 +695,17 @@ export default function EpisodePage() {
                   >
                     Text
                   </Button>
+                  <Button
+                    type="button"
+                    variant={sourceType === "pdf" ? "default" : "outline"}
+                    aria-pressed={sourceType === "pdf"}
+                    onClick={() => {
+                      setValue("sourceType", "pdf", { shouldValidate: true })
+                    }}
+                    className="flex-1"
+                  >
+                    PDF
+                  </Button>
                 </div>
               </div>
 
@@ -705,7 +729,30 @@ export default function EpisodePage() {
                     </p>
                   )}
                   <p className="text-muted-foreground text-xs mt-1">
-                    Supports HTTP, HTTPS, and YouTube URLs
+                    Supports public HTTP/HTTPS article URLs
+                  </p>
+                </div>
+              ) : sourceType === "pdf" ? (
+                <div>
+                  <Label htmlFor="content-pdf" className="mb-1">
+                    PDF File <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="content-pdf"
+                    type="file"
+                    accept="application/pdf"
+                    aria-invalid={errors.file ? "true" : "false"}
+                    aria-describedby={errors.file ? "content-pdf-error" : undefined}
+                    {...register("file")}
+                    className={errors.file ? "border-destructive" : ""}
+                  />
+                  {errors.file && (
+                    <p id="content-pdf-error" className="text-destructive text-sm mt-1" role="alert">
+                      {errors.file.message}
+                    </p>
+                  )}
+                  <p className="text-muted-foreground text-xs mt-1">
+                    PDF files up to 50MB
                   </p>
                 </div>
               ) : (

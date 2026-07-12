@@ -1,6 +1,6 @@
 # Issue #316 — Distribution, RSS feed, and analytics frontend surface
 
-Status: IN PROGRESS. Plan source: CodeRabbit comment (adapted). Branch: `feature/issue-316-distribution-analytics-frontend`.
+Status: PR #380 open, demo passed, awaiting CI + merge. Plan source: CodeRabbit comment (adapted). Branch: `feature/issue-316-distribution-analytics-frontend`.
 
 ## Key adaptations vs the CodeRabbit plan
 
@@ -70,8 +70,12 @@ Status: IN PROGRESS. Plan source: CodeRabbit comment (adapted). Branch: `feature
 
 ## Acceptance criteria (from issue)
 
-- [ ] Launch scope confirmed → in scope, build it (CodeRabbit Design Choice 1; #379 settled the model).
-- [ ] Distribution page + nav entry exist and work against the live backend contract.
-- [ ] RSS feed management surface exists (project-scoped).
-- [ ] Analytics pages/sections exist (project + episode).
-- [ ] No launch-messaging change needed (feature is now real).
+- [x] Launch scope confirmed → in scope, build it (CodeRabbit Design Choice 1; #379 settled the model).
+- [x] Distribution page + nav entry exist and work against the live backend contract (demoed live).
+- [x] RSS feed management surface exists (project-scoped; feed generated to real S3 in demo).
+- [x] Analytics pages/sections exist (project + episode; demoed with real aggregated events).
+- [x] No launch-messaging change needed (feature is now real).
+
+Post-review fixes shipped on the branch: Spotify callback 302-redirects to the app (was bare
+JSON), array-form 422 details surfaced, S3 ACL dropped (ACL-disabled bucket), Apple dialog
+message/setup-link fix, play-event guard reset on episode navigation, ui/progress value forward.

@@ -19,6 +19,7 @@ jest.mock('next-auth/react', () => ({
 jest.mock('@/lib/toast', () => ({
   showSuccessToast: jest.fn(),
   showErrorToast: jest.fn(),
+  showWarningToast: jest.fn(),
 }))
 
 jest.mock('@/lib/download', () => ({
@@ -50,7 +51,7 @@ jest.mock('@/lib/event-source-manager', () => ({
   },
 }))
 
-const { showSuccessToast, showErrorToast } = jest.requireMock('@/lib/toast')
+const { showSuccessToast, showErrorToast, showWarningToast } = jest.requireMock('@/lib/toast')
 
 const draftEpisode = {
   id: 'ep1',
@@ -216,6 +217,26 @@ describe('EpisodePage generate flow', () => {
         { method: 'POST' }
       )
     })
+    expect(showSuccessToast).toHaveBeenCalledWith('Podcast generation started')
+    expect(showErrorToast).not.toHaveBeenCalled()
+  })
+
+  it('surfaces distribution warnings returned by the generate endpoint (#378)', async () => {
+    const warning =
+      "Skipped Apple Podcasts distribution: these platforms ingest episodes via the project's RSS feed, which has not been generated and could not be auto-generated."
+    const fetchMock = withOverride(
+      mockEpisodeFetchRouter(),
+      (url, init) => url.includes('/generate') && init?.method === 'POST',
+      () => Promise.resolve({ ok: true, json: async () => ({ warnings: [warning] }) })
+    )
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+
+    const generateBtn = await screen.findByRole('button', { name: /generate podcast/i })
+    await waitFor(() => expect(generateBtn).toBeEnabled())
+    await userEvent.click(generateBtn)
+
+    await waitFor(() => expect(showWarningToast).toHaveBeenCalledWith(warning))
     expect(showSuccessToast).toHaveBeenCalledWith('Podcast generation started')
     expect(showErrorToast).not.toHaveBeenCalled()
   })

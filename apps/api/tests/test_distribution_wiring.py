@@ -320,3 +320,294 @@ async def test_generate_omits_platforms_when_distribution_disabled(client):
     mock_delay.assert_called_once()
     assert "platforms" not in mock_delay.call_args.kwargs["kwargs"]
     assert mock_delay.call_args.kwargs["kwargs"]["enable_distribution"] is False
+
+
+# ---------------------------------------------------------------------------
+# Router: RSS feed pre-flight for Spotify/Apple targets (issue #378)
+# ---------------------------------------------------------------------------
+
+async def _create_apple_target(
+    client: AsyncClient, headers: Headers, project_id: str | None = None
+) -> dict:
+    body = {"show_id": "show-378", "api_key": "not-a-real-key"}
+    if project_id is not None:
+        body["project_id"] = project_id
+    resp = await client.post("/distribution-targets/apple", headers=headers, json=body)
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def _preflight_patches(rss_service_mock):
+    """Common settings/task patches for the pre-flight tests."""
+    return (
+        patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True),
+        patch.object(generation_router.settings, "ENABLE_DIRECT_PLATFORM_PUBLISH", False),
+        patch.object(generation_router.settings, "AWS_S3_BUCKET", "test-bucket"),
+        patch("src.routers.generation.RSSGenerationService", rss_service_mock),
+        patch("src.routers.generation.generate_podcast_task.apply_async"),
+    )
+
+
+async def _generate_with_preflight(client, headers, episode_id, rss_service_mock):
+    p1, p2, p3, p4, p5 = _preflight_patches(rss_service_mock)
+    with p1, p2, p3, p4, p5 as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-preflight")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate?enable_distribution=true",
+            headers=headers,
+        )
+    return resp, mock_delay
+
+
+@pytest.mark.asyncio
+async def test_generate_autogenerates_missing_rss_feed(client):
+    """Apple/Spotify target + no feed → the feed is auto-generated pre-dispatch."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_apple_target(client, headers, project_id)
+
+    from unittest.mock import AsyncMock
+
+    service = AsyncMock()
+    service.get_rss_feed.return_value = None
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    assert resp.status_code == 202, resp.text
+    service.generate_rss_for_project.assert_awaited_once()
+    platforms = mock_delay.call_args.kwargs["kwargs"]["platforms"]
+    assert "apple_podcasts" in platforms
+    assert "warnings" not in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_generate_skips_platform_and_warns_when_feed_ungeneratable(client):
+    """Auto-generation fails (missing metadata) → platform skipped + warning returned."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_apple_target(client, headers, project_id)
+
+    from unittest.mock import AsyncMock
+
+    service = AsyncMock()
+    service.get_rss_feed.return_value = None
+    service.generate_rss_for_project.side_effect = ValueError(
+        "Missing required podcast metadata fields: show_title"
+    )
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    # Generation itself still proceeds — only the RSS-model platforms are skipped.
+    assert resp.status_code == 202, resp.text
+    assert "platforms" not in mock_delay.call_args.kwargs["kwargs"]
+    warnings = resp.json()["warnings"]
+    assert len(warnings) == 1
+    assert "RSS feed" in warnings[0]
+    assert "show_title" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_generate_preflight_warning_hides_internal_errors(client):
+    """Non-ValueError failures (e.g. S3) must not leak details into the warning."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_apple_target(client, headers, project_id)
+
+    from unittest.mock import AsyncMock
+
+    internal_detail = "internal-s3-failure-detail"
+    service = AsyncMock()
+    service.get_rss_feed.return_value = None
+    service.generate_rss_for_project.side_effect = RuntimeError(internal_detail)
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    assert resp.status_code == 202, resp.text
+    assert "platforms" not in mock_delay.call_args.kwargs["kwargs"]
+    warnings = resp.json()["warnings"]
+    assert len(warnings) == 1
+    assert internal_detail not in warnings[0]
+    assert "RSS feed" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_generate_preflight_db_error_does_not_poison_the_request(client):
+    """A DB-level failure inside the pre-flight (e.g. the unique-RSSFeed race
+    between two concurrent generations) must roll the session back so the
+    subsequent 'queued' commit still succeeds — 202 + warning, never a 500."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_apple_target(client, headers, project_id)
+
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy import text
+
+    async def _poison_session(db, project_id, user_id):
+        # Real failing statement on the request session: leaves the session in
+        # a pending-rollback state exactly like an IntegrityError would.
+        await db.execute(text("SELECT * FROM nonexistent_table_issue_378"))
+
+    service = AsyncMock()
+    service.get_rss_feed.return_value = None
+    service.generate_rss_for_project.side_effect = _poison_session
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    assert resp.status_code == 202, resp.text
+    assert "platforms" not in mock_delay.call_args.kwargs["kwargs"]
+    warnings = resp.json()["warnings"]
+    assert len(warnings) == 1
+    assert "nonexistent_table_issue_378" not in warnings[0]  # internals masked
+
+
+@pytest.mark.asyncio
+async def test_generate_no_regeneration_when_feed_exists(client):
+    """An already-generated feed short-circuits the pre-flight."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_apple_target(client, headers, project_id)
+
+    from unittest.mock import AsyncMock
+
+    service = AsyncMock()
+    service.get_rss_feed.return_value = MagicMock(
+        public_url="https://cdn.example.com/rss-feeds/p/feed.xml"
+    )
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    assert resp.status_code == 202, resp.text
+    service.generate_rss_for_project.assert_not_awaited()
+    assert "apple_podcasts" in mock_delay.call_args.kwargs["kwargs"]["platforms"]
+    assert "warnings" not in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_generate_regenerates_when_feed_row_has_no_public_url(client):
+    """A stale RSSFeed row without a public_url (e.g. interrupted S3 upload)
+    must be treated like a missing feed and regenerated."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_apple_target(client, headers, project_id)
+
+    from unittest.mock import AsyncMock
+
+    service = AsyncMock()
+    service.get_rss_feed.return_value = MagicMock(public_url=None)
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    assert resp.status_code == 202, resp.text
+    service.generate_rss_for_project.assert_awaited_once()
+    assert "apple_podcasts" in mock_delay.call_args.kwargs["kwargs"]["platforms"]
+    assert "warnings" not in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_generate_warning_names_all_skipped_rss_platforms(client, test_db):
+    """With Spotify AND Apple targets and an ungeneratable feed, both platforms
+    are skipped and the single warning names both in human-readable form."""
+    from uuid import UUID as _UUID
+
+    from src.models.distribution_target import DistributionTarget
+
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    apple = await _create_apple_target(client, headers, project_id)
+
+    # Spotify targets are only created via the OAuth callback; insert directly.
+    await set_tenant_context(test_db, apple["tenant_id"])
+    test_db.add(DistributionTarget(
+        user_id=_UUID(apple["user_id"]),
+        project_id=_UUID(project_id),
+        tenant_id=_UUID(apple["tenant_id"]),
+        target_type="spotify",
+        config={"show_id": "spotify-show-378"},
+        is_active=True,
+    ))
+    await test_db.commit()
+
+    from unittest.mock import AsyncMock
+
+    service = AsyncMock()
+    service.get_rss_feed.return_value = None
+    service.generate_rss_for_project.side_effect = ValueError(
+        "Missing required podcast metadata fields: show_title"
+    )
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    assert resp.status_code == 202, resp.text
+    assert "platforms" not in mock_delay.call_args.kwargs["kwargs"]
+    warnings = resp.json()["warnings"]
+    assert len(warnings) == 1
+    assert "Spotify and Apple Podcasts" in warnings[0]
+    assert "spotify" not in warnings[0]  # raw platform keys never shown to users
+    assert "apple_podcasts" not in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_generate_no_preflight_for_webhook_only_targets(client):
+    """Webhook targets don't use the RSS model — no feed check at all."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_webhook_target(client, headers, project_id, "https://hook.example.com/rss")
+
+    service_cls = MagicMock()
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, service_cls
+    )
+
+    assert resp.status_code == 202, resp.text
+    service_cls.assert_not_called()
+    assert "webhook" in mock_delay.call_args.kwargs["kwargs"]["platforms"]
+    assert "warnings" not in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_generate_no_preflight_with_direct_publish_enabled(client):
+    """ENABLE_DIRECT_PLATFORM_PUBLISH bypasses the RSS model → no feed check."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_apple_target(client, headers, project_id)
+
+    service_cls = MagicMock()
+    p1, _, p3, p4, p5 = _preflight_patches(service_cls)
+    with p1, patch.object(
+        generation_router.settings, "ENABLE_DIRECT_PLATFORM_PUBLISH", True
+    ), p3, p4, p5 as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-direct")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/generate?enable_distribution=true",
+            headers=headers,
+        )
+
+    assert resp.status_code == 202, resp.text
+    service_cls.assert_not_called()
+    assert "apple_podcasts" in mock_delay.call_args.kwargs["kwargs"]["platforms"]

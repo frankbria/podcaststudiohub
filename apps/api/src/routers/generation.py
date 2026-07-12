@@ -22,6 +22,7 @@ from ..dependencies import get_current_user
 from ..services.distribution_target_service import (
     get_active_distribution_targets_for_project,
 )
+from ..services.rss_generation_service import RSSGenerationService
 from ..tasks.podcast_generation import generate_podcast_task
 from ..tasks.callbacks import on_workflow_failure
 
@@ -240,6 +241,7 @@ async def generate_podcast(
     # no bucket the workflow-chain path would schedule an invalid empty-bucket
     # upload and fail the whole run, whereas the default finalization path degrades
     # gracefully — so only enable distribution when a bucket is configured.
+    distribution_warnings: list[str] = []
     if use_distribution and not settings.AWS_S3_BUCKET:
         logger.warning(
             "Episode %s: distribution requested but AWS_S3_BUCKET is not configured "
@@ -273,7 +275,77 @@ async def generate_podcast(
                     )
                     continue
                 platforms[target.target_type] = target.config
-            extra_kwargs["platforms"] = platforms
+
+            # RSS pre-flight (issue #378): under the RSS-feed model, the
+            # distribution task fails permanently for Spotify/Apple when the
+            # project has no generated feed. This router is async (unlike the
+            # sync Celery task), so auto-generating the feed here is one awaited
+            # service call. If it can't be generated (e.g. podcast metadata
+            # missing), skip those platforms and tell the caller instead of
+            # dispatching a guaranteed distribution_failed.
+            rss_platforms = [
+                p for p in ("spotify", "apple_podcasts") if p in platforms
+            ]
+            if rss_platforms and not settings.ENABLE_DIRECT_PLATFORM_PUBLISH:
+                rss_service = RSSGenerationService()
+                # The whole pre-flight is non-fatal: a failure here must skip
+                # the RSS-model platforms with a warning, never 500 the
+                # generation kickoff itself. It runs under a SAVEPOINT so a
+                # DB-level failure (e.g. the unique-RSSFeed race between two
+                # concurrent generations) aborts only the pre-flight work: a
+                # whole-session rollback would poison the later 'queued'
+                # commit path by expiring loaded instances (and, under the
+                # test harness's shared-session wrapping, wipe prior writes).
+                preflight_sp = await db.begin_nested()
+                try:
+                    feed = await rss_service.get_rss_feed(db, episode.project_id)
+                    if feed is None or not feed.public_url:
+                        await rss_service.generate_rss_for_project(
+                            db, episode.project_id, current_user.id
+                        )
+                        logger.info(
+                            "Episode %s: auto-generated missing RSS feed for "
+                            "project %s ahead of %s distribution.",
+                            episode_id, episode.project_id, ", ".join(rss_platforms),
+                        )
+                    # The service commits internally on success, consuming the
+                    # savepoint; release it only if it is still open.
+                    if preflight_sp.is_active:
+                        await preflight_sp.commit()
+                except Exception as exc:
+                    if preflight_sp.is_active:
+                        await preflight_sp.rollback()
+                    for p in rss_platforms:
+                        del platforms[p]
+                    # ValueError carries a user-actionable validation message
+                    # (same contract as the RSS router's 422); anything else
+                    # stays internal so infrastructure details never leak.
+                    reason = (
+                        str(exc) if isinstance(exc, ValueError)
+                        else "feed generation failed unexpectedly"
+                    )
+                    display_names = {
+                        "spotify": "Spotify", "apple_podcasts": "Apple Podcasts"
+                    }
+                    skipped = " and ".join(
+                        display_names[p] for p in rss_platforms
+                    )
+                    distribution_warnings.append(
+                        f"Skipped {skipped} distribution: "
+                        "these platforms ingest episodes via the project's RSS "
+                        f"feed, which has not been generated and could not be "
+                        f"auto-generated ({reason}). Set the podcast metadata "
+                        "and generate the feed from the project's distribution "
+                        "page, then regenerate."
+                    )
+                    logger.warning(
+                        "Episode %s: RSS pre-flight failed for project %s; "
+                        "skipping %s distribution: %s",
+                        episode_id, episode.project_id,
+                        ", ".join(rss_platforms), exc,
+                    )
+            if platforms:
+                extra_kwargs["platforms"] = platforms
         else:
             logger.info(
                 "Episode %s: distribution requested but no active targets for "
@@ -335,12 +407,15 @@ async def generate_podcast(
             detail="Could not start generation (task queue unavailable); please retry.",
         )
 
-    return {
+    response = {
         "episode_id": str(episode_id),
         "task_id": new_task_id,
         "status": "queued",
         "message": "Podcast generation started",
     }
+    if distribution_warnings:
+        response["warnings"] = distribution_warnings
+    return response
 
 
 @router.get("/episodes/{episode_id}/progress")

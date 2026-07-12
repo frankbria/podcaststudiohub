@@ -330,3 +330,8 @@ first compile); fresh CI venvs recompile. Clear __pycache__ to reproduce compile
   assertions to the test's own tenant/keys, never assert global table
   emptiness/equality — any concurrent writer to the shared dev DB (demo
   agents, second pytest session) breaks them.
+
+## Mutation checks vs uncommitted work (2026-07-12, #378)
+`git checkout <file>` to revert a test mutation also wipes any uncommitted edits in that file.
+When running mutation sanity checks, either commit pending work first or revert the mutation by
+re-applying the exact inverse edit — never a whole-file checkout.

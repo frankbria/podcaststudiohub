@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Progress } from "@/components/ui/progress"
 import { contentSourceSchema, type ContentSourceFormData } from "@/lib/validation"
-import { showSuccessToast, showErrorToast } from "@/lib/toast"
+import { showSuccessToast, showErrorToast, showWarningToast } from "@/lib/toast"
 import { RobustEventSource, startPolling, ConnectionStatus } from "@/lib/event-source-manager"
 import { AudioPlayerSkeleton } from "@/components/skeletons/AudioPlayerSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
@@ -484,6 +484,12 @@ export default function EpisodePage() {
       )
       if (response.ok) {
         showSuccessToast("Podcast generation started")
+        // Distribution pre-flight warnings (#378): generation proceeds, but
+        // e.g. Spotify/Apple were skipped because the RSS feed is missing.
+        const data = (await response.json().catch(() => null)) as
+          | { warnings?: string[] }
+          | null
+        data?.warnings?.forEach((w) => showWarningToast(w))
         loadEpisode()
       } else {
         showErrorToast("Failed to generate podcast: " + response.statusText)

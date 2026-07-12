@@ -1,4 +1,7 @@
-# Issue #313 — Wire the audio-composition timeline (P4.1)
+# Issue #313 — Wire the audio-composition timeline (P4.1) — SHIPPED via PR #375
+
+Status: merged 2026-07-11 as 6ea063c. Follow-up: #376 (download S3-backed
+snippets to the worker so they actually compose).
 
 ## Problem (verified against current code)
 
@@ -26,18 +29,18 @@
 
 ## TDD checklist
 
-- [ ] RED: invert `test_empty_timeline_returns_success` → `pytest.raises(ValueError)`;
+- [x] RED: invert `test_empty_timeline_returns_success` → `pytest.raises(ValueError)`;
       add resolver unit tests (ordering, always-includes-main, skips-missing-file,
       never-empty, degrades-to-main-only on DB error); add workflow test asserting
       `build_generation_workflow` receives a non-empty timeline with the generated
       audio as `main_content` when composition is enabled and no timeline supplied.
-- [ ] GREEN: guard in `merge_audio_snippets_task` (before try);
+- [x] GREEN: guard in `merge_audio_snippets_task` (before try);
       `resolve_composition_timeline(db, project_id, audio_file_path)` in
       `podcast_generation.py` — project snippets ordered intro/music → main_content
       → outro/midroll/ad/other, each entry `{file_path, segment_type}`; wire into
       `generate_podcast_task`'s existing episode-load block (caller-supplied
       timeline wins; resolution failure degrades to `[main]`, never empty).
-- [ ] Full pytest + ruff + coverage gates; review; PR; demo; CI; merge.
+- [x] Full pytest + ruff + coverage gates; review; PR; demo; CI; merge.
 
 ## Known limitations
 

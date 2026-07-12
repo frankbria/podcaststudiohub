@@ -18,7 +18,7 @@ import { ConfirmDeleteDialog } from "@/components/dialogs/ConfirmDeleteDialog"
 import { EditProjectDialog } from "@/components/dialogs/EditProjectDialog"
 import { EditEpisodeDialog, type Episode as EditableEpisode } from "@/components/dialogs/EditEpisodeDialog"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { InboxIcon, PencilEdit01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
+import { InboxIcon, PencilEdit01Icon, Delete02Icon, Analytics01Icon, RssIcon } from "@hugeicons/core-free-icons"
 
 interface Episode {
   id: string
@@ -283,6 +283,23 @@ export default function ProjectPage() {
         <Button variant="outline" onClick={() => router.push("/dashboard")} className="mb-4">
           ← Back to Dashboard
         </Button>
+
+        <nav className="flex gap-4 mb-4">
+          <a
+            href={`/projects/${params.id}/analytics`}
+            className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+          >
+            <HugeiconsIcon icon={Analytics01Icon} size={16} />
+            Analytics
+          </a>
+          <a
+            href={`/projects/${params.id}/distribution`}
+            className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
+          >
+            <HugeiconsIcon icon={RssIcon} size={16} />
+            Distribution
+          </a>
+        </nav>
 
         <div className="flex justify-between items-center mb-8">
           <div className="flex items-center gap-2">

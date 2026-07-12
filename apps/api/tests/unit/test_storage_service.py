@@ -122,10 +122,14 @@ async def test_upload_file_with_content_type(service, mock_boto3_client):
 
 
 @pytest.mark.asyncio
-async def test_upload_file_with_public_acl(service, mock_boto3_client):
+async def test_upload_file_public_sends_no_acl(service, mock_boto3_client):
+	# The bucket has ACLs disabled (bucket-owner-enforced); ACL=public-read
+	# fails with AccessControlListNotSupported. Public access is granted by
+	# the bucket policy, so public=True must NOT add an ACL (#316 demo bug).
 	await service.upload_file("/tmp/test.mp3", "key.mp3", public=True)
 	call_kwargs = mock_boto3_client.upload_file.call_args[1]
-	assert call_kwargs["ExtraArgs"]["ACL"] == "public-read"
+	extra = call_kwargs["ExtraArgs"]
+	assert extra is None or "ACL" not in extra
 
 
 @pytest.mark.asyncio

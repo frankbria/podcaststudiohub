@@ -21,7 +21,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getToken } from 'next-auth/jwt'
 
-const PROTECTED_PATHS = ['/dashboard', '/episodes', '/projects']
+const PROTECTED_PATHS = ['/dashboard', '/episodes', '/projects', '/distribution']
 
 // media-src / connect-src allow the S3 audio bucket the app streams and
 // downloads episode audio from (episodes page + DownloadButton). The host must

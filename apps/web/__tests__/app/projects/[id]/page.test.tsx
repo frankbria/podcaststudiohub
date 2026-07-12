@@ -110,6 +110,21 @@ describe('ProjectPage', () => {
     expect(mockPush).toHaveBeenCalledWith('/dashboard')
   })
 
+  it('shows sub-nav links to the analytics and distribution pages', async () => {
+    global.fetch = mockFetchRouter()
+    render(<ProjectPage />)
+    await screen.findByText('Pilot')
+
+    expect(screen.getByRole('link', { name: /analytics/i })).toHaveAttribute(
+      'href',
+      '/projects/p1/analytics'
+    )
+    expect(screen.getByRole('link', { name: /distribution/i })).toHaveAttribute(
+      'href',
+      '/projects/p1/distribution'
+    )
+  })
+
   it('shows an error toast when the project fails to load', async () => {
     global.fetch = mockFetchRouter({ projectOk: false })
     render(<ProjectPage />)

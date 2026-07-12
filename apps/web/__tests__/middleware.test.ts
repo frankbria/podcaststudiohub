@@ -59,6 +59,15 @@ describe('route protection', () => {
     expect(res?.headers.get('location') ?? '').not.toContain('/login')
   })
 
+  it('protects /distribution (issue #316)', async () => {
+    mockGetToken.mockResolvedValue(null)
+
+    const res = await callMiddleware('/distribution')
+
+    expect(res?.status).toBe(307)
+    expect(res?.headers.get('location') ?? '').toContain('/login')
+  })
+
   it('lets unauthenticated requests reach public pages', async () => {
     mockGetToken.mockResolvedValue(null)
 

@@ -10,12 +10,14 @@ export interface DownloadButtonProps {
   audioUrl: string | null | undefined
   episodeTitle: string
   isLoading?: boolean
+  onDownloaded?: () => void
 }
 
 export function DownloadButton({
   audioUrl,
   episodeTitle,
   isLoading = false,
+  onDownloaded,
 }: DownloadButtonProps) {
   const [downloading, setDownloading] = useState(false)
 
@@ -26,6 +28,7 @@ export function DownloadButton({
     try {
       const filename = sanitizeFilename(episodeTitle)
       await downloadAudioFile(audioUrl, filename)
+      onDownloaded?.()
     } catch (error) {
       console.error("Download failed:", error)
     } finally {

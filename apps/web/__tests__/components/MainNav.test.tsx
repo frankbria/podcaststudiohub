@@ -160,4 +160,24 @@ describe('MainNav', () => {
     const link = screen.getByRole('link', { name: /podcastfy studio/i })
     expect(link).toHaveAttribute('href', '/dashboard')
   })
+
+  it('renders a Dashboard nav link pointing to /dashboard', () => {
+    mockUseSession.mockReturnValue({
+      data: { user: { name: 'Jane Doe', email: 'jane@example.com' } },
+      status: 'authenticated',
+    })
+    render(<MainNav />)
+    const link = screen.getByRole('link', { name: /^dashboard$/i })
+    expect(link).toHaveAttribute('href', '/dashboard')
+  })
+
+  it('renders a Distribution nav link pointing to /distribution', () => {
+    mockUseSession.mockReturnValue({
+      data: { user: { name: 'Jane Doe', email: 'jane@example.com' } },
+      status: 'authenticated',
+    })
+    render(<MainNav />)
+    const link = screen.getByRole('link', { name: /^distribution$/i })
+    expect(link).toHaveAttribute('href', '/distribution')
+  })
 })

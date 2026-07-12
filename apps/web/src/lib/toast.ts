@@ -8,6 +8,10 @@ export const showErrorToast = (message: string) => {
   toast.error(message)
 }
 
+export const showWarningToast = (message: string) => {
+  toast.warning(message)
+}
+
 export const showLoadingToast = (message: string): string | number => {
   return toast.loading(message)
 }

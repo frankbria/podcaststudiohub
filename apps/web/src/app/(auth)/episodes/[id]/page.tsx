@@ -171,6 +171,12 @@ export default function EpisodePage() {
     }
   }, [])
 
+  // App Router reuses this component instance when only the [id] param changes,
+  // so the once-per-episode play-event guard must reset on episode navigation.
+  useEffect(() => {
+    hasFiredPlayEventRef.current = false
+  }, [params.id])
+
   // Backend calls (fetch + EventSource) go through the same-origin /api/proxy
   // handler, which injects the bearer token server-side from the httpOnly cookie
   // — sent automatically on same-origin requests, so no client token (#212).

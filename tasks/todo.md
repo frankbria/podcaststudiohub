@@ -1,6 +1,8 @@
 # Issue #315 — Spotify/Apple direct-publish targets are not real publishing APIs
 
-Plan source: CodeRabbit comment (adapted). Branch: `fix/315-rss-distribution-default`.
+Status: SHIPPED — merged 2026-07-12 as 46c2e3c via PR #379; issue #315 closed; follow-up #378 filed.
+
+Plan source: CodeRabbit comment (adapted). Branch: `fix/315-rss-distribution-default` (deleted).
 
 ## Adapted plan
 
@@ -45,9 +47,9 @@ Plan source: CodeRabbit comment (adapted). Branch: `fix/315-rss-distribution-def
 
 ## Acceptance criteria
 
-- [ ] Verified against current platform APIs: Spotify/Apple ingest via RSS, not direct POST
+- [x] Verified against current platform APIs: Spotify/Apple ingest via RSS, not direct POST
       (documented in service docstrings; direct path no longer default).
-- [ ] Spotify/Apple targets pivot to the RSS-feed model by default.
-- [ ] Direct-publish gated behind explicit default-off flag and clearly marked experimental.
-- [ ] Tests assert the actual outbound request URL/headers/body.
-- [ ] No silent false-positive success when no RSS feed exists.
+- [x] Spotify/Apple targets pivot to the RSS-feed model by default.
+- [x] Direct-publish gated behind explicit default-off flag and clearly marked experimental.
+- [x] Tests assert the actual outbound request URL/headers/body.
+- [x] No silent false-positive success when no RSS feed exists.

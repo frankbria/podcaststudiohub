@@ -288,9 +288,12 @@ async def generate_podcast(
             ]
             if rss_platforms and not settings.ENABLE_DIRECT_PLATFORM_PUBLISH:
                 rss_service = RSSGenerationService()
-                feed = await rss_service.get_rss_feed(db, episode.project_id)
-                if feed is None or not feed.public_url:
-                    try:
+                # The whole pre-flight is non-fatal: a failure here must skip
+                # the RSS-model platforms with a warning, never 500 the
+                # generation kickoff itself.
+                try:
+                    feed = await rss_service.get_rss_feed(db, episode.project_id)
+                    if feed is None or not feed.public_url:
                         await rss_service.generate_rss_for_project(
                             db, episode.project_id, current_user.id
                         )
@@ -299,30 +302,36 @@ async def generate_podcast(
                             "project %s ahead of %s distribution.",
                             episode_id, episode.project_id, ", ".join(rss_platforms),
                         )
-                    except Exception as exc:
-                        for p in rss_platforms:
-                            del platforms[p]
-                        # ValueError carries a user-actionable validation message
-                        # (same contract as the RSS router's 422); anything else
-                        # stays internal so infrastructure details never leak.
-                        reason = (
-                            str(exc) if isinstance(exc, ValueError)
-                            else "feed generation failed unexpectedly"
-                        )
-                        distribution_warnings.append(
-                            f"Skipped {' and '.join(rss_platforms)} distribution: "
-                            "these platforms ingest episodes via the project's RSS "
-                            f"feed, which has not been generated and could not be "
-                            f"auto-generated ({reason}). Set the podcast metadata "
-                            "and generate the feed from the project's distribution "
-                            "page, then regenerate."
-                        )
-                        logger.warning(
-                            "Episode %s: RSS pre-flight failed for project %s; "
-                            "skipping %s distribution: %s",
-                            episode_id, episode.project_id,
-                            ", ".join(rss_platforms), exc,
-                        )
+                except Exception as exc:
+                    for p in rss_platforms:
+                        del platforms[p]
+                    # ValueError carries a user-actionable validation message
+                    # (same contract as the RSS router's 422); anything else
+                    # stays internal so infrastructure details never leak.
+                    reason = (
+                        str(exc) if isinstance(exc, ValueError)
+                        else "feed generation failed unexpectedly"
+                    )
+                    display_names = {
+                        "spotify": "Spotify", "apple_podcasts": "Apple Podcasts"
+                    }
+                    skipped = " and ".join(
+                        display_names[p] for p in rss_platforms
+                    )
+                    distribution_warnings.append(
+                        f"Skipped {skipped} distribution: "
+                        "these platforms ingest episodes via the project's RSS "
+                        f"feed, which has not been generated and could not be "
+                        f"auto-generated ({reason}). Set the podcast metadata "
+                        "and generate the feed from the project's distribution "
+                        "page, then regenerate."
+                    )
+                    logger.warning(
+                        "Episode %s: RSS pre-flight failed for project %s; "
+                        "skipping %s distribution: %s",
+                        episode_id, episode.project_id,
+                        ", ".join(rss_platforms), exc,
+                    )
             if platforms:
                 extra_kwargs["platforms"] = platforms
         else:

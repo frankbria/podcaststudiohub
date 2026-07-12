@@ -465,6 +465,76 @@ async def test_generate_no_regeneration_when_feed_exists(client):
 
 
 @pytest.mark.asyncio
+async def test_generate_regenerates_when_feed_row_has_no_public_url(client):
+    """A stale RSSFeed row without a public_url (e.g. interrupted S3 upload)
+    must be treated like a missing feed and regenerated."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_apple_target(client, headers, project_id)
+
+    from unittest.mock import AsyncMock
+
+    service = AsyncMock()
+    service.get_rss_feed.return_value = MagicMock(public_url=None)
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    assert resp.status_code == 202, resp.text
+    service.generate_rss_for_project.assert_awaited_once()
+    assert "apple_podcasts" in mock_delay.call_args.kwargs["kwargs"]["platforms"]
+    assert "warnings" not in resp.json()
+
+
+@pytest.mark.asyncio
+async def test_generate_warning_names_all_skipped_rss_platforms(client, test_db):
+    """With Spotify AND Apple targets and an ungeneratable feed, both platforms
+    are skipped and the single warning names both in human-readable form."""
+    from uuid import UUID as _UUID
+
+    from src.models.distribution_target import DistributionTarget
+
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    apple = await _create_apple_target(client, headers, project_id)
+
+    # Spotify targets are only created via the OAuth callback; insert directly.
+    await set_tenant_context(test_db, apple["tenant_id"])
+    test_db.add(DistributionTarget(
+        user_id=_UUID(apple["user_id"]),
+        project_id=_UUID(project_id),
+        tenant_id=_UUID(apple["tenant_id"]),
+        target_type="spotify",
+        config={"show_id": "spotify-show-378"},
+        is_active=True,
+    ))
+    await test_db.commit()
+
+    from unittest.mock import AsyncMock
+
+    service = AsyncMock()
+    service.get_rss_feed.return_value = None
+    service.generate_rss_for_project.side_effect = ValueError(
+        "Missing required podcast metadata fields: show_title"
+    )
+    resp, mock_delay = await _generate_with_preflight(
+        client, headers, episode_id, MagicMock(return_value=service)
+    )
+
+    assert resp.status_code == 202, resp.text
+    assert "platforms" not in mock_delay.call_args.kwargs["kwargs"]
+    warnings = resp.json()["warnings"]
+    assert len(warnings) == 1
+    assert "Spotify and Apple Podcasts" in warnings[0]
+    assert "spotify" not in warnings[0]  # raw platform keys never shown to users
+    assert "apple_podcasts" not in warnings[0]
+
+
+@pytest.mark.asyncio
 async def test_generate_no_preflight_for_webhook_only_targets(client):
     """Webhook targets don't use the RSS model — no feed check at all."""
     headers = await _register(client)

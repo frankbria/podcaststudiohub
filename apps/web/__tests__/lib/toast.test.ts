@@ -1,10 +1,11 @@
-import { showSuccessToast, showErrorToast, showLoadingToast, dismissToast, executeWithToast } from '@/lib/toast'
+import { showSuccessToast, showErrorToast, showWarningToast, showLoadingToast, dismissToast, executeWithToast } from '@/lib/toast'
 
 // Mock sonner
 jest.mock('sonner', () => ({
   toast: {
     success: jest.fn(),
     error: jest.fn(),
+    warning: jest.fn(),
     loading: jest.fn().mockReturnValue('toast-id-1'),
     dismiss: jest.fn(),
   },
@@ -28,6 +29,13 @@ describe('toast utilities', () => {
     it('calls toast.error with the message', () => {
       showErrorToast('Operation failed')
       expect(toast.error).toHaveBeenCalledWith('Operation failed')
+    })
+  })
+
+  describe('showWarningToast', () => {
+    it('calls toast.warning with the message', () => {
+      showWarningToast('Distribution skipped')
+      expect(toast.warning).toHaveBeenCalledWith('Distribution skipped')
     })
   })
 

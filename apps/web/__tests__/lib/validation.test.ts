@@ -2,6 +2,9 @@ import {
   projectSchema,
   episodeSchema,
   contentSourceSchema,
+  appleDistributionSchema,
+  webhookDistributionSchema,
+  podcastMetadataSchema,
 } from "@/lib/validation"
 
 describe("projectSchema", () => {
@@ -290,6 +293,151 @@ describe("contentSourceSchema - PDF type", () => {
       sourceType: "pdf",
       file: [makePdf({ size: 50 * 1024 * 1024 })],
     })
+    expect(result.success).toBe(true)
+  })
+})
+
+describe("appleDistributionSchema", () => {
+  it("accepts valid show_id and api_key", () => {
+    const result = appleDistributionSchema.safeParse({ showId: "12345", apiKey: "key-abc" })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects empty show_id", () => {
+    const result = appleDistributionSchema.safeParse({ showId: "", apiKey: "key" })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe("Show ID is required")
+    }
+  })
+
+  it("rejects show_id over 255 characters", () => {
+    const result = appleDistributionSchema.safeParse({ showId: "a".repeat(256), apiKey: "key" })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects empty api_key", () => {
+    const result = appleDistributionSchema.safeParse({ showId: "12345", apiKey: "" })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe("API key is required")
+    }
+  })
+})
+
+describe("webhookDistributionSchema", () => {
+  it("accepts a valid https webhook", () => {
+    const result = webhookDistributionSchema.safeParse({
+      name: "My hook",
+      url: "https://example.com/hook",
+      method: "POST",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("defaults method to POST", () => {
+    const result = webhookDistributionSchema.safeParse({
+      name: "My hook",
+      url: "https://example.com/hook",
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.method).toBe("POST")
+    }
+  })
+
+  it("rejects empty name", () => {
+    const result = webhookDistributionSchema.safeParse({ name: "", url: "https://example.com" })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe("Name is required")
+    }
+  })
+
+  it("rejects http (non-https) URLs", () => {
+    const result = webhookDistributionSchema.safeParse({
+      name: "Hook",
+      url: "http://example.com/hook",
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toBe("URL must use HTTPS")
+    }
+  })
+
+  it("rejects malformed URLs", () => {
+    const result = webhookDistributionSchema.safeParse({ name: "Hook", url: "not-a-url" })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects URLs over 500 characters", () => {
+    const result = webhookDistributionSchema.safeParse({
+      name: "Hook",
+      url: `https://example.com/${"a".repeat(500)}`,
+    })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects methods other than POST/GET", () => {
+    const result = webhookDistributionSchema.safeParse({
+      name: "Hook",
+      url: "https://example.com/hook",
+      method: "DELETE",
+    })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe("podcastMetadataSchema", () => {
+  const valid = {
+    showTitle: "My Show",
+    author: "Jane Doe",
+    description: "A show about things.",
+  }
+
+  it("accepts the three required feed fields", () => {
+    const result = podcastMetadataSchema.safeParse(valid)
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects empty show title", () => {
+    const result = podcastMetadataSchema.safeParse({ ...valid, showTitle: "  " })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toMatch(/show title/i)
+    }
+  })
+
+  it("rejects empty author", () => {
+    const result = podcastMetadataSchema.safeParse({ ...valid, author: "" })
+    expect(result.success).toBe(false)
+  })
+
+  it("rejects empty description", () => {
+    const result = podcastMetadataSchema.safeParse({ ...valid, description: "" })
+    expect(result.success).toBe(false)
+  })
+
+  it("accepts optional fields when provided", () => {
+    const result = podcastMetadataSchema.safeParse({
+      ...valid,
+      category: "Technology",
+      language: "en-US",
+      explicit: false,
+      copyright: "© 2026",
+      artworkUrl: "https://example.com/art.png",
+      websiteUrl: "https://example.com",
+    })
+    expect(result.success).toBe(true)
+  })
+
+  it("rejects an invalid artwork URL", () => {
+    const result = podcastMetadataSchema.safeParse({ ...valid, artworkUrl: "not-a-url" })
+    expect(result.success).toBe(false)
+  })
+
+  it("accepts empty-string optional URLs (unset)", () => {
+    const result = podcastMetadataSchema.safeParse({ ...valid, artworkUrl: "", websiteUrl: "" })
     expect(result.success).toBe(true)
   })
 })

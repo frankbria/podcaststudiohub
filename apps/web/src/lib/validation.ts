@@ -131,3 +131,81 @@ export const contentSourceSchema = z
   })
 
 export type ContentSourceFormData = z.infer<typeof contentSourceSchema>
+
+// Apple Podcasts distribution target (mirrors AppleDistributionCreate)
+export const appleDistributionSchema = z.object({
+  showId: z
+    .string()
+    .min(1, "Show ID is required")
+    .max(255, "Show ID must be 255 characters or less")
+    .refine((val) => val.trim().length > 0, "Show ID is required"),
+  apiKey: z.string().min(1, "API key is required"),
+})
+
+export type AppleDistributionFormData = z.infer<typeof appleDistributionSchema>
+
+// Webhook distribution target (mirrors WebhookDistributionCreate: https only, ≤500 chars)
+export const webhookDistributionSchema = z.object({
+  name: z
+    .string()
+    .min(1, "Name is required")
+    .max(255, "Name must be 255 characters or less")
+    .refine((val) => val.trim().length > 0, "Name is required"),
+  url: z
+    .string()
+    .min(1, "URL is required")
+    .max(500, "URL must be 500 characters or less")
+    .superRefine((val, ctx) => {
+      let parsed: URL
+      try {
+        parsed = new URL(val)
+      } catch {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid URL format" })
+        return
+      }
+      if (parsed.protocol !== "https:") {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: "URL must use HTTPS" })
+      }
+    }),
+  method: z.enum(["POST", "GET"]).default("POST"),
+})
+
+export type WebhookDistributionFormData = z.infer<typeof webhookDistributionSchema>
+
+// Podcast RSS metadata (mirrors PodcastMetadataUpdate; show_title/author/description
+// are required here because feed generation 422s without them)
+const optionalUrl = z
+  .string()
+  .refine((val) => {
+    if (val === "") return true
+    try {
+      const parsed = new URL(val)
+      return parsed.protocol === "http:" || parsed.protocol === "https:"
+    } catch {
+      return false
+    }
+  }, "Must be a valid URL")
+  .optional()
+
+export const podcastMetadataSchema = z.object({
+  showTitle: z
+    .string()
+    .min(1, "Show title is required")
+    .refine((val) => val.trim().length > 0, "Show title is required"),
+  author: z
+    .string()
+    .min(1, "Author is required")
+    .refine((val) => val.trim().length > 0, "Author is required"),
+  description: z
+    .string()
+    .min(1, "Description is required")
+    .refine((val) => val.trim().length > 0, "Description is required"),
+  category: z.string().optional(),
+  language: z.string().optional(),
+  explicit: z.boolean().optional(),
+  copyright: z.string().optional(),
+  artworkUrl: optionalUrl,
+  websiteUrl: optionalUrl,
+})
+
+export type PodcastMetadataFormData = z.infer<typeof podcastMetadataSchema>

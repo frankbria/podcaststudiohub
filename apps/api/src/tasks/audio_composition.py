@@ -31,7 +31,20 @@ def merge_audio_snippets_task(
 
     Returns:
         Dictionary with composition results
+
+    Raises:
+        ValueError: If the timeline is empty — composing would export a
+            zero-length silent file that then replaces the generated audio
+            at upload (issue #313). Raised outside the retry handler because
+            an empty timeline is deterministic; the chain's link_error
+            callback marks the episode failed.
     """
+    if not timeline:
+        raise ValueError(
+            f"Composition timeline for episode {episode_id} is empty; "
+            "at least one segment (the generated audio) is required"
+        )
+
     try:
         self.update_state(
             state='PROGRESS',

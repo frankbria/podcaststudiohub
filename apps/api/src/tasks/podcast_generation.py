@@ -10,6 +10,7 @@ import uuid as uuid_module
 import logging
 from celery import Task, chain
 from celery.exceptions import SoftTimeLimitExceeded
+from sqlalchemy import select
 from sqlalchemy.orm.exc import StaleDataError
 from typing import Optional, List, Dict, Any
 from pydub import AudioSegment
@@ -17,6 +18,7 @@ from pydub import AudioSegment
 from src.worker import celery_app
 from src.config import settings
 from src.database import SyncSessionLocal
+from src.models.audio_snippet import AudioSnippet
 from src.models.episode import Episode
 from src.tasks.callbacks import _update_episode, _utcnow_iso, _queue_orphaned_storage
 from src.tasks.idempotency import acquire_generation_lock, release_generation_lock
@@ -95,6 +97,78 @@ def _persist_local_audio(audio_file_path: str, episode_id: str) -> str:
         return dest
     shutil.copy2(audio_file_path, dest)
     return dest
+
+
+# Snippet types composed before the generated audio; everything else follows it.
+_PRE_MAIN_SNIPPET_TYPES = frozenset({"intro", "music"})
+
+
+def resolve_composition_timeline(
+    project_id: Optional[Any],
+    audio_file_path: str,
+) -> List[Dict[str, Any]]:
+    """Build the merge timeline for audio composition (issue #313).
+
+    The router never supplies ``composition_timeline`` (the generated file's
+    path doesn't exist at dispatch time), so it is resolved here: the project's
+    reusable snippets ordered intro/music → generated audio (``main_content``)
+    → outro/midroll/ad/other; within each group snippets play in creation
+    order. The generated segment is always included, so the returned timeline
+    is never empty. Any snippet-lookup failure degrades to a main-only
+    timeline rather than failing composition.
+    """
+    main_segment = {"file_path": audio_file_path, "segment_type": "main_content"}
+    if project_id is None:
+        return [main_segment]
+
+    pre: List[Dict[str, Any]] = []
+    post: List[Dict[str, Any]] = []
+    try:
+        with SyncSessionLocal() as db:
+            snippets = (
+                db.execute(
+                    select(AudioSnippet)
+                    .where(AudioSnippet.project_id == project_id)
+                    .order_by(AudioSnippet.created_at)
+                )
+                .scalars()
+                .all()
+            )
+            for snippet in snippets:
+                # AudioSnippet.file_path holds the S3 key when S3 is configured,
+                # so the file may not exist on this worker's disk.
+                # ponytail: S3-only snippets are skipped, not downloaded; add a
+                # download-to-tempfile step here if remote snippets are needed.
+                if not snippet.file_path or not os.path.isfile(snippet.file_path):
+                    logger.warning(
+                        "Composition: skipping snippet %s (%s) — file %r is not "
+                        "available on local disk",
+                        snippet.id, snippet.snippet_type, snippet.file_path,
+                    )
+                    continue
+                entry = {
+                    "file_path": snippet.file_path,
+                    "segment_type": snippet.snippet_type,
+                }
+                if snippet.snippet_type in _PRE_MAIN_SNIPPET_TYPES:
+                    pre.append(entry)
+                else:
+                    post.append(entry)
+            if snippets and not pre and not post:
+                logger.warning(
+                    "Composition: project %s has %d snippet(s) but none are on "
+                    "local disk — composing the generated audio only",
+                    project_id, len(snippets),
+                )
+    except Exception as exc:
+        logger.error(
+            "Composition timeline resolution failed for project %s; composing "
+            "the generated audio only: %s",
+            project_id, exc,
+        )
+        return [main_segment]
+
+    return pre + [main_segment] + post
 
 
 def _upload_to_s3_with_retries(
@@ -367,9 +441,12 @@ def generate_podcast_task(
             # would lose file_path/transcript_path/duration_seconds/file_size_bytes
             # that the default finalize path records (issue #211).
             user_id: Optional[str] = None
+            project_id = None
             try:
                 with SyncSessionLocal() as db:
                     episode = db.get(Episode, uuid_module.UUID(episode_id))
+                    if episode is not None:
+                        project_id = episode.project_id
                     if episode is not None and episode.user_id is not None:
                         user_id = str(episode.user_id)
                         episode.file_path = audio_file_path
@@ -397,6 +474,14 @@ def generate_podcast_task(
                 if lock_held:
                     release_generation_lock(episode_id, task_id)
                 return generation_result
+
+            # The router never supplies a timeline (the generated file's path
+            # doesn't exist at dispatch time), so resolve it here; a caller-
+            # supplied timeline wins (issue #313).
+            if enable_composition and not composition_timeline:
+                composition_timeline = resolve_composition_timeline(
+                    project_id, audio_file_path
+                )
 
             # Trigger the full workflow: S3 upload → [composition] → [distribution]
             # Isolated try/except so a broker hiccup cannot mark a successful

@@ -1,5 +1,11 @@
 # Lessons
 
+## 2026-07-10 (#313)
+- **Use the Edit/Write tools for file content — including appends.** Slipped
+  into `cat >> file << 'EOF'` to append a test class; the context rule bans
+  heredoc/echo redirection for file writing, and Edit anchored on the file's
+  tail does the same job reviewably.
+
 ## 2026-07-10 (#312, PR #371)
 - **Demo against the real schema, not mocks — it catches what mocked suites
   structurally can't.** The #312 demo (real task + real Postgres, only HTTP

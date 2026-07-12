@@ -1,37 +1,47 @@
-# Issue #372 — Test isolation: mocked-podcastfy workflow tests poison psycopg Jsonb adaptation
+# Issue #313 — Wire the audio-composition timeline (P4.1)
 
-## Root cause (verified with import-audit diagnostic)
+## Problem (verified against current code)
 
-`unittest.mock.patch.dict(sys.modules, {...})` restores the dict on exit by
-**clearing it and re-applying the snapshot** — evicting every module imported
-*during* the window, not just the patched keys. The first poisoning test in
-`tests/test_celery_workflow.py` lazily imports the entire `psycopg` tree
-(~80 modules incl. the `psycopg_binary` C extension) inside the window;
-eviction + later re-import creates a new `psycopg.types.json.Jsonb` class that
-psycopg's already-registered adapters map (held by the previously imported
-SQLAlchemy dialect) doesn't recognize → `cannot adapt type 'Jsonb'`.
+- `routers/generation.py:309-317` dispatches `generate_podcast_task` with
+  `enable_composition` but never `composition_timeline` → defaults to `None`.
+- `podcast_generation.py:417` forwards it to `build_generation_workflow`, which
+  passes `composition_timeline or []` into `merge_audio_snippets_task.si` (line 850).
+- `audio_composition.py:49-82`: empty timeline → `AudioSegment.empty()` exported
+  → zero-length silent MP3 replaces the generated audio at upload (composed file
+  is `final_audio_path`).
+- `tests/unit/test_audio_composition_task.py:110` codifies the bug
+  (`test_empty_timeline_returns_success`).
 
-Diagnostic evidence: audit-hook plugin showed test 1 of `TestFullWorkflowChain`
-evicts all `psycopg*` modules at patch exit.
+## Plan adaptations vs CodeRabbit plan
 
-Same pattern exists in 5 more files (24 call sites total):
-`tests/test_celery_workflow.py` (9), `tests/unit/test_podcast_generation_task.py` (5),
-`tests/unit/test_audio_composition_task.py` (4), `tests/unit/test_task_retry.py` (5),
-`tests/unit/test_generation_idempotency.py` (1).
+1. `audio_snippet_service.get_audio_snippets` is **async** (AsyncSession); Celery
+   uses `SyncSessionLocal`. Resolver does its own sync `select(AudioSnippet)` query.
+2. `AudioSnippet.file_path` stores the **S3 key** when S3 is configured (see
+   `upload_audio_snippet`), so a snippet file may not exist on the worker's disk.
+   Resolver includes only snippets whose `file_path` is a local file; skips others
+   with a warning. S3-snippet download = documented Known Limitation / follow-up.
+3. Empty-timeline `ValueError` raised **before** the merge task's try block so it
+   propagates (deterministic error — retrying is pointless) and the chain's
+   `link_error` (`on_workflow_failure`) marks the episode failed.
 
-## Plan (TDD)
+## TDD checklist
 
-- [x] RED: `tests/test_sync_jsonb_isolation.py` — sync-session ORM flush of a
-      `User` row (JSONB `encrypted_api_keys`); file sorts after
-      `test_celery_workflow.py`. Confirm it FAILS after workflow tests, PASSES alone.
-- [x] GREEN: add `tests/module_patching.py` with `patch_modules(mapping)` — a
-      context manager that sets the given `sys.modules` keys and on exit restores
-      **only those keys** (leaving modules imported during the window intact).
-      Replace all 24 `patch.dict(sys.modules, ...)` sites with it.
-- [x] Verify: issue repro commands pass in both orders; full API test suite green;
-      ruff clean.
+- [ ] RED: invert `test_empty_timeline_returns_success` → `pytest.raises(ValueError)`;
+      add resolver unit tests (ordering, always-includes-main, skips-missing-file,
+      never-empty, degrades-to-main-only on DB error); add workflow test asserting
+      `build_generation_workflow` receives a non-empty timeline with the generated
+      audio as `main_content` when composition is enabled and no timeline supplied.
+- [ ] GREEN: guard in `merge_audio_snippets_task` (before try);
+      `resolve_composition_timeline(db, project_id, audio_file_path)` in
+      `podcast_generation.py` — project snippets ordered intro/music → main_content
+      → outro/midroll/ad/other, each entry `{file_path, segment_type}`; wire into
+      `generate_podcast_task`'s existing episode-load block (caller-supplied
+      timeline wins; resolution failure degrades to `[main]`, never empty).
+- [ ] Full pytest + ruff + coverage gates; review; PR; demo; CI; merge.
 
-## Scope note
+## Known limitations
 
-Fixing all 6 files (not just test_celery_workflow.py) — identical latent bug,
-mechanical swap, per bug-ownership rule.
+- Snippets stored only in S3 (no local file) are skipped, not downloaded.
+- Timeline resolved on the generation worker; assumes chain tasks share a host
+  filesystem (same assumption the existing chain already makes for
+  `final_audio_path`).

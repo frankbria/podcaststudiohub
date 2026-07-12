@@ -1,55 +1,77 @@
-# Issue #315 — Spotify/Apple direct-publish targets are not real publishing APIs
+# Issue #316 — Distribution, RSS feed, and analytics frontend surface
 
-Status: SHIPPED — merged 2026-07-12 as 46c2e3c via PR #379; issue #315 closed; follow-up #378 filed.
+Status: IN PROGRESS. Plan source: CodeRabbit comment (adapted). Branch: `feature/issue-316-distribution-analytics-frontend`.
 
-Plan source: CodeRabbit comment (adapted). Branch: `fix/315-rss-distribution-default` (deleted).
+## Key adaptations vs the CodeRabbit plan
 
-## Adapted plan
+- **RSS-first framing (post-#379)**: all connect endpoints are live/ungated, but episode distribution
+  to Spotify/Apple defaults to the RSS-feed model (`ENABLE_DIRECT_PLATFORM_PUBLISH=False`). UI presents
+  Spotify/Apple as "platforms ingest your RSS feed"; RSS feed generation is the prerequisite
+  (422 if `show_title`/`author`/`description` missing from project metadata; 404 on GET = never generated).
+- **Spotify OAuth**: `POST /distribution-targets/spotify/authorize` returns JSON `{authorize_url, state}`;
+  client does `window.location.href = authorize_url` (proxy strips cross-origin redirects — cannot rely on it).
+- **Types**: inline types per page (repo convention); one shared module only for the distribution-target
+  shape (`src/lib/types/distribution.ts`) since it's reused by the page + 3 dialogs. No analytics/rss type modules.
+- **Envelopes**: distribution list = `{targets, total, page, page_size, total_pages}`; analytics + RSS = bare objects.
+  Project rows use `name` (API) → `title` (view-model) mapping per #337/#340 convention.
+- **Middleware**: add `'/distribution'` to `PROTECTED_PATHS` in `src/middleware.ts`. No CSP changes needed.
+- **No tabs/table/chart primitives exist** — sub-nav is a simple link strip; weekly trend is a simple bar list.
+- **Jest**: every new hugeicon must be added to `__mocks__/@hugeicons/core-free-icons.ts`; 80% coverage
+  enforced on all four metrics — every new page needs full branch tests (ok / non-ok / reject / empty / mutations).
 
-1. **Config flag**: add `ENABLE_DIRECT_PLATFORM_PUBLISH: bool = False` to `apps/api/src/config.py`
-   (next to `ENABLE_PLATFORM_DISTRIBUTION`), plus `.env.example` entry if the other flags have one.
-2. **RSS feed URL resolution in the task** (`apps/api/src/tasks/platform_distribution.py`):
-   small helper `_rss_feed_url_for_project(db, project_id)` querying `RSSFeed.public_url` via the
-   already-open sync session; inject as `episode_metadata["rss_feed_url"]` when platform is
-   spotify/apple_podcasts.
-3. **RSS-default distribution**: in `_distribute_to_spotify` / `_distribute_to_apple`:
-   validate `show_id` as today; when `settings.ENABLE_DIRECT_PLATFORM_PUBLISH` is False (default),
-   skip credentials/token/publish entirely and return
-   `{"status": "success", "method": "rss_feed", "platform_episode_id": None,
-     "platform_url": <rss_feed_url>, "rss_feed_url": ..., "error": None}`.
-   Missing `rss_feed_url` → raise `ValueError` with an actionable message (permanent failure, no
-   retry, no false success). Flag on → existing direct-publish path unchanged.
-4. **Docstrings**: mark `publish_episode` in `spotify_service.py` / `apple_podcasts_service.py` as
-   experimental/unverified; state RSS is the supported ingestion mechanism.
-5. **Tests** (`apps/api/tests/unit/test_platform_distribution_services.py`, TDD):
-   - Service-level: assert `mock_client.post.call_args` — exact endpoint URL, Authorization header,
-     Idempotency-Key, JSON body fields (both services).
-   - Task-level default (flag off): `publish_episode` NOT called; result has method=rss_feed,
-     feed URL as platform_url, platform_episode_id None. Missing feed URL → ValueError.
-   - Flag on: `publish_episode` called once with correct kwargs (existing success tests updated to
-     enable the flag — behavior-change adaptation, disclosed in PR).
-   - `TestRetryClassification` unchanged.
+## Steps
 
-## Autonomous decisions / deviations from the CodeRabbit plan
+1. **Foundation (nav + middleware + shared types + icon mocks)** — done first, on the branch directly.
+   - `src/components/navigation/MainNav.tsx`: add Dashboard + Distribution links (HugeiconsIcon, token classes).
+   - `src/middleware.ts`: `PROTECTED_PATHS` += `'/distribution'`.
+   - `src/lib/types/distribution.ts`: `DistributionTarget` response shape + list envelope.
+   - `__mocks__/@hugeicons/core-free-icons.ts`: pre-add ALL icons used by later steps (avoids parallel conflicts).
+   - Tests: `__tests__/components/navigation/MainNav.test.tsx` additions; middleware test if one exists.
 
-- **No lazy feed generation** in the resolver. The distribution task is sync (Celery,
-  `SyncSessionLocal`); `RSSGenerationService` is fully async. Bridging asyncio+S3+metadata
-  validation into the worker for a convenience path isn't warranted — the issue's own acceptance
-  criteria says "RSS already generated". Missing feed → clear, actionable permanent failure
-  ("generate the project's RSS feed first"), never a fake success.
-- **Result envelope keeps `status: "success"`, distinguishes via `method: "rss_feed"` +
-  `platform_episode_id: None`**, not a new top-level status. `record_platform_distribution` and
-  `on_workflow_complete` treat any per-platform status ≠ "complete" as failure, and
-  `episodes.generation_status` has a DB CHECK constraint (migration 016) — a new status value would
-  need a migration + callback rewrite for zero user benefit. The RSS result is genuinely successful.
-- **No UI/schema messaging changes**: web status types are free `string` with fallbacks; the
-  distribution entry's `platform_url` becomes the RSS feed URL, which is the honest actionable link.
+2. **Global /distribution page + connect dialogs** (parallel agent A)
+   - `src/app/(auth)/distribution/page.tsx`: three-branch render; list targets from
+     `GET /api/proxy/distribution-targets`; Cards with platform_name, target_type, is_active Badge,
+     token_valid/token_expires_at for Spotify; actions: test (`POST .../{id}/test`), toggle
+     (`PUT .../{id}` `{is_active}`), refresh token (`POST .../{id}/refresh-token`, Spotify only),
+     delete (ConfirmDeleteDialog → `DELETE .../{id}`). OAuth return query params (`success`/`error`) → toast + refetch.
+   - Dialogs in `src/components/dialogs/`: SpotifyConnectDialog (authorize → window.location),
+     AppleConnectDialog (authorize instructions → show_id+api_key form), WebhookConnectDialog
+     (name + https URL + method/headers). Zod schemas in `src/lib/validation.ts` (apple, webhook).
+   - RSS-model note in the UI: connecting Spotify/Apple records distribution; episodes reach platforms via the project RSS feed.
+   - Skeleton `src/components/skeletons/DistributionSkeleton.tsx`; EmptyState CTA.
+   - Tests: page + dialogs + validation schema cases.
 
-## Acceptance criteria
+3. **Project RSS feed page** (parallel agent B)
+   - `src/app/(auth)/projects/[id]/distribution/page.tsx`: `GET /api/proxy/projects/{id}/rss-feed`;
+     404 → EmptyState with Generate CTA; show public_url + copy button, last_generated,
+     validation_status; Generate/Regenerate → `POST .../rss-feed/generate` (422 → error toast telling
+     user which metadata field is missing); EditPodcastMetadataDialog → `PUT .../rss-feed`
+     with `{podcast_metadata: {...}}` (show_title, author, description, category, language, explicit,
+     copyright, artwork_url, website_url). Zod schema `podcastMetadataSchema`.
+   - Tests: page + dialog.
 
-- [x] Verified against current platform APIs: Spotify/Apple ingest via RSS, not direct POST
-      (documented in service docstrings; direct path no longer default).
-- [x] Spotify/Apple targets pivot to the RSS-feed model by default.
-- [x] Direct-publish gated behind explicit default-off flag and clearly marked experimental.
-- [x] Tests assert the actual outbound request URL/headers/body.
-- [x] No silent false-positive success when no RSS feed exists.
+4. **Project analytics page + project sub-nav** (parallel agent C)
+   - `src/app/(auth)/projects/[id]/analytics/page.tsx`: `GET /api/proxy/projects/{id}/analytics?days=N`
+     (Select for 7/30/90); summary cards (total_downloads, total_plays, total_listen_hours);
+     weekly trend bar-list from `trends.weekly_downloads[{week,downloads}]`; top_episodes list.
+   - Sub-nav link strip on `src/app/(auth)/projects/[id]/page.tsx` → Analytics + Distribution (RSS).
+   - Skeleton `src/components/skeletons/AnalyticsSkeleton.tsx`.
+   - Tests: page + projects page nav additions.
+
+5. **Episode analytics section + event tracking** (parallel agent D)
+   - `src/app/(auth)/episodes/[id]/page.tsx`: analytics Card from `GET /api/proxy/analytics/episodes/{id}`
+     (metrics, device_breakdown, app_breakdown, top_countries); contained loading + zero-state.
+   - `onPlay` on the native `<audio>` → best-effort `POST /api/proxy/analytics/events`
+     `{event_type:"play", episode_id, project_id}` (fire-and-forget, swallow errors, fire once per mount).
+   - DownloadButton: `onDownloaded?` callback prop; page fires `event_type:"download"`.
+   - Tests: episode page + DownloadButton updates.
+
+6. **Integration**: merge worktree branches, full suite (`npm run test:web`), lint, typecheck, coverage.
+
+## Acceptance criteria (from issue)
+
+- [ ] Launch scope confirmed → in scope, build it (CodeRabbit Design Choice 1; #379 settled the model).
+- [ ] Distribution page + nav entry exist and work against the live backend contract.
+- [ ] RSS feed management surface exists (project-scoped).
+- [ ] Analytics pages/sections exist (project + episode).
+- [ ] No launch-messaging change needed (feature is now real).

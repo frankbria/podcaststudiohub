@@ -13,8 +13,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { UserCircle02Icon, Logout01Icon } from "@hugeicons/core-free-icons"
+import { UserCircle02Icon, Logout01Icon, Home01Icon, RssIcon } from "@hugeicons/core-free-icons"
 import { ThemeToggle } from "@/components/ThemeToggle"
+
+const NAV_LINKS = [
+  { href: "/dashboard", label: "Dashboard", icon: Home01Icon },
+  { href: "/distribution", label: "Distribution", icon: RssIcon },
+]
 
 export function MainNav() {
   const router = useRouter()
@@ -44,6 +49,18 @@ export function MainNav() {
             <a href="/dashboard" className="text-2xl font-bold text-primary">
               Podcastfy Studio
             </a>
+            <div className="hidden sm:flex items-center gap-1">
+              {NAV_LINKS.map((link) => (
+                <a
+                  key={link.href}
+                  href={link.href}
+                  className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
+                >
+                  <HugeiconsIcon icon={link.icon} size={16} />
+                  {link.label}
+                </a>
+              ))}
+            </div>
           </div>
 
           <div className="flex items-center gap-4">

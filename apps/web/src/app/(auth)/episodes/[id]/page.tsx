@@ -340,15 +340,17 @@ export default function EpisodePage() {
         loadContentSources()
       } else {
         // Backend puts the actionable message (size/format limits) in JSON detail
-        let detail: string | undefined
+        let detail: unknown
         try {
           detail = (await response.json())?.detail
         } catch {
           // no JSON body
         }
-        showErrorToast(
-          "Failed to add content source: " + (detail || response.statusText || "Request failed")
-        )
+        // FastAPI 422s return detail as an array; only surface string details
+        const message = typeof detail === "string" && detail
+          ? detail
+          : response.statusText || "Request failed"
+        showErrorToast("Failed to add content source: " + message)
       }
     } catch (error) {
       console.error("Failed to add content source:", error)
@@ -749,7 +751,7 @@ export default function EpisodePage() {
                   <Input
                     id="content-pdf"
                     type="file"
-                    accept="application/pdf"
+                    accept=".pdf,application/pdf"
                     aria-invalid={errors.file ? "true" : "false"}
                     aria-describedby={errors.file ? "content-pdf-error" : undefined}
                     {...register("file")}

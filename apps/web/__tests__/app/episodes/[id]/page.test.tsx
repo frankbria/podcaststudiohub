@@ -598,6 +598,33 @@ describe('EpisodePage content sources', () => {
     )
   })
 
+  it('falls back to statusText when the error detail is not a string (FastAPI 422 array)', async () => {
+    const fetchMock = withOverride(
+      mockEpisodeFetchRouter({ contentSources: [] }),
+      (url, init) => /\/api\/proxy\/episodes\/[^/]+\/content\/upload$/.test(url) && init?.method === 'POST',
+      () =>
+        Promise.resolve({
+          ok: false,
+          statusText: 'Unprocessable Entity',
+          json: async () => ({ detail: [{ loc: ['body', 'file'], msg: 'bad', type: 'x' }] }),
+        })
+    )
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+    await screen.findByText('Test Episode')
+
+    await userEvent.click(screen.getAllByRole('button', { name: 'Add Content' })[0])
+    await userEvent.click(screen.getByRole('button', { name: 'PDF' }))
+    const pdfFile = new File(['%PDF-1.4'], 'doc.pdf', { type: 'application/pdf' })
+    await userEvent.upload(screen.getByLabelText(/pdf file/i), pdfFile)
+    const submitButtons = screen.getAllByRole('button', { name: /add content/i })
+    await userEvent.click(submitButtons[submitButtons.length - 1])
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith('Failed to add content source: Unprocessable Entity')
+    )
+  })
+
   it('does not advertise YouTube support in the URL hint', async () => {
     global.fetch = mockEpisodeFetchRouter({ contentSources: [] })
     render(<EpisodePage />)

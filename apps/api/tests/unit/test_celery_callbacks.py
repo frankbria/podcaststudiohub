@@ -10,6 +10,16 @@ All database interactions are mocked so no real database is required.
 import uuid
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def mock_rss_refresh():
+	"""Keep the post-completion RSS refresh (issue #382) out of callback tests."""
+	with patch("src.tasks.callbacks.refresh_project_rss_feed") as mock:
+		mock.return_value = True
+		yield mock
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -19,6 +29,8 @@ def _mock_episode(episode_id: str) -> MagicMock:
 	"""Return a MagicMock that behaves like an Episode ORM object."""
 	ep = MagicMock()
 	ep.id = uuid.UUID(episode_id)
+	ep.project_id = uuid.uuid4()
+	ep.user_id = uuid.uuid4()
 	ep.generation_status = "generating"
 	ep.generation_progress = {}
 	ep.s3_url = None
@@ -466,6 +478,62 @@ class TestOnWorkflowComplete:
 			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
 
 		mock_session.commit.assert_not_called()
+
+	def test_refreshes_rss_feed_on_complete(self, mock_rss_refresh):
+		"""A fully successful workflow triggers an RSS feed refresh (issue #382)."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		mock_ctx, _ = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		mock_rss_refresh.assert_called_once_with(episode.project_id, episode.user_id)
+
+	def test_no_rss_refresh_when_distribution_failed(self, mock_rss_refresh):
+		"""distribution_failed episodes are not 'complete', so no refresh (issue #382)."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		episode.generation_progress = {
+			"distribution": {"spotify": {"status": "failed", "error": "auth failed"}}
+		}
+		mock_ctx, _ = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		mock_rss_refresh.assert_not_called()
+
+	def test_no_rss_refresh_when_episode_missing(self, mock_rss_refresh):
+		"""No episode row means nothing completed — no refresh (issue #382)."""
+		episode_id = str(uuid.uuid4())
+		mock_ctx, _ = _make_sync_session(None)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		mock_rss_refresh.assert_not_called()
+
+	def test_rss_refresh_failure_keeps_episode_complete(self, mock_rss_refresh):
+		"""A refresh blow-up must not raise or unset the committed status (issue #382)."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		mock_ctx, mock_session = _make_sync_session(episode)
+		mock_rss_refresh.side_effect = RuntimeError("S3 unreachable")
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		assert episode.generation_status == "complete"
+		mock_session.commit.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

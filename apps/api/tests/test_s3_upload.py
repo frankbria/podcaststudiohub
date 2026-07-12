@@ -610,6 +610,76 @@ class TestFinalizeEpisodeGenerationTask:
         assert result["status"] == "failed"
         mock_queue.assert_not_called()
 
+    def test_refreshes_rss_feed_on_complete(self, tmp_path):
+        """Finalize path (no chain) must also refresh the RSS feed (issue #382)."""
+        episode_id = str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id)
+        episode.project_id = uuid.uuid4()
+        src_audio = tmp_path / "episode-abc.mp3"
+        src_audio.write_bytes(b"FAKE_MP3")
+        generation_result = self._make_generation_result(audio_file_path=str(src_audio))
+        mock_db = self._make_db_context_manager(episode)
+
+        with (
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+            patch("src.tasks.podcast_generation.settings") as mock_settings,
+            patch("src.tasks.podcast_generation.refresh_project_rss_feed") as mock_refresh,
+        ):
+            mock_settings.AWS_S3_BUCKET = None
+            mock_settings.LOCAL_AUDIO_STORAGE_PATH = str(tmp_path / "audio")
+            result = self._invoke_finalize(episode_id, generation_result, mock_db)
+
+        assert result["status"] == "success"
+        assert episode.generation_status == "complete"
+        mock_refresh.assert_called_once_with(episode.project_id, episode.user_id)
+
+    def test_no_rss_refresh_when_generation_failed(self):
+        """A failed generation never touches the feed (issue #382)."""
+        episode_id = str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id)
+        generation_result = self._make_generation_result(
+            status="failed", error="TTS exploded"
+        )
+        mock_db = self._make_db_context_manager(episode)
+
+        with (
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+            patch("src.tasks.podcast_generation.settings") as mock_settings,
+            patch("src.tasks.podcast_generation.refresh_project_rss_feed") as mock_refresh,
+        ):
+            mock_settings.AWS_S3_BUCKET = None
+            result = self._invoke_finalize(episode_id, generation_result, mock_db)
+
+        assert result["status"] == "failed"
+        mock_refresh.assert_not_called()
+
+    def test_no_rss_refresh_when_episode_absorbed(self, tmp_path):
+        """The deleted-mid-finalization absorb branch must not refresh (issue #382)."""
+        episode_id = str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id)
+        src_audio = tmp_path / "episode-abc.mp3"
+        src_audio.write_bytes(b"FAKE_MP3")
+        generation_result = self._make_generation_result(audio_file_path=str(src_audio))
+
+        mock_db = MagicMock()
+        mock_db.get.side_effect = [episode, None]
+        mock_db.__enter__ = MagicMock(return_value=mock_db)
+        mock_db.__exit__ = MagicMock(return_value=False)
+        mock_db.commit.side_effect = StaleDataError("stale", 1, 0)
+
+        with (
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+            patch("src.tasks.podcast_generation.settings") as mock_settings,
+            patch("src.tasks.podcast_generation._queue_orphaned_storage"),
+            patch("src.tasks.podcast_generation.refresh_project_rss_feed") as mock_refresh,
+        ):
+            mock_settings.AWS_S3_BUCKET = None
+            mock_settings.LOCAL_AUDIO_STORAGE_PATH = str(tmp_path / "audio")
+            result = self._invoke_finalize(episode_id, generation_result, mock_db)
+
+        assert result["status"] == "absorbed"
+        mock_refresh.assert_not_called()
+
 
 # ============================================================================
 # generate_podcast_task chains finalize task

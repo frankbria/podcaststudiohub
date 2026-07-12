@@ -1,5 +1,7 @@
 # Issue #314 — Multi-modal input scope-down to URL/Text/PDF (P4.2)
 
+Status: SHIPPED — merged 2026-07-12 as 2caa0fb via PR #377; issue #314 closed.
+
 CodeRabbit plan chose the scope-down path (option 2): align every layer to the
 genuinely supported set (url, text, pdf), surface the already-built PDF upload
 backend in the web UI, and fix overstated copy/docs. No architectural fork.
@@ -27,29 +29,29 @@ backend in the web UI, and fix overstated copy/docs. No architectural fork.
 ## TDD checklist
 
 ### Backend (apps/api)
-- [ ] Test: `validate_by_type` with unsupported type (e.g. 'youtube') raises
+- [x] Test: `validate_by_type` with unsupported type (e.g. 'youtube') raises
       ValueError naming supported set → add terminal `else` (RED→GREEN)
-- [ ] Update model comment content_source.py:24-33 (supported vs reserved types)
-- [ ] Error messages in routers/content.py:409 + tasks/content_extraction.py:60
+- [x] Update model comment content_source.py:24-33 (supported vs reserved types)
+- [x] Error messages in routers/content.py:409 + tasks/content_extraction.py:60
       reference supported list ['url', 'pdf', 'text']
-- [ ] openapi.yaml: document POST /episodes/{episode_id}/content/upload
+- [x] openapi.yaml: document POST /episodes/{episode_id}/content/upload
 
 ### Frontend (apps/web)
-- [ ] Tests: page.test.tsx — PDF toggle renders file input; PDF submit posts
+- [x] Tests: page.test.tsx — PDF toggle renders file input; PDF submit posts
       FormData to /api/proxy/.../content/upload; oversize/wrong-type file shows
       validation error (RED)
-- [ ] validation.ts: add "pdf" to enum + superRefine (file required,
+- [x] validation.ts: add "pdf" to enum + superRefine (file required,
       application/pdf, ≤50MB)
-- [ ] page.tsx: PDF toggle button; file input (accept="application/pdf") with
+- [x] page.tsx: PDF toggle button; file input (accept="application/pdf") with
       RHF error pattern; FormData submit path incl. auto_extract; replace :708
       hint with "Supports public HTTP/HTTPS article URLs" (GREEN)
 
 ### Docs
-- [ ] README.md:63,73 → websites, PDFs, plain text only
-- [ ] docs/USER_GUIDE.md: add PDF row to Supported Content Types
-- [ ] docs/GAP_ANALYSIS.md: GAP-024 closed; FR-002 complete
-- [ ] docs/environment-configuration-report-2025-11-11.md:273 drop YouTube
+- [x] README.md:63,73 → websites, PDFs, plain text only
+- [x] docs/USER_GUIDE.md: add PDF row to Supported Content Types
+- [x] docs/GAP_ANALYSIS.md: GAP-024 closed; FR-002 complete
+- [x] docs/environment-configuration-report-2025-11-11.md:273 drop YouTube
 
 ### Gates
-- [ ] pytest + jest + lint green; deslop; internal review + opencode/GLM review
-- [ ] PR, demo (agent-browser PDF upload flow), CI green, merge
+- [x] pytest + jest + lint green; deslop; internal review + opencode/GLM review
+- [x] PR, demo (agent-browser PDF upload flow), CI green, merge

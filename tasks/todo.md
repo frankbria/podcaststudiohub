@@ -6,14 +6,12 @@ verified with outcome evidence, opencode APPROVE pre- and post-PR, both PR bots 
 Included the Deploy to Development CI fix (22→33-byte JWT_SECRET_KEY): the "Run API
 tests" step now PASSES on the merge-triggered run. Branch deleted.
 
-REMAINING BLOCKER (out of CI's hands): the same run now fails at the later "Health
-Check" step — the API on the dev VPS crash-loops after deploy (pm2 ↺ 31 restarts at
-~3s uptime → nginx 502). This deploy was the first to reach the VPS since 2026-07-09
-(ca0d234); it jumped the host across #351/#373/#375/#379/#380/#384/#386 plus a
-124-uninstall/122-install dependency churn. Instant crash = import/startup failure,
-most likely against the host's local .env (not synced by deploys). Migrations 014→017
-ran clean. Diagnosis needs host logs (pm2 logs podcaststudiohub-api); SSH from the
-agent was permission-denied.
+Deploy Health-Check blocker RESOLVED 2026-07-13: the VPS venv was torn by racing
+implicit `uv run` syncs (typer/ dir deleted, dist-info kept → `uv sync` "no changes"
+while podcastfy.client unimportable → lifespan crash-loop, nginx 502). Repaired with
+`pm2 stop` + `uv sync --reinstall` + restart (user-approved); prevented by PR #387
+(pm2 starts use `uv run --no-sync`). Deploy to Development green on 116eb99 (rerun)
+and 57cef77 (post-#387); https://dev.podcaststudiohub.me/api/health = 200.
 
 ## Post-plan additions (review round)
 

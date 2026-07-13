@@ -137,28 +137,35 @@ def resolve_composition_timeline(
             )
             for snippet in snippets:
                 # AudioSnippet.file_path holds the S3 key when S3 is configured,
-                # so the file may not exist on this worker's disk.
-                # ponytail: S3-only snippets are skipped, not downloaded; add a
-                # download-to-tempfile step here if remote snippets are needed.
-                if not snippet.file_path or not os.path.isfile(snippet.file_path):
+                # so the file usually doesn't exist on this worker's disk.
+                if snippet.file_path and os.path.isfile(snippet.file_path):
+                    entry = {
+                        "file_path": snippet.file_path,
+                        "segment_type": snippet.snippet_type,
+                    }
+                elif snippet.s3_key and settings.AWS_S3_BUCKET:
+                    # S3-backed snippet: merge_audio_snippets_task downloads it
+                    # to a worker tempfile before merging (issue #376).
+                    entry = {
+                        "s3_key": snippet.s3_key,
+                        "segment_type": snippet.snippet_type,
+                    }
+                else:
                     logger.warning(
-                        "Composition: skipping snippet %s (%s) — file %r is not "
-                        "available on local disk",
+                        "Composition: skipping snippet %s (%s) — no local file "
+                        "%r and no downloadable S3 object",
                         snippet.id, snippet.snippet_type, snippet.file_path,
                     )
                     continue
-                entry = {
-                    "file_path": snippet.file_path,
-                    "segment_type": snippet.snippet_type,
-                }
                 if snippet.snippet_type in _PRE_MAIN_SNIPPET_TYPES:
                     pre.append(entry)
                 else:
                     post.append(entry)
             if snippets and not pre and not post:
                 logger.warning(
-                    "Composition: project %s has %d snippet(s) but none are on "
-                    "local disk — composing the generated audio only",
+                    "Composition: project %s has %d snippet(s) but none are "
+                    "usable (no local file or S3 object) — composing the "
+                    "generated audio only",
                     project_id, len(snippets),
                 )
     except Exception as exc:

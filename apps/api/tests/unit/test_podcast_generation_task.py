@@ -452,9 +452,11 @@ class TestResolveCompositionTimeline:
 		session.__exit__ = MagicMock(return_value=False)
 		return session
 
-	def _snippet(self, snippet_type: str, file_path: str) -> types.SimpleNamespace:
+	def _snippet(
+		self, snippet_type: str, file_path: str, s3_key: str = None
+	) -> types.SimpleNamespace:
 		return types.SimpleNamespace(
-			id=uuid4(), snippet_type=snippet_type, file_path=file_path
+			id=uuid4(), snippet_type=snippet_type, file_path=file_path, s3_key=s3_key
 		)
 
 	def test_no_snippets_yields_main_segment_only(self) -> None:
@@ -490,15 +492,15 @@ class TestResolveCompositionTimeline:
 		assert segment_types == ["intro", "music", "main_content", "outro", "ad"]
 		assert timeline[2]["file_path"] == "/tmp/gen.mp3"
 
-	def test_skips_snippets_without_local_file(self, tmp_path) -> None:
-		"""Snippets whose file_path is not on local disk (S3-only) are skipped."""
+	def test_skips_snippets_without_local_file_or_s3_key(self, tmp_path) -> None:
+		"""Snippets with no local file and no S3 object are skipped."""
 		from src.tasks import podcast_generation as pg
 
 		local = tmp_path / "intro.mp3"
 		local.write_bytes(b"x")
 		snippets = [
 			self._snippet("intro", str(local)),
-			self._snippet("outro", "audio-snippets/only-in-s3.mp3"),
+			self._snippet("outro", "audio-snippets/gone.mp3", s3_key=None),
 		]
 
 		with patch.object(pg, "SyncSessionLocal", return_value=self._mock_session(snippets)):
@@ -506,17 +508,38 @@ class TestResolveCompositionTimeline:
 
 		assert [seg["segment_type"] for seg in timeline] == ["intro", "main_content"]
 
-	def test_all_snippets_s3_only_yields_main_segment_only(self) -> None:
-		"""Current production shape: file_path always holds the S3 key, so every
-		snippet is skipped and composition passes the generated audio through."""
+	def test_s3_backed_snippets_included_as_s3_entries(self) -> None:
+		"""Production shape (#376): file_path holds the S3 key, s3_key is set, and
+		S3 is configured — snippets are included as s3_key entries for the merge
+		task to download, ordered around the main segment."""
 		from src.tasks import podcast_generation as pg
 
 		snippets = [
-			self._snippet("intro", "audio-snippets/u1/s1.mp3"),
-			self._snippet("outro", "audio-snippets/u1/s2.mp3"),
+			self._snippet("outro", "audio-snippets/u1/s2.mp3", s3_key="audio-snippets/u1/s2.mp3"),
+			self._snippet("intro", "audio-snippets/u1/s1.mp3", s3_key="audio-snippets/u1/s1.mp3"),
 		]
 
-		with patch.object(pg, "SyncSessionLocal", return_value=self._mock_session(snippets)):
+		with patch.object(pg, "SyncSessionLocal", return_value=self._mock_session(snippets)), \
+			 patch.object(pg.settings, "AWS_S3_BUCKET", "test-bucket"):
+			timeline = pg.resolve_composition_timeline(uuid4(), "/tmp/gen.mp3")
+
+		assert timeline == [
+			{"s3_key": "audio-snippets/u1/s1.mp3", "segment_type": "intro"},
+			{"file_path": "/tmp/gen.mp3", "segment_type": "main_content"},
+			{"s3_key": "audio-snippets/u1/s2.mp3", "segment_type": "outro"},
+		]
+
+	def test_s3_backed_snippets_skipped_when_s3_not_configured(self) -> None:
+		"""Without AWS_S3_BUCKET the merge task cannot download, so s3_key-only
+		snippets stay skipped and the timeline degrades to main-only."""
+		from src.tasks import podcast_generation as pg
+
+		snippets = [
+			self._snippet("intro", "audio-snippets/u1/s1.mp3", s3_key="audio-snippets/u1/s1.mp3"),
+		]
+
+		with patch.object(pg, "SyncSessionLocal", return_value=self._mock_session(snippets)), \
+			 patch.object(pg.settings, "AWS_S3_BUCKET", None):
 			timeline = pg.resolve_composition_timeline(uuid4(), "/tmp/gen.mp3")
 
 		assert timeline == [{"file_path": "/tmp/gen.mp3", "segment_type": "main_content"}]

@@ -291,8 +291,8 @@ async def get_public_episode_audio(
 	Deliberately no database read: episodes is FORCE RLS and an
 	unauthenticated request has no tenant context (#385). The S3 key is
 	derived from the URL via the canonical key layout (#215), so the
-	object's existence is the access check — the path is a capability URL,
-	exactly like the feed endpoint.
+	object's existence is the access check — the path is an unguessable
+	UUID-pair URL, exactly like the feed endpoint.
 	"""
 	s3_key = build_podcast_s3_key(str(user_id), str(episode_id))
 

@@ -57,6 +57,11 @@ The pin is intentional: task kwargs are coupled to the upstream call signature (
 bump the version in `apps/api/pyproject.toml`, run `uv sync`, and re-check the call signatures in
 `src/services/` and `src/tasks/` before relying on it.
 
+**0.4.2/0.4.3 were evaluated 2026-07-13 and deferred** (#363): 0.4.2+ imports `playwright` at module
+top without declaring it (breaks app startup), offers no benefit to our call paths, and does not clear
+the langchain CVEs on the pip-audit ignore list. See `apps/api/docs/podcastfy-0.4.3-evaluation.md` for
+the full evaluation and re-evaluation triggers (chiefly: upstream langchain 1.x support).
+
 Engine capabilities (provided by the dependency): multi-modal input (websites, YouTube, PDFs, images,
 text, topics); 100+ LLMs via LiteLLM + Gemini; TTS via OpenAI, ElevenLabs, Gemini multi-speaker, and
 Edge TTS; short-form and long-form ("content chunking with contextual linking") generation.

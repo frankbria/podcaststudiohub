@@ -10,8 +10,10 @@ model) would never see the new episode. Both episode-completion sites
 
 The refresh is deliberately best-effort: it never raises, so a feed problem
 (incomplete podcast metadata, S3 outage) can never fail an episode that has
-already completed. It is also idempotent — the service does a single upsert
-per project — so concurrent completions in one project are safe.
+already completed. The service does a single upsert per project, so concurrent
+completions can't duplicate rows — but the S3 write is last-write-wins, so a
+racing pair may briefly publish a feed missing the newest episode. Eventually
+consistent: the next completion (or a manual regenerate) heals it.
 """
 import asyncio
 import logging

@@ -83,9 +83,15 @@ async def celery_async_session() -> AsyncGenerator[AsyncSession, None]:
     setup cost is irrelevant. Do NOT use this in request handlers — they have
     a live loop and must use ``AsyncSessionLocal``.
     """
-    task_engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    task_engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=settings.DEBUG,
+        poolclass=NullPool,
+    )
     try:
-        async with AsyncSession(task_engine, expire_on_commit=False) as session:
+        async with AsyncSession(
+            task_engine, expire_on_commit=False, autoflush=False
+        ) as session:
             yield session
     finally:
         await task_engine.dispose()

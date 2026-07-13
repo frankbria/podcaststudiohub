@@ -1,6 +1,17 @@
 # Issue #385 — [P4.3.4] RSS feed public_url returns S3 AccessDenied
 
-Status: IN PROGRESS. Plan self-authored (no plan comment on the issue).
+Status: SHIPPED — merged 2026-07-13 via PR #390 (squash, a25b5a2); issue #385 closed.
+All gates green: backend 1810/1810 (+7 skip), coverage 94.52% (diff 100%), ruff clean,
+full CI 12/12 incl. review bot (no defects). Demo 4/4 criteria with outcome evidence
+against real Postgres (FORCE RLS) + real S3, incl. 403 AccessDenied contrast on the old
+S3 URL. Reviews: opencode (GLM) APPROVE pre-PR and post-PR (posted to PR), internal
+APPROVE. Follow-up filed: #391 (P4.3.6, episode enclosure URLs are private S3 URLs).
+Plan was self-authored (no plan comment on the issue).
+
+**DEPLOY ACTION REQUIRED**: staging's hand-managed apps/api `.env` must set
+`API_PUBLIC_BASE_URL=https://dev.podcaststudiohub.me/api` or regenerated feeds will
+store `http://localhost:8000/...` URLs. Existing rows keep the stale S3 URL until
+regenerated (generate/PUT/#382 auto-refresh).
 
 ## Problem
 
@@ -61,11 +72,11 @@ Sub-decisions:
 
 ## Acceptance criteria
 
-- [ ] `public_url` stored for new/regenerated feeds is the API endpoint URL,
+- [x] `public_url` stored for new/regenerated feeds is the API endpoint URL,
       not the S3 URL.
-- [ ] `GET /feeds/{project_id}/podcast.xml` returns the feed XML with
+- [x] `GET /feeds/{project_id}/podcast.xml` returns the feed XML with
       `application/rss+xml` to a fully unauthenticated client, with a real
       RLS-enabled DB (no mocked service on the success path).
-- [ ] Missing feed → 404 (not 500, not AccessDenied).
-- [ ] Distribution metadata (`rss_feed_url`) carries the fetchable API URL.
-- [ ] Backend suite green, coverage gate (85%) green, lint green.
+- [x] Missing feed → 404 (not 500, not AccessDenied).
+- [x] Distribution metadata (`rss_feed_url`) carries the fetchable API URL.
+- [x] Backend suite green, coverage gate (85%) green, lint green.

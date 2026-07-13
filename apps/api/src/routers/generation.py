@@ -510,6 +510,14 @@ async def get_generation_progress_stream(
 @router.post("/episodes/{episode_id}/regenerate", status_code=status.HTTP_202_ACCEPTED)
 async def regenerate_podcast(
     episode_id: UUID,
+    enable_composition: bool = Query(
+        default=False,
+        description="Merge audio snippets after generation (requires ENABLE_AUDIO_COMPOSITION)",
+    ),
+    enable_distribution: bool = Query(
+        default=False,
+        description="Distribute to platforms after generation (requires ENABLE_PLATFORM_DISTRIBUTION)",
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -532,8 +540,8 @@ async def regenerate_podcast(
     # arguments and pass the Depends() sentinels as ``current_user`` / ``db``.
     return await generate_podcast(
         episode_id=episode_id,
-        enable_composition=False,
-        enable_distribution=False,
+        enable_composition=enable_composition,
+        enable_distribution=enable_distribution,
         current_user=current_user,
         db=db,
     )

@@ -214,6 +214,64 @@ async def test_generate_forwards_platforms_when_distribution_enabled(client):
 
 
 @pytest.mark.asyncio
+async def test_regenerate_forwards_platforms_when_distribution_enabled(client):
+    """/regenerate accepts enable_distribution and forwards it like /generate.
+
+    Issue #389: regenerate previously hardcoded enable_distribution=False, so a
+    re-generated episode could never distribute even with active targets.
+    """
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_webhook_target(
+        client, headers, project_id, "https://hook.example.com/republish"
+    )
+
+    with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True), \
+         patch.object(generation_router.settings, "AWS_S3_BUCKET", "test-bucket"), \
+         patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-redist")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/regenerate?enable_distribution=true",
+            headers=headers,
+        )
+
+    assert resp.status_code == 202, resp.text
+    mock_delay.assert_called_once()
+    kwargs = mock_delay.call_args.kwargs["kwargs"]
+    assert kwargs["enable_distribution"] is True
+    platforms = kwargs["platforms"]
+    assert "webhook" in platforms
+    assert platforms["webhook"]["url"] == "https://hook.example.com/republish"
+
+
+@pytest.mark.asyncio
+async def test_regenerate_distribution_gated_by_feature_flag(client):
+    """?enable_distribution=true on /regenerate is a no-op when the flag is off."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    episode_id = await _create_episode(client, headers, project_id)
+    await _create_text_source(client, episode_id, headers)
+    await _create_webhook_target(
+        client, headers, project_id, "https://hook.example.com/gated"
+    )
+
+    with patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", False), \
+         patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
+        mock_delay.return_value = MagicMock(id="task-gated")
+        resp = await client.post(
+            f"/generation/episodes/{episode_id}/regenerate?enable_distribution=true",
+            headers=headers,
+        )
+
+    assert resp.status_code == 202, resp.text
+    kwargs = mock_delay.call_args.kwargs["kwargs"]
+    assert kwargs["enable_distribution"] is False
+    assert "platforms" not in kwargs
+
+
+@pytest.mark.asyncio
 async def test_generate_keeps_one_target_per_type(client):
     """Multiple active targets of the same type collapse to one platforms entry.
 

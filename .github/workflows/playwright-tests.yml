@@ -148,7 +148,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://podcastfy_app:postgres@localhost:5432/podcastfy
           MIGRATION_DATABASE_URL: postgresql+asyncpg://podcastfy_user:postgres@localhost:5432/podcastfy
           ENCRYPTION_KEY: test-encryption-key-for-ci-00000
-          JWT_SECRET_KEY: test-jwt-secret-for-ci
+          JWT_SECRET_KEY: test-jwt-secret-for-ci-0000000000
         run: |
           uv sync
           uv run alembic upgrade head
@@ -180,7 +180,7 @@ jobs:
           ENVIRONMENT: development
           DATABASE_URL: postgresql+asyncpg://podcastfy_app:postgres@localhost:5432/podcastfy
           ENCRYPTION_KEY: test-encryption-key-for-ci-00000
-          JWT_SECRET_KEY: test-jwt-secret-for-ci
+          JWT_SECRET_KEY: test-jwt-secret-for-ci-0000000000
           CELERY_BROKER_URL: redis://localhost:6379/0
           CELERY_RESULT_BACKEND: redis://localhost:6379/0
           CORS_ORIGINS: '["http://localhost:3200"]'

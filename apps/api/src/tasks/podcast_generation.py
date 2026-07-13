@@ -22,6 +22,7 @@ from src.models.audio_snippet import AudioSnippet
 from src.models.episode import Episode
 from src.tasks.callbacks import _update_episode, _utcnow_iso, _queue_orphaned_storage
 from src.tasks.idempotency import acquire_generation_lock, release_generation_lock
+from src.tasks.rss_refresh import refresh_project_rss_feed
 from src.tasks.s3_upload import (
     GENERATION_RUN_DIR_PREFIX,
     _cleanup_temp_file,
@@ -817,6 +818,19 @@ def finalize_episode_generation_task(
                 }
 
             logger.info(f"Episode {episode_id} finalized successfully")
+
+            # The feed on S3 predates this episode; refresh it so RSS-model
+            # platforms (Spotify/Apple) pick the episode up (issue #382).
+            # Best-effort, and guarded locally: the surrounding except calls
+            # self.retry, and a feed problem must never re-run finalization
+            # of an already-committed completion.
+            try:
+                refresh_project_rss_feed(episode.project_id, episode.user_id)
+            except Exception as rss_exc:
+                logger.error(
+                    f"RSS refresh after finalizing episode {episode_id} failed: {rss_exc}"
+                )
+
             return {
                 "status": "success",
                 "episode_id": episode_id,

@@ -74,7 +74,7 @@ jobs:
         env:
           DATABASE_URL: postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy
           ENCRYPTION_KEY: test-encryption-key-for-ci-00000
-          JWT_SECRET_KEY: test-jwt-secret-for-ci
+          JWT_SECRET_KEY: test-jwt-secret-for-ci-0000000000
         run: uv run alembic upgrade head
 
       - name: Run API tests
@@ -84,7 +84,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://podcastfy:podcastfy_password@localhost:5432/podcastfy
           SECRET_KEY: test-secret-key-for-ci
           ENCRYPTION_KEY: test-encryption-key-for-ci-00000
-          JWT_SECRET_KEY: test-jwt-secret-for-ci
+          JWT_SECRET_KEY: test-jwt-secret-for-ci-0000000000
           CELERY_BROKER_URL: redis://localhost:6379/0
           CELERY_RESULT_BACKEND: redis://localhost:6379/0
         run: |

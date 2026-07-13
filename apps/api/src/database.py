@@ -1,8 +1,10 @@
 """
 Async database configuration and session management
 """
+from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.pool import NullPool
 from sqlalchemy import create_engine, text
 from typing import AsyncGenerator
 from fastapi import Request
@@ -64,6 +66,35 @@ def SyncSessionLocal():
             autoflush=False,
         )
     return _sync_session_factory()
+
+
+@asynccontextmanager
+async def celery_async_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Async session for Celery's asyncio.run() bridges — one throwaway engine per call.
+
+    ``asyncio.run()`` destroys its event loop on return, but connections checked
+    back into the shared ``engine`` pool stay bound to that dead loop: the next
+    checkout from a later ``asyncio.run()`` in the same worker process raises
+    "got Future attached to a different loop" (empirically: every other call
+    fails). A per-call NullPool engine never shares connections across loops.
+
+    Celery prefork children run one task at a time, so the per-call connection
+    setup cost is irrelevant. Do NOT use this in request handlers — they have
+    a live loop and must use ``AsyncSessionLocal``.
+    """
+    task_engine = create_async_engine(
+        settings.DATABASE_URL,
+        echo=settings.DEBUG,
+        poolclass=NullPool,
+    )
+    try:
+        async with AsyncSession(
+            task_engine, expire_on_commit=False, autoflush=False
+        ) as session:
+            yield session
+    finally:
+        await task_engine.dispose()
 
 
 # Base class for SQLAlchemy models

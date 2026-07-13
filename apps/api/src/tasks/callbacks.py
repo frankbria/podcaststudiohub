@@ -17,6 +17,7 @@ from src.database import SyncSessionLocal
 from src.models.episode import Episode
 from src.models.storage_deletion_outbox import StorageDeletionOutbox
 from src.tasks.retry_utils import calculate_backoff
+from src.tasks.rss_refresh import refresh_project_rss_feed
 from src.tasks.s3_upload import _cleanup_temp_file
 from src.worker import celery_app
 
@@ -384,6 +385,9 @@ def on_workflow_complete(self: Task, result: Dict[str, Any], episode_id: str) ->
 			current_progress["completed_at"] = completed_at
 			episode.generation_progress = current_progress
 
+			project_id = episode.project_id
+			owner_id = episode.user_id
+
 			db.commit()
 
 		if failed_platforms:
@@ -394,6 +398,18 @@ def on_workflow_complete(self: Task, result: Dict[str, Any], episode_id: str) ->
 			)
 		else:
 			logger.info("Episode %s workflow completed successfully", episode_id)
+			# The feed on S3 predates this episode; refresh it so RSS-model
+			# platforms (Spotify/Apple) pick the episode up (issue #382).
+			# Best-effort, and guarded locally: the outer except would log a
+			# misleading "Failed to finalize" for an episode that committed.
+			try:
+				refresh_project_rss_feed(project_id, owner_id)
+			except Exception as rss_exc:
+				logger.error(
+					"RSS refresh after completing episode %s failed: %s",
+					episode_id,
+					rss_exc,
+				)
 	except Exception as exc:
 		logger.error(
 			"Failed to finalize episode %s: %s", episode_id, exc, exc_info=True

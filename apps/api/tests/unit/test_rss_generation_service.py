@@ -446,16 +446,25 @@ class TestUploadToS3:
 	"""Tests for S3 upload functionality."""
 
 	@pytest.mark.asyncio
-	async def test_upload_uses_correct_s3_key(self, rss_service, valid_project):
-		"""Test that upload uses correct S3 key pattern."""
+	async def test_upload_uses_correct_s3_key_and_api_public_url(self, rss_service, valid_project):
+		"""public_url must be the API feed endpoint, never the raw S3 URL.
+
+		The bucket has no public-read policy, so the S3 URL returns
+		AccessDenied to podcast platforms (#385). The XML is still uploaded
+		to S3 (the endpoint serves the stored object).
+		"""
+		from src.config import settings
+
 		project_id = valid_project.id
-		xml_content = "<rss>test</rss>"
+		rss_service.storage.upload_file = AsyncMock(
+			return_value=f"https://bucket.s3.us-east-1.amazonaws.com/rss-feeds/{project_id}/feed.xml"
+		)
 
-		with patch.object(rss_service, '_upload_rss_to_s3', return_value=(
-			f"rss-feeds/{project_id}/feed.xml",
-			f"https://bucket.s3.us-east-1.amazonaws.com/rss-feeds/{project_id}/feed.xml"
-		)):
-			s3_key, public_url = await rss_service._upload_rss_to_s3(project_id, xml_content)
+		s3_key, public_url = await rss_service._upload_rss_to_s3(project_id, "<rss>test</rss>")
 
-		assert str(project_id) in s3_key
-		assert "feed.xml" in s3_key
+		assert s3_key == f"rss-feeds/{project_id}/feed.xml"
+		assert public_url == (
+			f"{settings.API_PUBLIC_BASE_URL.rstrip('/')}/feeds/{project_id}/podcast.xml"
+		)
+		assert ".s3." not in public_url
+		rss_service.storage.upload_file.assert_awaited_once()

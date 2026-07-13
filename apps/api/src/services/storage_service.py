@@ -62,7 +62,11 @@ class StorageService:
             public: Make file publicly accessible
 
         Returns:
-            Public URL of the uploaded file
+            The S3 object URL. NOT publicly fetchable — the bucket has no
+            public-read policy, so this URL returns AccessDenied to
+            unauthenticated clients (#385). Serve objects through an API
+            endpoint or a presigned URL instead of storing this value as a
+            user-facing link.
         """
         extra_args = {}
 
@@ -103,6 +107,9 @@ class StorageService:
 
         Returns:
             Local file path
+
+        Raises:
+            FileNotFoundError: If the object does not exist in the bucket.
         """
         try:
             # boto3 is synchronous; run it off the event loop so concurrent
@@ -116,6 +123,10 @@ class StorageService:
             return local_path
 
         except ClientError as e:
+            # download_file surfaces a missing key as HeadObject "404";
+            # direct GetObject calls report "NoSuchKey".
+            if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                raise FileNotFoundError(f"S3 object not found: {s3_key}") from e
             raise Exception(f"Failed to download file from S3: {str(e)}")
 
     async def delete_file(self, s3_key: str) -> None:

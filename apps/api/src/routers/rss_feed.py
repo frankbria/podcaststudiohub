@@ -17,7 +17,7 @@ from ..database import get_db
 from ..middleware.auth import get_current_user
 from ..models import User
 from ..schemas.rss_feed import RSSFeedResponse, RSSFeedUpdate
-from ..services.rss_generation_service import RSSGenerationService
+from ..services.rss_generation_service import RSSGenerationService, rss_feed_s3_key
 from ..services.project_service import get_project_by_id
 
 logger = logging.getLogger(__name__)
@@ -222,7 +222,6 @@ async def update_rss_feed(
 )
 async def get_public_rss_feed(
 	project_id: UUID,
-	db: AsyncSession = Depends(get_db),
 	rss_service: RSSGenerationService = Depends(get_rss_service),
 ):
 	"""
@@ -231,29 +230,30 @@ async def get_public_rss_feed(
 	No authentication required. Returns the RSS 2.0 feed XML with
 	appropriate Content-Type and caching headers.
 
-	Fetches feed XML from S3 if available, otherwise returns 404.
+	Deliberately no database read: an unauthenticated request carries no
+	tenant context, so FORCE RLS on rss_feeds would return zero rows and
+	404 every real platform fetch (#385). The S3 key is deterministic, so
+	the object's existence is the "feed was generated" check.
 
 	Args:
 		project_id: UUID of the project
-		db: Database session
-		rss_service: RSS generation service
+		rss_service: RSS generation service (for S3 access)
 
 	Returns:
 		RSS 2.0 XML response with Content-Type: application/rss+xml
 
 	Raises:
-		HTTPException 404: If project or feed not found
+		HTTPException 404: If the feed has not been generated
 	"""
-	rss_feed = await rss_service.get_rss_feed(db, project_id)
-	if rss_feed is None or not rss_feed.public_url:
+	s3_key = rss_feed_s3_key(project_id)
+
+	try:
+		xml_content = await _fetch_rss_from_s3(rss_service, s3_key)
+	except FileNotFoundError:
 		raise HTTPException(
 			status_code=status.HTTP_404_NOT_FOUND,
 			detail="Podcast feed not found",
 		)
-
-	# Fetch XML from S3
-	try:
-		xml_content = await _fetch_rss_from_s3(rss_service, rss_feed.s3_key)
 	except Exception:
 		logger.exception("Failed to fetch RSS feed for project %s", project_id)
 		raise HTTPException(

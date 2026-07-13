@@ -478,8 +478,12 @@ export default function EpisodePage() {
     setProgress(0)
     setProgressMessage(STATUS_MESSAGES.queued)
     try {
+      // Always request distribution (#383): the backend only honors it when
+      // ENABLE_PLATFORM_DISTRIBUTION is on AND the project has active
+      // distribution targets; otherwise it safely falls through to the normal
+      // generation path. Opt-out is per-target via the distribution manager.
       const response = await fetch(
-        `/api/proxy/generation/episodes/${params.id}/generate`,
+        `/api/proxy/generation/episodes/${params.id}/generate?enable_distribution=true`,
         { method: "POST" }
       )
       if (response.ok) {

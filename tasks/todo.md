@@ -1,90 +1,51 @@
-# Issue #382 — [P4.3.2] RSS feed is never regenerated when an episode completes
+# Issue #383 — [P4.3.3] Web UI never enables distribution
 
-Status: SHIPPED — merged 2026-07-13 via PR #386 (squash, 116eb99); issue #382 closed.
-All gates green: 1807 tests, diff coverage 100%, 5/5 mutations killed, demo 5/5 criteria
-verified with outcome evidence, opencode APPROVE pre- and post-PR, both PR bots clean.
-Included the Deploy to Development CI fix (22→33-byte JWT_SECRET_KEY): the "Run API
-tests" step now PASSES on the merge-triggered run. Branch deleted.
-
-Deploy Health-Check blocker RESOLVED 2026-07-13: the VPS venv was torn by racing
-implicit `uv run` syncs (typer/ dir deleted, dist-info kept → `uv sync` "no changes"
-while podcastfy.client unimportable → lifespan crash-loop, nginx 502). Repaired with
-`pm2 stop` + `uv sync --reinstall` + restart (user-approved); prevented by PR #387
-(pm2 starts use `uv run --no-sync`). Deploy to Development green on 116eb99 (rerun)
-and 57cef77 (post-#387); https://dev.podcaststudiohub.me/api/health = 200.
-
-## Post-plan additions (review round)
-
-- **Critical (internal review, empirically confirmed)**: asyncio.run + shared pooled
-  async engine fails on the 2nd call per worker process ("Future attached to a different
-  loop"). Fixed with `celery_async_session()` in database.py — per-call NullPool engine,
-  disposed after use. Applied to rss_refresh AND content_extraction (same latent bug).
-- **Major**: finalize's refresh call sat inside the retry-bearing try; a refresh escape
-  would self.retry and eventually mark a completed episode failed. Now locally guarded +
-  regression test.
-- Skipped (nitpick, moot): finalize reads episode ids after commit — safe, both session
-  factories set expire_on_commit=False.
+Status: IN PROGRESS — plan approved autonomously (no architectural fork; rationale below).
 
 ## Problem
 
-`RSSGenerationService.generate_rss_for_project` is only called from the RSS router and the
-#378 generation pre-flight. When an episode reaches `complete`, nothing regenerates the feed,
-so Spotify/Apple keep ingesting a stale (often empty) feed XML on S3.
+`generatePodcast` in `apps/web/src/app/(auth)/episodes/[id]/page.tsx:481-484` POSTs
+`/api/proxy/generation/episodes/{id}/generate` with no query params. The backend defaults
+`enable_distribution=false`, so platform distribution (#316's purpose) is unreachable from
+the web UI.
 
-## Design decisions (made autonomously — no architectural fork)
+## Key codebase facts (verified by exploration)
 
-- **Post-completion hook, not a chain stage.** The issue floats both. A feed-refresh chain
-  stage only covers the chain path (`build_generation_workflow`); the finalize path
-  (`finalize_episode_generation_task`, used when composition+distribution are both off)
-  never invokes the chain or `on_workflow_complete`. A shared hook called from **both**
-  completion sites covers everything; a chain stage cannot.
-- **Sync→async bridge**: `asyncio.run()` + `AsyncSessionLocal`, same pattern as
-  `content_extraction.py:101` / `maintenance.py:150`. Celery sessions don't arm the tenant
-  GUC; the service filters by explicit `project_id`, which is the existing task-side pattern.
-- **Gate on an existing RSSFeed row** (`get_rss_feed`). If no feed row exists, no platform is
-  consuming the feed yet — the #378 pre-flight creates it at distribution time. Regenerating
-  unconditionally would fail on projects with incomplete `podcast_metadata` for no benefit.
-- **Only on `complete`.** On `distribution_failed` the episode's `generation_status` is not
-  `complete`, so `_get_completed_episodes` wouldn't include it anyway — regeneration is a no-op.
-- **Never fail the completion callback.** The hook catches and logs all exceptions
-  (mirrors the #378 pre-flight's non-fatal handling). Regeneration is already idempotent:
-  single upsert per project, service commits internally.
+- Backend `generate_podcast` (`apps/api/src/routers/generation.py:81-94`) takes
+  `enable_distribution: bool = Query(default=False)`. It is honored **only** when ALL of:
+  `settings.ENABLE_PLATFORM_DISTRIBUTION` is on (line ~200), `AWS_S3_BUCKET` set (~245),
+  and the project has active targets (`is_active`, project- or account-scoped;
+  no targets → chain falls through to the normal path, logged, no error).
+- `enable_composition` is NOT required for distribution (chain is upload → distribute).
+- #378 pre-flight warnings already flow back on the 202 (`warnings: string[]`) and the
+  page already toasts them (page.tsx:485-493).
+- `/api/proxy/[...path]/route.ts:71-73` forwards query strings verbatim.
+- The frontend has NO way to read `ENABLE_PLATFORM_DISTRIBUTION` (no feature-flag
+  endpoint exists) and no distribution-target fetch on the episode page.
 
-## Steps
+## Decision (auto-approved, not an architectural fork)
 
-1. **Add `refresh_project_rss_feed(project_id, user_id)` helper** in
-   `apps/api/src/tasks/rss_refresh.py` (new small module; avoids callbacks↔podcast_generation
-   import tangle). Opens `AsyncSessionLocal` via `asyncio.run`, skips (log) if
-   `get_rss_feed` returns None, else `await generate_rss_for_project(db, project_id, user_id)`.
-   Swallows + logs every exception. Returns True/False (regenerated or not) for tests.
-2. **Call it from `on_workflow_complete`** (`src/tasks/callbacks.py:379` success branch only):
-   capture `episode.project_id` / `episode.user_id` inside the session
-   (expire_on_commit=False, but capture anyway before session close), invoke the helper after
-   `db.commit()` / session close.
-3. **Call it from `finalize_episode_generation_task`** (`src/tasks/podcast_generation.py:773`
-   path): after the successful `db.commit()` that marks `complete` (not on the StaleDataError
-   absorb branch — episode was deleted), using captured project/user ids.
-4. **Tests (TDD — write first)**:
-   - `tests/unit/test_rss_refresh.py`: helper regenerates when feed row exists; skips when
-     none; swallows service exceptions (ValueError on bad metadata) and returns False.
-   - `tests/unit/test_celery_callbacks.py`: on_workflow_complete triggers refresh on success;
-     does NOT trigger on distribution_failed; missing episode → no refresh; refresh error
-     doesn't break the callback.
-   - `tests/test_celery_workflow.py`: finalize task triggers refresh after marking complete;
-     no refresh on failed S3 upload.
-5. **CI fix (user-requested, same PR)**: `deploy-dev.yml:77` and `:87`
-   `JWT_SECRET_KEY: test-jwt-secret-for-ci` (22 bytes) → `test-jwt-secret-for-ci-0000000000`
-   (33 bytes, same value `test.yml:80` already uses). PyJWT emits InsecureKeyLengthWarning
-   below 32 bytes; the repo's `filterwarnings=error` turns every `jwt.encode` into a 500, which
-   is why "Deploy to Development" has failed on every recent main push (164 failed / 417 errors,
-   all rooted in `POST /auth/register` 500). Also align `playwright-tests.yml:151`/`:183`
-   for consistency (server-mode, warning-only today, but same latent trap).
+**Always pass `enable_distribution=true` from the generate action.** The issue offers
+"automatically or via a checkbox"; automatic is the sanctioned safe default because the
+server already performs the exact conditional the issue asks for (flag on + active
+targets), and no-ops safely otherwise. A client-side targets fetch would duplicate that
+check; a checkbox is unneeded UI (users opt in/out by activating/deactivating targets in
+the #316 UI) — YAGNI. Documented as a Known Limitation in the PR (no per-episode opt-out).
+
+## Steps (TDD)
+
+1. Branch `fix/383-web-generate-enable-distribution` off main.
+2. RED — `apps/web/__tests__/app/episodes/[id]/page.test.tsx`:
+   - Update exact-match assertion (lines ~204-222) to expect
+     `/api/proxy/generation/episodes/ep1/generate?enable_distribution=true`.
+3. GREEN — page.tsx:482: append `?enable_distribution=true`; update the adjacent comment.
+4. Gates: jest (web), lint, tsc; deslop scan; opencode pre-PR review; PR with Known
+   Limitations; post-PR opencode review comment; demo (hard gate — outcome evidence that
+   the request carries the param); CI green + feedback triage; docs sync; merge.
 
 ## Acceptance criteria
 
-- [ ] Episode completing via the workflow chain regenerates the project RSS feed (feed XML on
-      S3 includes the new episode).
-- [ ] Episode completing via the finalize path (no composition/distribution) regenerates too.
-- [ ] Projects without an RSS feed row are untouched (no error, no feed created).
-- [ ] A regeneration failure never fails/marks-failed the episode completion.
-- [ ] Deploy to Development workflow's "Run API tests" step passes (JWT key fix).
+- A1: Clicking Generate issues POST `...?enable_distribution=true` through the proxy.
+- A2: Backend receives `enable_distribution=true` (proxy forwards query string).
+- A3: Warning-toast path (#378) still works unchanged.
+- A4: Error paths (non-ok, network) unchanged.

@@ -201,7 +201,7 @@ describe('EpisodePage generate flow', () => {
     await waitFor(() => expect(generateBtn).toBeEnabled())
   })
 
-  it('POSTs to the generate endpoint and shows a success toast', async () => {
+  it('POSTs to the generate endpoint with enable_distribution=true (#383) and shows a success toast', async () => {
     const fetchMock = mockFetchRouter()
     global.fetch = fetchMock
     render(<EpisodePage />)
@@ -213,7 +213,7 @@ describe('EpisodePage generate flow', () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/proxy/generation/episodes/ep1/generate',
+        '/api/proxy/generation/episodes/ep1/generate?enable_distribution=true',
         { method: 'POST' }
       )
     })

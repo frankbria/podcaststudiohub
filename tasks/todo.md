@@ -1,44 +1,23 @@
-# Issue #381 — [P4.4.1] Clearing optional podcast metadata fields does not persist
+# #363 [P4.5] Evaluate podcastfy 0.4.1 → 0.4.3 upgrade
 
-Plan source: self-authored (no plan comment on issue). Deferred from PR #380 finding S4.
+## Findings so far (Phase 2)
+- Upstream repo has no 0.4.1+ tags; evaluated via PyPI sdist diff 0.4.1 → 0.4.3.
+- `podcastfy/client.py` (our `generate_podcast` entrypoint, #204 coupling): **byte-identical**. No signature risk.
+- `ContentGenerator`: only default `model_name` changed (`gemini-1.5-pro-latest` → `gemini-2.5-flash`); we pass it explicitly (env `GEMINI_MODEL_NAME`). `generate_qa_content` unchanged.
+- `PDFExtractor`: unchanged. `WebsiteExtractor` helpers we use (normalize_url, remove_unwanted_elements, clean_content, user_agent, timeout): unchanged.
+- **Breaking**: 0.4.3 `website_extractor.py` imports `playwright.sync_api` at module top but playwright is NOT a declared dependency (upstream packaging bug). Our `main.py` import guard + `content_extraction_service.py` import `WebsiteExtractor` → app import fails unless WE add playwright (+ chromium binaries in CI/VPS).
+- `content_extractor.py` now imports `google.genai` top-level; declared (`google-genai ^1.46`) — our lock has 1.2.0, would bump.
+- Dep bumps: openai ^1.56 (still <2), httpx ^0.28.1 (we lock 0.27.2), edge-tts 6→7 (major).
+- langchain still `<0.4` → PYSEC-2026-2193 / PYSEC-2026-2562 NOT cleared by 0.4.3 (as predicted in issue comments).
+- Functional gains for US: ~none. Topic-grounding fix (google-genai/gemini-2.5) only helps `topic=` path — not wired from our router. Playwright fetching only helps `extract_content`, which we deliberately bypass (SSRF #206/#234). Gemini TTS language-code fix only for google-cloud TTS voices.
 
-## Design decision (autonomous — no fork)
-JSON-merge-patch semantics (RFC 7386): an optional metadata key explicitly sent as
-`null` — or as an empty/whitespace string — is **deleted** from the merged
-`podcast_metadata`. Required keys (`show_title`, `author`, `description`) cannot be
-cleared: explicit `null`/empty is rejected 422 at the schema layer **before** any DB
-write (avoids committing broken metadata pre-regeneration). Frontend always sends the
-five optional fields, `null` when the form value is empty.
+## Plan
+1. [x] Upstream changelog/diff review (above)
+2. [x] Empirical spike on feature branch: bump pin → `uv lock` → `uv sync` → run test_imports + signature-guard tests. Record exact failure/success.
+3. [x] Verdict (DEFER — evidence: playwright ModuleNotFoundError on import, zero gain, CVEs uncleared) from evidence:
+   - If upgrade is drop-in + low cost → complete checklist (caps, CLAUDE.md, full suite, e2e generation).
+   - If upgrade costs (playwright+chromium in prod, dep churn) exceed ~zero benefit → **defer**: write evaluation doc (`apps/api/docs/`), update CLAUDE.md pin note + security-audit.sh comment if needed, PR the docs, comment verdict on issue, close.
+4. [x] Quality gates, PR #395, showboat demo, merged 2026-07-13. Issue #363 closed.
 
-## Steps
-1. **Backend tests first** (`apps/api/tests/test_rss_feed.py`):
-   - PUT with `category: null` deletes the key from stored metadata (and other keys survive)
-   - PUT with `artwork_url: ""` deletes the key (empty string same as null)
-   - PUT with `show_title: null` → 422, metadata unchanged
-   - Existing omit-field merge behavior unchanged
-2. **Backend impl**:
-   - `apps/api/src/schemas/rss_feed.py`: `model_validator` on `PodcastMetadataUpdate`
-     rejecting explicitly-set null/blank for required keys
-   - `apps/api/src/routers/rss_feed.py`: merge loop — explicitly-set `None`/blank-string
-     values pop the key; others overwrite
-3. **Frontend test** (`apps/web/__tests__/app/distribution/page.test.tsx`):
-   PUT body carries `category: null` (etc.) when the dialog fields are cleared
-4. **Frontend impl** (`apps/web/src/app/(auth)/projects/[id]/distribution/page.tsx`):
-   replace conditional spreads with always-send `field: value || null`;
-   widen `RawPodcastMetadata` optional fields to `string | null`
-
-## Acceptance criteria
-- [x] Clearing an optional field (category/language/copyright/artwork_url/website_url) in the dialog removes it from `podcast_metadata` and the regenerated feed — demoed against real stack (API + real dialog), posted to PR #394
-- [x] Required fields cannot be cleared (422, no partial write) — demoed
-- [x] Setting/updating fields still merges as before — demoed
-- [x] Backend + frontend tests green; lint green — full suites + CI green
-
-## Status: SHIPPED 2026-07-13
-Merged via PR #394 (squash, 362dfd0); issue #381 closed. All 12 CI checks green.
-Demo with outcome evidence (real Postgres + S3 + real dialog) posted to the PR.
-Reviews: opencode pre-PR (1 Minor + 2 Nits, addressed with tests), opencode post-PR
-(no findings), CI review bot both rounds (no defects).
-Rode along: (a) conftest RequestValidationError no-rollback fix; (b) user-approved
-pip-audit ignore for PYSEC-2026-2562 (langchain-core SSRF, Low, podcastfy-capped —
-no podcastfy release incl. 0.4.3 reaches the langchain-core 1.2.11 fix; unreachable
-code path here; context posted on #363).
+## Review
+SHIPPED via PR #395 (squash 74f9073). Verdict: defer upgrade. Deliverables: apps/api/docs/podcastfy-0.4.3-evaluation.md, CLAUDE.md engine note, security-audit.sh comment fix. Spike reverted; 0.4.1 env verified green (32 guard tests).

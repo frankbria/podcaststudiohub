@@ -394,8 +394,9 @@ async def test_public_feed_success(client, project_with_metadata):
 async def test_public_feed_success_without_any_db_row(client):
 	"""The feed serves even when no rss_feeds row is visible (FORCE RLS path).
 
-	No project, no feed row, no mocked service — only S3 is patched. This is
-	the exact situation of a real unauthenticated platform fetch (#385).
+	No project, no feed row, no mocked DB service — only the S3 fetch is
+	patched. This is the exact situation of a real unauthenticated platform
+	fetch (#385).
 	"""
 	project_id = uuid4()
 	sample_xml = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'

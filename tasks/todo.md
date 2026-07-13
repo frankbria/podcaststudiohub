@@ -1,6 +1,13 @@
 # Issue #383 — [P4.3.3] Web UI never enables distribution
 
-Status: IN PROGRESS — plan approved autonomously (no architectural fork; rationale below).
+Status: SHIPPED — merged 2026-07-13 via PR #388 (squash, 28833a8); issue #383 closed.
+All gates green: web 490/490 tests, lint + tsc clean, full CI (backend 15m39s incl.
+coverage + quality gate) green. Demo 4/4 criteria verified with outcome evidence
+(real next dev + real /api/proxy against a logging stub backend; stub log shows
+`POST /generation/episodes/ep-demo/generate?enable_distribution=true`; warning- and
+error-toast screenshots). Reviews: codex pre-PR approve (opencode timed out that
+round), opencode post-PR APPROVE posted to the PR. Follow-up filed: #389 (P4.3.5,
+regenerate endpoint hardcodes enable_distribution=False). Branch deleted.
 
 ## Problem
 

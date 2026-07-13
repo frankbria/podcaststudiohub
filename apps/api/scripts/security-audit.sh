@@ -11,8 +11,9 @@ uv export --format requirements-txt --no-hashes --no-emit-project -o "$reqs" -q
 
 # Ignored IDs are all structurally capped by podcastfy==0.4.1's requirement set
 # (litellm>=1.84 needs openai>=2.20 vs podcastfy's openai<2; langchain 1.x /
-# langsmith 0.8 / aiplatform 1.133 / pytest 9 conflict the same way). The fix is
-# the podcastfy upgrade (#204 coupling), not an override. Re-check this list on
+# langsmith 0.8 / aiplatform 1.133 / pytest 9 conflict the same way; PYSEC-2026-2562
+# is langchain-core, fixed only in 1.2.11). The fix is the podcastfy upgrade
+# (#204 coupling, evaluated in #363), not an override. Re-check this list on
 # every podcastfy bump.
 uvx pip-audit -r "$reqs" --no-deps --disable-pip --strict \
   --ignore-vuln CVE-2026-35029 \
@@ -31,4 +32,5 @@ uvx pip-audit -r "$reqs" --no-deps --disable-pip --strict \
   --ignore-vuln CVE-2026-2472 \
   --ignore-vuln CVE-2026-2473 \
   --ignore-vuln PYSEC-2026-1845 \
-  --ignore-vuln PYSEC-2026-2193
+  --ignore-vuln PYSEC-2026-2193 \
+  --ignore-vuln PYSEC-2026-2562

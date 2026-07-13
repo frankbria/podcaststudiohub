@@ -161,7 +161,9 @@ async def update_rss_feed(
 	Update podcast metadata and regenerate RSS feed.
 
 	Merges the provided podcast_metadata fields into the project's existing
-	podcast_metadata, then triggers feed regeneration.
+	podcast_metadata, then triggers feed regeneration. An explicitly-sent null
+	or blank string deletes the key (optional fields only — clearing show_title,
+	author, or description is rejected 422); omitted fields are left unchanged.
 
 	Args:
 		project_id: UUID of the project
@@ -185,9 +187,16 @@ async def update_rss_feed(
 			detail=f"Project {project_id} not found",
 		)
 
-	# Merge updated metadata into existing project metadata
+	# Merge updated metadata into existing project metadata. An explicitly-sent
+	# null or blank string deletes the key (JSON-merge-patch semantics, #381);
+	# the schema already rejects clearing required fields.
 	new_metadata = update_data.podcast_metadata.model_dump(exclude_unset=True)
-	merged_metadata = {**(project.podcast_metadata or {}), **new_metadata}
+	merged_metadata = dict(project.podcast_metadata or {})
+	for key, value in new_metadata.items():
+		if value is None or (isinstance(value, str) and not value.strip()):
+			merged_metadata.pop(key, None)
+		else:
+			merged_metadata[key] = value
 	project.podcast_metadata = merged_metadata
 	await db.commit()
 

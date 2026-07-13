@@ -4,7 +4,7 @@ RSS Feed schemas for request/response validation.
 Defines Pydantic models for RSS Feed management endpoints.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from uuid import UUID
 from datetime import datetime
 from typing import Optional
@@ -39,11 +39,27 @@ class PodcastMetadataUpdate(BaseModel):
 	artwork_url: Optional[str] = Field(None, description="URL of podcast artwork image")
 	website_url: Optional[str] = Field(None, description="Podcast website URL")
 
+	@model_validator(mode="after")
+	def reject_clearing_required_fields(self):
+		"""Explicitly-sent null/blank values delete keys on merge (#381), but the
+		fields required for feed generation must never be cleared. Rejecting here
+		keeps the 422 ahead of the DB write in the update route."""
+		for key in ("show_title", "author", "description"):
+			if key in self.model_fields_set:
+				value = getattr(self, key)
+				if value is None or not value.strip():
+					raise ValueError(f"podcast_metadata.{key} cannot be cleared")
+		return self
+
 
 class RSSFeedUpdate(BaseModel):
 	"""Schema for updating RSS feed metadata."""
 
 	podcast_metadata: PodcastMetadataUpdate = Field(
 		...,
-		description="Podcast metadata fields to update (triggers feed regeneration)"
+		description=(
+			"Podcast metadata fields to update (triggers feed regeneration). "
+			"Explicit null or blank string deletes an optional key; omitted "
+			"fields are left unchanged. Required keys cannot be cleared."
+		)
 	)

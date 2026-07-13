@@ -213,7 +213,7 @@ jobs:
             pm2 start uv \
               --name podcaststudiohub-api \
               --cwd $SERVER_PATH/api \
-              -- run uvicorn src.main:app --host 127.0.0.1 --port "\$API_EFFECTIVE_PORT"
+              -- run --no-sync uvicorn src.main:app --host 127.0.0.1 --port "\$API_EFFECTIVE_PORT"
 
             pm2 save
 
@@ -318,7 +318,7 @@ jobs:
             pm2 start uv \
               --name podcaststudiohub-celery \
               --cwd $SERVER_PATH/api \
-              -- run celery -A src.worker:celery_app worker -B --loglevel=info
+              -- run --no-sync celery -A src.worker:celery_app worker -B --loglevel=info
 
             pm2 save
 

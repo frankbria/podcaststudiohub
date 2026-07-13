@@ -213,7 +213,19 @@ class RSSGenerationService:
 		episode_number = ep_meta.get("episode_number")
 		season_number = ep_meta.get("season_number")
 
-		s3_url = getattr(episode, "s3_url", "") or ""
+		# The raw S3 URL is private (AccessDenied to platforms, #391). Point the
+		# enclosure at the public API audio endpoint instead, which 302s to a
+		# fresh presigned URL per request. The path carries user_id + episode_id
+		# because that is what the canonical S3 key derivation needs and the
+		# FORCE-RLS episodes table cannot be read without tenant context (#385).
+		if getattr(episode, "s3_key", None):
+			enclosure_url = (
+				f"{settings.API_PUBLIC_BASE_URL.rstrip('/')}"
+				f"/feeds/episodes/{episode.user_id}/{episode.id}/audio.mp3"
+			)
+		else:
+			# No S3 object (local-only audio): keep legacy behavior
+			enclosure_url = getattr(episode, "s3_url", "") or ""
 		file_size = getattr(episode, "file_size_bytes", 0) or 0
 		duration = getattr(episode, "duration_seconds", 0) or 0
 		created_at = getattr(episode, "created_at", datetime.now(timezone.utc))
@@ -227,7 +239,7 @@ class RSSGenerationService:
 			f"      <title>{self._escape_xml(title)}</title>",
 			f"      <description>{self._escape_xml(description)}</description>",
 			f"      <pubDate>{self._format_rfc2822_date(created_at)}</pubDate>",
-			f'      <enclosure url="{self._escape_xml(s3_url)}" length="{int(file_size)}" type="audio/mpeg"/>',
+			f'      <enclosure url="{self._escape_xml(enclosure_url)}" length="{int(file_size)}" type="audio/mpeg"/>',
 			f"      <guid isPermaLink=\"false\">{episode.id}</guid>",
 			f"      <itunes:duration>{int(duration)}</itunes:duration>",
 			f"      <itunes:explicit>{'true' if channel_explicit else 'false'}</itunes:explicit>",

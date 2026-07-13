@@ -9,7 +9,7 @@ endpoints require a valid JWT token.
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
@@ -19,6 +19,7 @@ from ..models import User
 from ..schemas.rss_feed import RSSFeedResponse, RSSFeedUpdate
 from ..services.rss_generation_service import RSSGenerationService, rss_feed_s3_key
 from ..services.project_service import get_project_by_id
+from ..tasks.podcast_generation import build_podcast_s3_key
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,56 @@ async def get_public_rss_feed(
 			"Cache-Control": "max-age=3600, public",
 			"ETag": f'"{hash(xml_content)}"',
 		},
+	)
+
+
+@public_router.get("/feeds/episodes/{user_id}/{episode_id}/audio.mp3")
+async def get_public_episode_audio(
+	user_id: UUID,
+	episode_id: UUID,
+	rss_service: RSSGenerationService = Depends(get_rss_service),
+):
+	"""
+	Redirect to a fresh presigned S3 URL for an episode's audio (#391).
+
+	Public, unauthenticated: this is the URL podcast platforms get in the
+	feed's <enclosure> and hit to download audio. The bucket is private, so
+	the enclosure cannot point at S3 directly; presigned URLs alone expire
+	(7-day max) while RSS feeds are long-lived. A per-request 302 to a
+	short-lived presigned URL solves both, and S3 serves Range requests on
+	the redirect target natively.
+
+	Deliberately no database read: episodes is FORCE RLS and an
+	unauthenticated request has no tenant context (#385). The S3 key is
+	derived from the URL via the canonical key layout (#215), so the
+	object's existence is the access check — the path is a capability URL,
+	exactly like the feed endpoint.
+	"""
+	s3_key = build_podcast_s3_key(str(user_id), str(episode_id))
+
+	try:
+		if not await rss_service.storage.file_exists(s3_key):
+			raise HTTPException(
+				status_code=status.HTTP_404_NOT_FOUND,
+				detail="Episode audio not found",
+			)
+		presigned_url = await rss_service.storage.generate_presigned_url(
+			s3_key, expiration=3600
+		)
+	except HTTPException:
+		raise
+	except Exception:
+		logger.exception("Failed to presign audio for episode %s", episode_id)
+		raise HTTPException(
+			status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+			detail="Failed to fetch episode audio.",
+		)
+
+	return RedirectResponse(
+		presigned_url,
+		status_code=status.HTTP_302_FOUND,
+		# The Location is minted per request and short-lived — never cache it
+		headers={"Cache-Control": "no-store"},
 	)
 
 

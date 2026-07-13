@@ -513,3 +513,66 @@ async def test_fetch_rss_from_s3_downloads_and_reads_file():
 
 	assert result == xml_bytes
 	rss_service.storage.download_file.assert_awaited_once()
+
+
+# ============================================================================
+# GET /feeds/episodes/{user_id}/{episode_id}/audio.mp3 (public endpoint, #391)
+#
+# Like the feed endpoint, this must not read the episodes table: FORCE RLS
+# returns zero rows without tenant context. The S3 key is derived from the
+# URL (build_podcast_s3_key), and the response is a 302 to a per-request
+# presigned URL. Only storage access is patched here.
+# ============================================================================
+
+def _patched_audio_service(file_exists=True, presigned="https://s3.example.com/presigned?sig=abc"):
+	"""Return a patch() for get_rss_service whose storage is fully mocked."""
+	mock_service = MagicMock()
+	mock_service.storage.file_exists = AsyncMock(return_value=file_exists)
+	mock_service.storage.generate_presigned_url = AsyncMock(return_value=presigned)
+	return patch("src.routers.rss_feed.RSSGenerationService", return_value=mock_service), mock_service
+
+
+@pytest.mark.asyncio
+async def test_public_audio_redirects_to_presigned_url(client):
+	"""302 redirect to a fresh presigned URL, no auth, no DB row required."""
+	user_id, episode_id = uuid4(), uuid4()
+	patcher, mock_service = _patched_audio_service()
+
+	with patcher:
+		response = await client.get(f"/feeds/episodes/{user_id}/{episode_id}/audio.mp3")
+
+	assert response.status_code == 302
+	assert response.headers["location"] == "https://s3.example.com/presigned?sig=abc"
+	# Redirect target is minted per request — must not be cached
+	assert response.headers["cache-control"] == "no-store"
+	# Key derived from URL path, matching the canonical episode key layout (#215)
+	expected_key = f"podcasts/user-{user_id}/episode-{episode_id}.mp3"
+	mock_service.storage.generate_presigned_url.assert_awaited_once()
+	assert mock_service.storage.generate_presigned_url.await_args.args[0] == expected_key
+
+
+@pytest.mark.asyncio
+async def test_public_audio_404_when_object_missing(client):
+	"""404 when the audio object does not exist in S3."""
+	patcher, _ = _patched_audio_service(file_exists=False)
+
+	with patcher:
+		response = await client.get(f"/feeds/episodes/{uuid4()}/{uuid4()}/audio.mp3")
+
+	assert response.status_code == 404
+	assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_public_audio_internal_error_hides_details(client):
+	"""S3 failures return a generic 500 without leaking internals."""
+	secret = "S3 throttled podcasts/internal/key.mp3"
+	patcher, mock_service = _patched_audio_service()
+	mock_service.storage.file_exists = AsyncMock(side_effect=RuntimeError(secret))
+
+	with patcher:
+		response = await client.get(f"/feeds/episodes/{uuid4()}/{uuid4()}/audio.mp3")
+
+	assert response.status_code == 500
+	assert response.json()["detail"] == "Failed to fetch episode audio."
+	assert secret not in response.text

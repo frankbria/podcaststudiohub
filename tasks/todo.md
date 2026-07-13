@@ -1,23 +1,40 @@
-# #389 — [P4.3.5] Regenerate endpoint hardcodes enable_distribution=False
+# #391 — [P4.3.6] RSS `<enclosure>` URLs embed private S3 URLs
 
-Status: SHIPPED — merged 2026-07-13 via PR #392 (squash, 8ca582a); issue #389 closed.
-All gates green: backend CI 1811 passed (full suite locally too), ruff clean, 12/12 CI
-checks incl. review bot (no defects). Demo posted to PR with outcome evidence against
-real API + Postgres + Redis: decoded the queued Celery message from the
-`podcast_generation` Redis queue showing `enable_distribution: true` + webhook
-platforms with the flag, and both flags false by default. Reviews: opencode (GLM)
-APPROVE pre-PR and post-PR (posted to PR); two advisory test-gap notes triaged —
-feature-flag-off negative test added, composition twins declined (identical
-delegation path already asserted).
+Status: IN PROGRESS — plan approved autonomously (no architectural fork; issue itself
+recommends the 302-presign endpoint, option 1).
 
-## What shipped
-`/generation/episodes/{id}/regenerate` now accepts `enable_composition` /
-`enable_distribution` Query params (defaults `False`, mirroring `/generate`) and
-passes them through the keyword-arg delegation (#213 guard kept). Default
-`enable_distribution=true` on regenerate was considered and rejected for symmetry
-with `/generate` — callers opt in explicitly, as the web generate action does (#388).
+## Problem
+`_build_episode_item` embeds `episode.s3_url` (private bucket → AccessDenied) in
+`<enclosure url>`. Feed XML is fetchable since #385, but platforms can't download audio.
 
-## Known limitation (documented in PR, no issue filed)
-The web UI still has no regenerate call; this makes distribution callable on
-regenerate via the API (the issue's minimum bar). A web regenerate button would be
-a separate feature request.
+## Approach (mirrors #385)
+Public unauthenticated API endpoint that 302-redirects to a per-request presigned S3 URL
+(fresh presign every fetch → no expiry problem; S3 target handles Range natively).
+
+**Forced adaptation vs the issue's sketched path**: episode audio key is
+`podcasts/user-{user_id}/episode-{episode_id}.mp3` (`build_podcast_s3_key`, #215) and
+`episodes` is FORCE RLS — an unauthenticated request has no tenant context, so no DB
+read is possible (#385 precedent). The URL must carry what the key derivation needs:
+`GET /feeds/episodes/{user_id}/{episode_id}/audio.mp3`
+`user_id` is already public in today's raw S3 enclosure URLs — no new exposure.
+
+## Steps (TDD)
+1. RED: tests
+   - service: enclosure URL is `{API_PUBLIC_BASE_URL}/feeds/episodes/{user_id}/{id}/audio.mp3`
+     when `episode.s3_key` is set; falls back to legacy `s3_url` behavior when not.
+   - router: 302 with Location = presigned URL, no auth, no DB read (only storage patched);
+     404 when object missing; 500 hides internals.
+2. GREEN:
+   - `rss_generation_service.py`: build API enclosure URL in `_build_episode_item`.
+   - `rss_feed.py`: new `public_router` route → derive key via `build_podcast_s3_key`,
+     `file_exists` → 404, `generate_presigned_url(key, 3600)` → 302 RedirectResponse,
+     `Cache-Control: no-store`.
+   - `public_router` already registered in main.py:134 — nothing to wire.
+3. Gates: pytest tests/ (CI parity), ruff, coverage ≥85, third-party review pre-PR + post-PR,
+   demo with outcome evidence, CI green, docs sync, merge.
+
+## Acceptance criteria
+- AC1: generated feed XML contains API enclosure URLs, not raw S3 URLs.
+- AC2: GET audio endpoint (no auth) → 302 to a presigned URL that actually serves the object.
+- AC3: missing object → 404; S3 errors → generic 500.
+- AC4: fresh presign per request (long-lived feed stays valid).

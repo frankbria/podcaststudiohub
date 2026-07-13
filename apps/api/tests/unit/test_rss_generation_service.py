@@ -55,8 +55,10 @@ def complete_episode():
 	"""Return a mock episode with complete generation status."""
 	episode = MagicMock()
 	episode.id = uuid4()
+	episode.user_id = uuid4()
 	episode.generation_status = "complete"
 	episode.s3_url = "https://s3.example.com/episodes/ep1.mp3"
+	episode.s3_key = f"podcasts/user-{episode.user_id}/episode-{episode.id}.mp3"
 	episode.file_size_bytes = 5242880
 	episode.duration_seconds = 300
 	episode.created_at = datetime(2025, 1, 15, 10, 0, 0, tzinfo=timezone.utc)
@@ -74,8 +76,10 @@ def draft_episode():
 	"""Return a mock episode with draft generation status."""
 	episode = MagicMock()
 	episode.id = uuid4()
+	episode.user_id = uuid4()
 	episode.generation_status = "draft"
 	episode.s3_url = None
+	episode.s3_key = None
 	episode.file_size_bytes = None
 	episode.duration_seconds = None
 	episode.created_at = datetime(2025, 1, 16, 10, 0, 0, tzinfo=timezone.utc)
@@ -152,9 +156,27 @@ class TestBuildRssDocument:
 		"""Test that enclosure element has correct attributes."""
 		xml_content = rss_service._build_rss_document(valid_project, [complete_episode])
 		assert 'enclosure' in xml_content
-		assert 'https://s3.example.com/episodes/ep1.mp3' in xml_content
 		assert 'audio/mpeg' in xml_content
 		assert '5242880' in xml_content
+
+	def test_enclosure_uses_public_api_audio_url(self, rss_service, valid_project, complete_episode):
+		"""Enclosure URL is the public API audio endpoint, never the private S3 URL (#391)."""
+		xml_content = rss_service._build_rss_document(valid_project, [complete_episode])
+		expected = (
+			f"http://localhost:8000/feeds/episodes/"
+			f"{complete_episode.user_id}/{complete_episode.id}/audio.mp3"
+		)
+		assert expected in xml_content
+		assert 'https://s3.example.com/episodes/ep1.mp3' not in xml_content
+
+	def test_enclosure_falls_back_to_s3_url_without_s3_key(
+		self, rss_service, valid_project, complete_episode
+	):
+		"""Episodes without an s3_key (local-only audio) keep the legacy s3_url enclosure."""
+		complete_episode.s3_key = None
+		xml_content = rss_service._build_rss_document(valid_project, [complete_episode])
+		assert 'https://s3.example.com/episodes/ep1.mp3' in xml_content
+		assert '/audio.mp3' not in xml_content
 
 	def test_guid_is_episode_id(self, rss_service, valid_project, complete_episode):
 		"""Test that guid element contains episode id."""

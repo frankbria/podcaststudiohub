@@ -1,9 +1,19 @@
 # Issue #382 — [P4.3.2] RSS feed is never regenerated when an episode completes
 
-Status: IN PROGRESS — implementation + review fixes committed; quality gates green
-(1805 passed full suite pre-fix run; diff coverage 100%; 5/5 mutation checks killed;
-opencode APPROVE; internal Critical fixed). Awaiting final full-suite run, then PR.
-Branch: `feature/issue-382-rss-regen-on-complete`
+Status: SHIPPED — merged 2026-07-13 via PR #386 (squash, 116eb99); issue #382 closed.
+All gates green: 1807 tests, diff coverage 100%, 5/5 mutations killed, demo 5/5 criteria
+verified with outcome evidence, opencode APPROVE pre- and post-PR, both PR bots clean.
+Included the Deploy to Development CI fix (22→33-byte JWT_SECRET_KEY): the "Run API
+tests" step now PASSES on the merge-triggered run. Branch deleted.
+
+REMAINING BLOCKER (out of CI's hands): the same run now fails at the later "Health
+Check" step — the API on the dev VPS crash-loops after deploy (pm2 ↺ 31 restarts at
+~3s uptime → nginx 502). This deploy was the first to reach the VPS since 2026-07-09
+(ca0d234); it jumped the host across #351/#373/#375/#379/#380/#384/#386 plus a
+124-uninstall/122-install dependency churn. Instant crash = import/startup failure,
+most likely against the host's local .env (not synced by deploys). Migrations 014→017
+ran clean. Diagnosis needs host logs (pm2 logs podcaststudiohub-api); SSH from the
+agent was permission-denied.
 
 ## Post-plan additions (review round)
 

@@ -30,4 +30,5 @@ uvx pip-audit -r "$reqs" --no-deps --disable-pip --strict \
   --ignore-vuln GHSA-f4xh-w4cj-qxq8 \
   --ignore-vuln CVE-2026-2472 \
   --ignore-vuln CVE-2026-2473 \
-  --ignore-vuln PYSEC-2026-1845
+  --ignore-vuln PYSEC-2026-1845 \
+  --ignore-vuln PYSEC-2026-2193

@@ -342,6 +342,133 @@ async def test_update_rss_feed_invalid_metadata(client, project_with_metadata):
 
 
 @pytest.mark.asyncio
+async def test_update_rss_feed_null_clears_optional_field(client, project_with_metadata):
+	"""Explicit null on an optional field deletes it from the merged metadata (#381)."""
+	project_id, headers = project_with_metadata
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.generate_rss_for_project.return_value = make_mock_rss_feed(project_id)
+		MockService.return_value = mock_instance
+
+		response = await client.put(
+			f"/projects/{project_id}/rss-feed",
+			headers=headers,
+			json={"podcast_metadata": {"category": None}},
+		)
+
+	assert response.status_code == 200
+	proj = await client.get(f"/projects/{project_id}", headers=headers)
+	metadata = proj.json()["podcast_metadata"]
+	assert "category" not in metadata
+	assert metadata["language"] == "en-US"
+	assert metadata["show_title"] == "My Test Podcast"
+
+
+@pytest.mark.asyncio
+async def test_update_rss_feed_empty_string_clears_optional_field(client, project_with_metadata):
+	"""An empty/whitespace string on an optional field deletes it, same as null (#381)."""
+	project_id, headers = project_with_metadata
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.generate_rss_for_project.return_value = make_mock_rss_feed(project_id)
+		MockService.return_value = mock_instance
+
+		response = await client.put(
+			f"/projects/{project_id}/rss-feed",
+			headers=headers,
+			json={"podcast_metadata": {"artwork_url": "", "copyright": "  "}},
+		)
+
+	assert response.status_code == 200
+	proj = await client.get(f"/projects/{project_id}", headers=headers)
+	metadata = proj.json()["podcast_metadata"]
+	assert "artwork_url" not in metadata
+	assert "copyright" not in metadata
+	assert metadata["category"] == "Technology"
+
+
+@pytest.mark.asyncio
+async def test_update_rss_feed_null_explicit_unsets_key(client, project_with_metadata):
+	"""Null explicit deletes the key; generation defaults it to false via .get() (#381)."""
+	project_id, headers = project_with_metadata
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.generate_rss_for_project.return_value = make_mock_rss_feed(project_id)
+		MockService.return_value = mock_instance
+
+		response = await client.put(
+			f"/projects/{project_id}/rss-feed",
+			headers=headers,
+			json={"podcast_metadata": {"explicit": None}},
+		)
+
+	assert response.status_code == 200
+	proj = await client.get(f"/projects/{project_id}", headers=headers)
+	assert "explicit" not in proj.json()["podcast_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_update_rss_feed_empty_object_is_noop(client, project_with_metadata):
+	"""An empty podcast_metadata object changes nothing (#381)."""
+	project_id, headers = project_with_metadata
+
+	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
+		mock_instance = AsyncMock()
+		mock_instance.generate_rss_for_project.return_value = make_mock_rss_feed(project_id)
+		MockService.return_value = mock_instance
+
+		response = await client.put(
+			f"/projects/{project_id}/rss-feed",
+			headers=headers,
+			json={"podcast_metadata": {}},
+		)
+
+	assert response.status_code == 200
+	proj = await client.get(f"/projects/{project_id}", headers=headers)
+	metadata = proj.json()["podcast_metadata"]
+	assert metadata["show_title"] == "My Test Podcast"
+	assert metadata["category"] == "Technology"
+	assert metadata["language"] == "en-US"
+
+
+@pytest.mark.asyncio
+async def test_update_rss_feed_null_required_field_rejected(client, project_with_metadata):
+	"""Explicit null on a required field is rejected 422 before any write (#381)."""
+	project_id, headers = project_with_metadata
+
+	response = await client.put(
+		f"/projects/{project_id}/rss-feed",
+		headers=headers,
+		json={"podcast_metadata": {"show_title": None, "category": "Science"}},
+	)
+
+	assert response.status_code == 422
+	proj = await client.get(f"/projects/{project_id}", headers=headers)
+	metadata = proj.json()["podcast_metadata"]
+	assert metadata["show_title"] == "My Test Podcast"
+	assert metadata["category"] == "Technology"
+
+
+@pytest.mark.asyncio
+async def test_update_rss_feed_empty_required_field_rejected(client, project_with_metadata):
+	"""A blank string on a required field is rejected 422 (#381)."""
+	project_id, headers = project_with_metadata
+
+	response = await client.put(
+		f"/projects/{project_id}/rss-feed",
+		headers=headers,
+		json={"podcast_metadata": {"author": "  "}},
+	)
+
+	assert response.status_code == 422
+	proj = await client.get(f"/projects/{project_id}", headers=headers)
+	assert proj.json()["podcast_metadata"]["author"] == "Test Author"
+
+
+@pytest.mark.asyncio
 async def test_update_rss_feed_internal_error_hides_details(client, project_with_metadata):
 	"""500 during regeneration returns a generic message, not exception internals."""
 	project_id, headers = project_with_metadata

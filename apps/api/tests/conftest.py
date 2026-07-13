@@ -115,6 +115,7 @@ async def client(test_db):
     This fixture properly handles tenant context for RLS by accepting the Request parameter.
     """
     from fastapi import HTTPException, Request
+    from fastapi.exceptions import RequestValidationError
     from src.database import arm_tenant_context, set_tenant_context
 
     # Override the database dependency with proper tenant context support
@@ -134,10 +135,10 @@ async def client(test_db):
                 await set_tenant_context(test_db, str(request.state.tenant_id))
 
             yield test_db
-        except HTTPException:
-            # Expected control-flow responses (402/404/409, …) are NOT database
-            # failures. Production uses a session-per-request, so an HTTPException
-            # there never rolls back other requests' data. The test session is
+        except (HTTPException, RequestValidationError):
+            # Expected control-flow responses (402/404/409, and request-validation
+            # 422s) are NOT database failures. Production uses a session-per-request,
+            # so these never roll back other requests' data. The test session is
             # shared across all requests in a test, so rolling back here would
             # wipe earlier writes (e.g. the registered user) and break any
             # assertion made after a rejected request. Re-raise without rollback.

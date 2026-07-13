@@ -1,26 +1,34 @@
-# #391 — [P4.3.6] RSS `<enclosure>` URLs embed private S3 URLs
+# Issue #381 — [P4.4.1] Clearing optional podcast metadata fields does not persist
 
-Status: SHIPPED — merged 2026-07-13 via PR #393 (squash, 0b68620); issue #391 closed.
-All gates green: 12/12 CI checks (backend 1818 passed), ruff clean, review bot 0 findings
-across both synchronize rounds. Demo posted to PR with outcome evidence against the real
-S3 bucket: real upload → feed XML shows API enclosure URL (no raw S3), HEAD+GET → 302 to
-presigned URL, downloaded bytes identical, Range served, random UUIDs → 404, two requests
-→ distinct signatures. Demo caught a real bug pre-merge: 405 on HEAD (FastAPI doesn't add
-HEAD to GET routes; platforms HEAD enclosures) — fixed with methods=["GET","HEAD"] + test.
+Plan source: self-authored (no plan comment on issue). Deferred from PR #380 finding S4.
 
-## What shipped
-Enclosures now emit `{API_PUBLIC_BASE_URL}/feeds/episodes/{user_id}/{episode_id}/audio.mp3`;
-the public endpoint 302-redirects to a per-request presigned URL (1h, Cache-Control:
-no-store), 404s via a real S3 HEAD check, and derives the key from the URL
-(`build_podcast_s3_key`, #215) — no DB read, episodes is FORCE RLS (#385 precedent).
-Episodes without `s3_key` keep the legacy `s3_url` fallback. The issue's sketched
-project_id path was underivable; URL carries user_id (already exposed in old raw S3 URLs).
+## Design decision (autonomous — no fork)
+JSON-merge-patch semantics (RFC 7386): an optional metadata key explicitly sent as
+`null` — or as an empty/whitespace string — is **deleted** from the merged
+`podcast_metadata`. Required keys (`show_title`, `author`, `description`) cannot be
+cleared: explicit `null`/empty is rejected 422 at the schema layer **before** any DB
+write (avoids committing broken metadata pre-regeneration). Frontend always sends the
+five optional fields, `null` when the form value is empty.
 
-## Review triage of note
-opencode (GLM) pre-PR Major "remove file_exists (TOCTOU)" was declined as factually wrong:
-presigning is local computation that never fails on a missing key, so the HEAD check is
-the only real 404 path. Post-PR review + both bot rounds: APPROVE / 0 findings.
+## Steps
+1. **Backend tests first** (`apps/api/tests/test_rss_feed.py`):
+   - PUT with `category: null` deletes the key from stored metadata (and other keys survive)
+   - PUT with `artwork_url: ""` deletes the key (empty string same as null)
+   - PUT with `show_title: null` → 422, metadata unchanged
+   - Existing omit-field merge behavior unchanged
+2. **Backend impl**:
+   - `apps/api/src/schemas/rss_feed.py`: `model_validator` on `PodcastMetadataUpdate`
+     rejecting explicitly-set null/blank for required keys
+   - `apps/api/src/routers/rss_feed.py`: merge loop — explicitly-set `None`/blank-string
+     values pop the key; others overwrite
+3. **Frontend test** (`apps/web/__tests__/app/distribution/page.test.tsx`):
+   PUT body carries `category: null` (etc.) when the dialog fields are cleared
+4. **Frontend impl** (`apps/web/src/app/(auth)/projects/[id]/distribution/page.tsx`):
+   replace conditional spreads with always-send `field: value || null`;
+   widen `RawPodcastMetadata` optional fields to `string | null`
 
-## Also in this PR (unrelated, blocked CI)
-PYSEC-2026-2193 (langchain-core 0.3.86, fix only in 1.2.22) added to the pip-audit ignore
-list — structurally capped by podcastfy 0.4.1's langchain<0.4 pin; noted on #363.
+## Acceptance criteria
+- [ ] Clearing an optional field (category/language/copyright/artwork_url/website_url) in the dialog removes it from `podcast_metadata` and the regenerated feed
+- [ ] Required fields cannot be cleared (422, no partial write)
+- [ ] Setting/updating fields still merges as before
+- [ ] Backend + frontend tests green; lint green

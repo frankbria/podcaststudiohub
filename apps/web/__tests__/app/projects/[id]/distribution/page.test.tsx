@@ -288,6 +288,11 @@ describe('DistributionPage', () => {
               author: 'Jane Doe',
               description: 'A great show about things',
               explicit: false,
+              category: null,
+              language: null,
+              copyright: null,
+              artwork_url: null,
+              website_url: null,
             },
           }),
         })
@@ -295,6 +300,53 @@ describe('DistributionPage', () => {
     )
     expect(showSuccessToast).toHaveBeenCalledWith('Podcast metadata updated')
     await waitFor(() => expect(screen.queryByText('Edit Podcast Metadata')).not.toBeInTheDocument())
+  })
+
+  it('sends null for an optional field the user cleared so the backend deletes it (#381)', async () => {
+    const projectWithCategory = {
+      ...project,
+      podcast_metadata: { ...project.podcast_metadata, category: 'Technology' },
+    }
+    const fetchMock = withOverride(
+      withOverride(
+        mockFetchRouter(),
+        (url, init) => url === '/api/proxy/projects/p1' && (init?.method ?? 'GET') === 'GET',
+        () => Promise.resolve({ ok: true, json: async () => projectWithCategory })
+      ),
+      (url, init) => url === '/api/proxy/projects/p1/rss-feed' && (init?.method ?? 'GET') === 'PUT',
+      () => Promise.resolve({ ok: true, json: async () => feed })
+    )
+    global.fetch = fetchMock
+
+    render(<DistributionPage />)
+    await screen.findByText('Podcast RSS Feed')
+
+    await userEvent.click(screen.getByRole('button', { name: /edit podcast metadata/i }))
+    const categoryInput = screen.getByDisplayValue('Technology')
+    await userEvent.clear(categoryInput)
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/proxy/projects/p1/rss-feed',
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({
+            podcast_metadata: {
+              show_title: 'My Podcast Show',
+              author: 'Jane Doe',
+              description: 'A great show about things',
+              explicit: false,
+              category: null,
+              language: null,
+              copyright: null,
+              artwork_url: null,
+              website_url: null,
+            },
+          }),
+        })
+      )
+    )
   })
 
   it('shows the detail toast and keeps the dialog open on a 422 metadata update failure', async () => {

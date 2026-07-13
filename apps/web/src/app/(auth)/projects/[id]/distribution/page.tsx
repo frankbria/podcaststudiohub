@@ -42,12 +42,14 @@ interface RawPodcastMetadata {
   show_title?: string
   author?: string
   description?: string
-  category?: string
-  language?: string
+  // Optional fields are string | null: sending an explicit null tells the
+  // backend to delete the key from the merged metadata (#381).
+  category?: string | null
+  language?: string | null
   explicit?: boolean
-  copyright?: string
-  artwork_url?: string
-  website_url?: string
+  copyright?: string | null
+  artwork_url?: string | null
+  website_url?: string | null
 }
 
 function mapPodcastMetadataToForm(
@@ -160,11 +162,11 @@ export default function DistributionPage() {
       author: data.author,
       description: data.description,
       explicit: data.explicit ?? false,
-      ...(data.category ? { category: data.category } : {}),
-      ...(data.language ? { language: data.language } : {}),
-      ...(data.copyright ? { copyright: data.copyright } : {}),
-      ...(data.artworkUrl ? { artwork_url: data.artworkUrl } : {}),
-      ...(data.websiteUrl ? { website_url: data.websiteUrl } : {}),
+      category: data.category || null,
+      language: data.language || null,
+      copyright: data.copyright || null,
+      artwork_url: data.artworkUrl || null,
+      website_url: data.websiteUrl || null,
     }
 
     try {

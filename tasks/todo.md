@@ -1,7 +1,21 @@
 # Issue #382 — [P4.3.2] RSS feed is never regenerated when an episode completes
 
-Status: IN PROGRESS. Plan source: self-authored (no plan comment on issue).
+Status: IN PROGRESS — implementation + review fixes committed; quality gates green
+(1805 passed full suite pre-fix run; diff coverage 100%; 5/5 mutation checks killed;
+opencode APPROVE; internal Critical fixed). Awaiting final full-suite run, then PR.
 Branch: `feature/issue-382-rss-regen-on-complete`
+
+## Post-plan additions (review round)
+
+- **Critical (internal review, empirically confirmed)**: asyncio.run + shared pooled
+  async engine fails on the 2nd call per worker process ("Future attached to a different
+  loop"). Fixed with `celery_async_session()` in database.py — per-call NullPool engine,
+  disposed after use. Applied to rss_refresh AND content_extraction (same latent bug).
+- **Major**: finalize's refresh call sat inside the retry-bearing try; a refresh escape
+  would self.retry and eventually mark a completed episode failed. Now locally guarded +
+  regression test.
+- Skipped (nitpick, moot): finalize reads episode ids after commit — safe, both session
+  factories set expire_on_commit=False.
 
 ## Problem
 

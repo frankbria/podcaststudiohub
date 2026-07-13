@@ -57,5 +57,9 @@ class RSSFeedUpdate(BaseModel):
 
 	podcast_metadata: PodcastMetadataUpdate = Field(
 		...,
-		description="Podcast metadata fields to update (triggers feed regeneration)"
+		description=(
+			"Podcast metadata fields to update (triggers feed regeneration). "
+			"Explicit null or blank string deletes an optional key; omitted "
+			"fields are left unchanged. Required keys cannot be cleared."
+		)
 	)

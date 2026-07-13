@@ -28,7 +28,16 @@ five optional fields, `null` when the form value is empty.
    widen `RawPodcastMetadata` optional fields to `string | null`
 
 ## Acceptance criteria
-- [ ] Clearing an optional field (category/language/copyright/artwork_url/website_url) in the dialog removes it from `podcast_metadata` and the regenerated feed
-- [ ] Required fields cannot be cleared (422, no partial write)
-- [ ] Setting/updating fields still merges as before
-- [ ] Backend + frontend tests green; lint green
+- [x] Clearing an optional field (category/language/copyright/artwork_url/website_url) in the dialog removes it from `podcast_metadata` and the regenerated feed — demoed against real stack (API + real dialog), posted to PR #394
+- [x] Required fields cannot be cleared (422, no partial write) — demoed
+- [x] Setting/updating fields still merges as before — demoed
+- [x] Backend + frontend tests green; lint green — full suites + CI green
+
+## Status (2026-07-13)
+PR #394 open; all code CI gates green (backend/frontend/playwright/migrations/coverage/review);
+demo + both third-party reviews (pre-PR: 1 Minor + 2 Nits addressed; post-PR: no findings) posted.
+**BLOCKED on user decision:** CI dependency audit fails on NEW upstream CVE PYSEC-2026-2562
+(langchain-core 0.3.86, fix only in 1.2.11 — structurally capped by podcastfy==0.4.1, upgrade
+tracked in #363). Proposed ignore-list addition to apps/api/scripts/security-audit.sh is in the
+working tree UNCOMMITTED (permission classifier requires user sign-off on security-gate changes).
+Also uncommitted: docstring/OpenAPI clear-semantics notes in rss_feed router+schema.

@@ -161,7 +161,9 @@ async def update_rss_feed(
 	Update podcast metadata and regenerate RSS feed.
 
 	Merges the provided podcast_metadata fields into the project's existing
-	podcast_metadata, then triggers feed regeneration.
+	podcast_metadata, then triggers feed regeneration. An explicitly-sent null
+	or blank string deletes the key (optional fields only — clearing show_title,
+	author, or description is rejected 422); omitted fields are left unchanged.
 
 	Args:
 		project_id: UUID of the project

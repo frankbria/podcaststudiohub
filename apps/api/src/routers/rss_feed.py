@@ -272,7 +272,11 @@ async def get_public_rss_feed(
 	)
 
 
-@public_router.get("/feeds/episodes/{user_id}/{episode_id}/audio.mp3")
+# methods= is explicit because FastAPI does not add HEAD to GET routes, and
+# podcast platforms HEAD enclosure URLs before downloading (405 breaks ingestion)
+@public_router.api_route(
+	"/feeds/episodes/{user_id}/{episode_id}/audio.mp3", methods=["GET", "HEAD"]
+)
 async def get_public_episode_audio(
 	user_id: UUID,
 	episode_id: UUID,

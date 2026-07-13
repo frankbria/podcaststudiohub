@@ -576,3 +576,15 @@ async def test_public_audio_internal_error_hides_details(client):
 	assert response.status_code == 500
 	assert response.json()["detail"] == "Failed to fetch episode audio."
 	assert secret not in response.text
+
+
+@pytest.mark.asyncio
+async def test_public_audio_supports_head(client):
+	"""Podcast platforms HEAD enclosure URLs before downloading — must 302, not 405."""
+	patcher, _ = _patched_audio_service()
+
+	with patcher:
+		response = await client.head(f"/feeds/episodes/{uuid4()}/{uuid4()}/audio.mp3")
+
+	assert response.status_code == 302
+	assert response.headers["location"] == "https://s3.example.com/presigned?sig=abc"

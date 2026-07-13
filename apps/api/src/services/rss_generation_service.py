@@ -13,9 +13,19 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..models import Episode, Project, RSSFeed
 from .storage_service import StorageService
 from ..utils.datetime_utils import utcnow
+
+
+def rss_feed_s3_key(project_id: UUID) -> str:
+	"""Deterministic S3 key for a project's RSS feed.
+
+	Shared with the public feed endpoint, which derives the key from the URL
+	instead of reading the RLS-protected rss_feeds table (#385).
+	"""
+	return f"rss-feeds/{project_id}/feed.xml"
 
 
 class RSSGenerationService:
@@ -329,7 +339,12 @@ class RSSGenerationService:
 
 	async def _upload_rss_to_s3(self, project_id: UUID, xml_content: str) -> tuple[str, str]:
 		"""
-		Upload RSS XML content to S3 with public-read ACL.
+		Upload RSS XML content to S3 and build the public feed URL.
+
+		The returned public_url is the API's public endpoint, NOT the S3
+		object URL: the bucket has no public-read policy, so the raw S3 URL
+		returns AccessDenied to podcast platforms (#385). The endpoint
+		(GET /feeds/{project_id}/podcast.xml) serves the stored object.
 
 		Args:
 			project_id: Project UUID (used in S3 key path)
@@ -341,7 +356,7 @@ class RSSGenerationService:
 		import tempfile
 		import os
 
-		s3_key = f"rss-feeds/{project_id}/feed.xml"
+		s3_key = rss_feed_s3_key(project_id)
 
 		# Write to temp file for upload
 		with tempfile.NamedTemporaryFile(
@@ -354,7 +369,7 @@ class RSSGenerationService:
 			tmp_path = tmp.name
 
 		try:
-			public_url = await self.storage.upload_file(
+			await self.storage.upload_file(
 				file_path=tmp_path,
 				s3_key=s3_key,
 				content_type="application/rss+xml",
@@ -363,6 +378,9 @@ class RSSGenerationService:
 		finally:
 			os.unlink(tmp_path)
 
+		public_url = (
+			f"{settings.API_PUBLIC_BASE_URL.rstrip('/')}/feeds/{project_id}/podcast.xml"
+		)
 		return s3_key, public_url
 
 	async def _get_or_create_rss_feed(

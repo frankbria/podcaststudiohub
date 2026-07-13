@@ -69,7 +69,7 @@ def make_mock_rss_feed(project_id):
 	feed.project_id = project_id
 	feed.tenant_id = uuid4()
 	feed.s3_key = f"rss-feeds/{project_id}/feed.xml"
-	feed.public_url = f"https://bucket.s3.amazonaws.com/rss-feeds/{project_id}/feed.xml"
+	feed.public_url = f"http://localhost:8000/feeds/{project_id}/podcast.xml"
 	feed.validation_status = {}
 	feed.last_generated = utcnow()
 	feed.created_at = utcnow()
@@ -365,27 +365,45 @@ async def test_update_rss_feed_internal_error_hides_details(client, project_with
 
 # ============================================================================
 # GET /feeds/{project_id}/podcast.xml (public endpoint)
+#
+# The endpoint must not read the rss_feeds table: an unauthenticated request
+# has no tenant context, so FORCE RLS returns zero rows and the feed would
+# 404 for every real caller (#385). Only S3 access is patched here — any
+# reintroduced DB dependency makes these tests fail.
 # ============================================================================
 
 @pytest.mark.asyncio
 async def test_public_feed_success(client, project_with_metadata):
-	"""Test public RSS feed returns valid XML without authentication."""
+	"""Public RSS feed returns valid XML without authentication or a DB read."""
 	project_id, _ = project_with_metadata
 
 	sample_xml = b'<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>Test</title></channel></rss>'
-	mock_feed = make_mock_rss_feed(project_id)
 
-	with patch("src.routers.rss_feed.RSSGenerationService") as MockService, \
-	     patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(return_value=sample_xml)):
-		mock_instance = AsyncMock()
-		mock_instance.get_rss_feed.return_value = mock_feed
-		MockService.return_value = mock_instance
-
+	with patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(return_value=sample_xml)) as mock_fetch:
 		# No auth headers — public endpoint
 		response = await client.get(f"/feeds/{project_id}/podcast.xml")
 
 	assert response.status_code == 200
 	assert "application/rss+xml" in response.headers["content-type"]
+	assert b"<rss" in response.content
+	# s3_key is derived from the URL, not from a tenant-scoped DB row
+	assert mock_fetch.await_args.args[1] == f"rss-feeds/{project_id}/feed.xml"
+
+
+@pytest.mark.asyncio
+async def test_public_feed_success_without_any_db_row(client):
+	"""The feed serves even when no rss_feeds row is visible (FORCE RLS path).
+
+	No project, no feed row, no mocked service — only S3 is patched. This is
+	the exact situation of a real unauthenticated platform fetch (#385).
+	"""
+	project_id = uuid4()
+	sample_xml = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'
+
+	with patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(return_value=sample_xml)):
+		response = await client.get(f"/feeds/{project_id}/podcast.xml")
+
+	assert response.status_code == 200
 	assert b"<rss" in response.content
 
 
@@ -395,14 +413,8 @@ async def test_public_feed_cache_headers(client, project_with_metadata):
 	project_id, _ = project_with_metadata
 
 	sample_xml = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'
-	mock_feed = make_mock_rss_feed(project_id)
 
-	with patch("src.routers.rss_feed.RSSGenerationService") as MockService, \
-	     patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(return_value=sample_xml)):
-		mock_instance = AsyncMock()
-		mock_instance.get_rss_feed.return_value = mock_feed
-		MockService.return_value = mock_instance
-
+	with patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(return_value=sample_xml)):
 		response = await client.get(f"/feeds/{project_id}/podcast.xml")
 
 	assert response.status_code == 200
@@ -412,14 +424,10 @@ async def test_public_feed_cache_headers(client, project_with_metadata):
 
 @pytest.mark.asyncio
 async def test_public_feed_not_found_when_no_feed(client, project_with_metadata):
-	"""Test 404 when RSS feed has not been generated."""
+	"""404 when the feed object does not exist in S3 (never generated)."""
 	project_id, _ = project_with_metadata
 
-	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
-		mock_instance = AsyncMock()
-		mock_instance.get_rss_feed.return_value = None
-		MockService.return_value = mock_instance
-
+	with patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(side_effect=FileNotFoundError())):
 		response = await client.get(f"/feeds/{project_id}/podcast.xml")
 
 	assert response.status_code == 404
@@ -430,15 +438,9 @@ async def test_public_feed_not_found_when_no_feed(client, project_with_metadata)
 async def test_public_feed_internal_error_hides_details(client, project_with_metadata):
 	"""500 while fetching from S3 returns a generic message, not exception internals."""
 	project_id, _ = project_with_metadata
-	secret = "S3 NoSuchKey rss-feeds/internal/path.xml"
-	mock_feed = make_mock_rss_feed(project_id)
+	secret = "S3 throttled rss-feeds/internal/path.xml"
 
-	with patch("src.routers.rss_feed.RSSGenerationService") as MockService, \
-	     patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(side_effect=RuntimeError(secret))):
-		mock_instance = AsyncMock()
-		mock_instance.get_rss_feed.return_value = mock_feed
-		MockService.return_value = mock_instance
-
+	with patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(side_effect=RuntimeError(secret))):
 		response = await client.get(f"/feeds/{project_id}/podcast.xml")
 
 	assert response.status_code == 500
@@ -451,11 +453,7 @@ async def test_public_feed_not_found_for_missing_project(client):
 	"""Test 404 for completely non-existent project."""
 	nonexistent_id = uuid4()
 
-	with patch("src.routers.rss_feed.RSSGenerationService") as MockService:
-		mock_instance = AsyncMock()
-		mock_instance.get_rss_feed.return_value = None
-		MockService.return_value = mock_instance
-
+	with patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(side_effect=FileNotFoundError())):
 		response = await client.get(f"/feeds/{nonexistent_id}/podcast.xml")
 
 	assert response.status_code == 404
@@ -467,14 +465,8 @@ async def test_public_feed_accessible_without_jwt(client, project_with_metadata)
 	project_id, _ = project_with_metadata
 
 	sample_xml = b'<?xml version="1.0"?><rss version="2.0"><channel><title>Test</title></channel></rss>'
-	mock_feed = make_mock_rss_feed(project_id)
 
-	with patch("src.routers.rss_feed.RSSGenerationService") as MockService, \
-	     patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(return_value=sample_xml)):
-		mock_instance = AsyncMock()
-		mock_instance.get_rss_feed.return_value = mock_feed
-		MockService.return_value = mock_instance
-
+	with patch("src.routers.rss_feed._fetch_rss_from_s3", new=AsyncMock(return_value=sample_xml)):
 		# Explicitly no headers
 		response = await client.get(
 			f"/feeds/{project_id}/podcast.xml",

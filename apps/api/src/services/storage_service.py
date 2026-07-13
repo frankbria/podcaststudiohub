@@ -103,6 +103,9 @@ class StorageService:
 
         Returns:
             Local file path
+
+        Raises:
+            FileNotFoundError: If the object does not exist in the bucket.
         """
         try:
             # boto3 is synchronous; run it off the event loop so concurrent
@@ -116,6 +119,10 @@ class StorageService:
             return local_path
 
         except ClientError as e:
+            # download_file surfaces a missing key as HeadObject "404";
+            # direct GetObject calls report "NoSuchKey".
+            if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                raise FileNotFoundError(f"S3 object not found: {s3_key}") from e
             raise Exception(f"Failed to download file from S3: {str(e)}")
 
     async def delete_file(self, s3_key: str) -> None:

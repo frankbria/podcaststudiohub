@@ -153,8 +153,24 @@ async def test_download_file_success_returns_local_path(service, mock_boto3_clie
 
 @pytest.mark.asyncio
 async def test_download_file_client_error_raises(service, mock_boto3_client):
-	mock_boto3_client.download_file.side_effect = _make_client_error()
+	mock_boto3_client.download_file.side_effect = _make_client_error("AccessDenied")
 	with pytest.raises(Exception, match="Failed to download"):
+		await service.download_file("key.mp3", "/tmp/local.mp3")
+
+
+@pytest.mark.asyncio
+async def test_download_file_404_raises_file_not_found(service, mock_boto3_client):
+	# boto3 surfaces a missing key from download_file as ClientError code "404"
+	# (HeadObject); callers need to distinguish it from real failures (#385).
+	mock_boto3_client.download_file.side_effect = _make_client_error("404")
+	with pytest.raises(FileNotFoundError):
+		await service.download_file("key.mp3", "/tmp/local.mp3")
+
+
+@pytest.mark.asyncio
+async def test_download_file_no_such_key_raises_file_not_found(service, mock_boto3_client):
+	mock_boto3_client.download_file.side_effect = _make_client_error("NoSuchKey")
+	with pytest.raises(FileNotFoundError):
 		await service.download_file("key.mp3", "/tmp/local.mp3")
 
 

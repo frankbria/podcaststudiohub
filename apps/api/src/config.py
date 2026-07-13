@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     EMAIL_FROM: str = "noreply@podcaststudiohub.com"
     EMAIL_FROM_NAME: str = "Podcastfy"
     FRONTEND_URL: str = "http://localhost:3000"
+    # Public origin of this API, used to build externally fetchable URLs
+    # (e.g. RSSFeed.public_url -> {API_PUBLIC_BASE_URL}/feeds/{id}/podcast.xml).
+    # The raw S3 URL is AccessDenied — the bucket has no public-read policy (#385).
+    API_PUBLIC_BASE_URL: str = "http://localhost:8000"
     EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS: int = 24
 
     # Logging

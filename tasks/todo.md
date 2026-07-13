@@ -1,58 +1,71 @@
-# Issue #383 — [P4.3.3] Web UI never enables distribution
+# Issue #385 — [P4.3.4] RSS feed public_url returns S3 AccessDenied
 
-Status: SHIPPED — merged 2026-07-13 via PR #388 (squash, 28833a8); issue #383 closed.
-All gates green: web 490/490 tests, lint + tsc clean, full CI (backend 15m39s incl.
-coverage + quality gate) green. Demo 4/4 criteria verified with outcome evidence
-(real next dev + real /api/proxy against a logging stub backend; stub log shows
-`POST /generation/episodes/ep-demo/generate?enable_distribution=true`; warning- and
-error-toast screenshots). Reviews: codex pre-PR approve (opencode timed out that
-round), opencode post-PR APPROVE posted to the PR. Follow-up filed: #389 (P4.3.5,
-regenerate endpoint hardcodes enable_distribution=False). Branch deleted.
+Status: IN PROGRESS. Plan self-authored (no plan comment on the issue).
 
 ## Problem
 
-`generatePodcast` in `apps/web/src/app/(auth)/episodes/[id]/page.tsx:481-484` POSTs
-`/api/proxy/generation/episodes/{id}/generate` with no query params. The backend defaults
-`enable_distribution=false`, so platform distribution (#316's purpose) is unreachable from
-the web UI.
+`RSSFeed.public_url` stores the raw S3 URL
+(`https://{bucket}.s3.{region}.amazonaws.com/rss-feeds/{project_id}/feed.xml`).
+The bucket is ACL-disabled with no public-read policy, so the URL returns
+AccessDenied — the whole RSS distribution model (#315) is dead end-to-end.
 
-## Key codebase facts (verified by exploration)
+**Worse (found in exploration):** the existing public endpoint
+`GET /feeds/{project_id}/podcast.xml` (`src/routers/rss_feed.py:219`) is itself
+broken for real unauthenticated callers: it reads `rss_feeds` via `get_db` with
+no tenant context, and FORCE RLS (`tenant_id = current_setting('app.tenant_id',
+true)::uuid`, migration 003/014) yields zero rows → 404 for everyone. Existing
+tests mock `RSSGenerationService`, so they never caught it.
 
-- Backend `generate_podcast` (`apps/api/src/routers/generation.py:81-94`) takes
-  `enable_distribution: bool = Query(default=False)`. It is honored **only** when ALL of:
-  `settings.ENABLE_PLATFORM_DISTRIBUTION` is on (line ~200), `AWS_S3_BUCKET` set (~245),
-  and the project has active targets (`is_active`, project- or account-scoped;
-  no targets → chain falls through to the normal path, logged, no error).
-- `enable_composition` is NOT required for distribution (chain is upload → distribute).
-- #378 pre-flight warnings already flow back on the 202 (`warnings: string[]`) and the
-  page already toasts them (page.tsx:485-493).
-- `/api/proxy/[...path]/route.ts:71-73` forwards query strings verbatim.
-- The frontend has NO way to read `ENABLE_PLATFORM_DISTRIBUTION` (no feature-flag
-  endpoint exists) and no distribution-target fetch on the episode page.
+## Decision (autonomous, per issue's own recommendation)
 
-## Decision (auto-approved, not an architectural fork)
+**Option B** — serve feeds through the API's public endpoint and store that URL
+as `public_url`. No AWS bucket-policy change (Option A rejected: infra change
+outside the repo, and it would make private-bucket posture inconsistent).
 
-**Always pass `enable_distribution=true` from the generate action.** The issue offers
-"automatically or via a checkbox"; automatic is the sanctioned safe default because the
-server already performs the exact conditional the issue asks for (flag on + active
-targets), and no-ops safely otherwise. A client-side targets fetch would duplicate that
-check; a checkbox is unneeded UI (users opt in/out by activating/deactivating targets in
-the #316 UI) — YAGNI. Documented as a Known Limitation in the PR (no per-episode opt-out).
+Sub-decisions:
+- New setting `API_PUBLIC_BASE_URL` (no existing API-base setting; `FRONTEND_URL`
+  is the Next.js app). Default `http://localhost:8000`.
+- Fix the public endpoint's RLS problem by **removing the tenant-scoped DB read**:
+  the s3_key is deterministic (`rss-feeds/{project_id}/feed.xml`), so download
+  straight from S3 and 404 when the object doesn't exist. Lazy + correct; avoids
+  a SECURITY DEFINER migration. UUIDs are unguessable; feeds are public by design.
+- Keep the S3 upload + refresh hook (#382) as the content store. NOT switching the
+  endpoint to render fresh XML from DB — that would need RLS-bypassing reads of
+  episodes/projects (scope creep; freshness is already handled by rss_refresh).
 
-## Steps (TDD)
+## Steps
 
-1. Branch `fix/383-web-generate-enable-distribution` off main.
-2. RED — `apps/web/__tests__/app/episodes/[id]/page.test.tsx`:
-   - Update exact-match assertion (lines ~204-222) to expect
-     `/api/proxy/generation/episodes/ep1/generate?enable_distribution=true`.
-3. GREEN — page.tsx:482: append `?enable_distribution=true`; update the adjacent comment.
-4. Gates: jest (web), lint, tsc; deslop scan; opencode pre-PR review; PR with Known
-   Limitations; post-PR opencode review comment; demo (hard gate — outcome evidence that
-   the request carries the param); CI green + feedback triage; docs sync; merge.
+1. **Config**: add `API_PUBLIC_BASE_URL: str = "http://localhost:8000"` to
+   `src/config.py`; add to `apps/api/.env.example` and root `.env.example`.
+2. **StorageService.download_file** (`src/services/storage_service.py:96`):
+   raise `FileNotFoundError` on ClientError 404/NoSuchKey instead of generic
+   `Exception`, so callers can distinguish missing objects.
+3. **Public endpoint** (`src/routers/rss_feed.py:219-297`): drop the
+   `get_rss_feed` DB read; build `s3_key` deterministically; return 404 on
+   `FileNotFoundError`, 500 on other storage errors. Remove now-unused `db` /
+   `rss_service.get_rss_feed` usage (keep service dep for `.storage`).
+4. **public_url construction** (`src/services/rss_generation_service.py`
+   `_upload_rss_to_s3`/`_update_rss_feed` ~357/421): set
+   `public_url = f"{settings.API_PUBLIC_BASE_URL.rstrip('/')}/feeds/{project_id}/podcast.xml"`.
+   Refresh task (#382) and distribution metadata pick this up automatically.
+5. **Tests (TDD — write first)**:
+   - `tests/test_rss_feed.py`: public endpoint 200 serves S3 bytes without any
+     DB row (proves the RLS fix); 404 when S3 object missing; fixture
+     `make_mock_rss_feed` URL updated; generate-endpoint asserts new
+     `public_url` format.
+   - `tests/unit/test_rss_generation_service.py`: `public_url` = API URL, not
+     the `upload_file` return; s3_key unchanged.
+   - storage unit test: download 404 → `FileNotFoundError`.
+6. **Docs/env**: `deployment/README.md` note — staging must set
+   `API_PUBLIC_BASE_URL` to the nginx-exposed API origin.
 
 ## Acceptance criteria
 
-- A1: Clicking Generate issues POST `...?enable_distribution=true` through the proxy.
-- A2: Backend receives `enable_distribution=true` (proxy forwards query string).
-- A3: Warning-toast path (#378) still works unchanged.
-- A4: Error paths (non-ok, network) unchanged.
+- [ ] `public_url` stored for new/regenerated feeds is the API endpoint URL,
+      not the S3 URL.
+- [ ] `GET /feeds/{project_id}/podcast.xml` returns the feed XML with
+      `application/rss+xml` to a fully unauthenticated client, with a real
+      RLS-enabled DB (no mocked service on the success path).
+- [ ] Missing feed → 404 (not 500, not AccessDenied).
+- [ ] Distribution metadata (`rss_feed_url`) carries the fetchable API URL.
+- [ ] Backend suite green, coverage gate (85%) green, lint green.

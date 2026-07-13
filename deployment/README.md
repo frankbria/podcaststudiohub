@@ -282,6 +282,10 @@ JWT_ALGORITHM=HS256
 ENCRYPTION_KEY=<generate-with-openssl-rand-hex-32>
 DEBUG=False
 LOG_LEVEL=INFO
+# Public origin of this API, no trailing slash (issue #385): RSS feed
+# public_url is built as {API_PUBLIC_BASE_URL}/feeds/{project_id}/podcast.xml,
+# so it must be the nginx-exposed API origin platforms can reach.
+API_PUBLIC_BASE_URL=https://dev.podcaststudiohub.me/api
 
 # Optional - users can provide their own
 OPENAI_API_KEY=

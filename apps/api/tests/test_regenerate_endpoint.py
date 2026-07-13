@@ -92,6 +92,11 @@ async def test_regenerate_happy_path(client, episode_with_content):
     assert body["status"] == "queued"
     assert body["episode_id"] == episode_id
     mock_delay.assert_called_once()
+    # #389: flags are opt-in Query params; without them regenerate stays off,
+    # matching /generate's defaults.
+    task_kwargs = mock_delay.call_args.kwargs["kwargs"]
+    assert task_kwargs["enable_composition"] is False
+    assert task_kwargs["enable_distribution"] is False
 
 
 @pytest.mark.asyncio

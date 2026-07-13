@@ -62,7 +62,11 @@ class StorageService:
             public: Make file publicly accessible
 
         Returns:
-            Public URL of the uploaded file
+            The S3 object URL. NOT publicly fetchable — the bucket has no
+            public-read policy, so this URL returns AccessDenied to
+            unauthenticated clients (#385). Serve objects through an API
+            endpoint or a presigned URL instead of storing this value as a
+            user-facing link.
         """
         extra_args = {}
 

@@ -373,7 +373,6 @@ class RSSGenerationService:
 				file_path=tmp_path,
 				s3_key=s3_key,
 				content_type="application/rss+xml",
-				public=True,
 			)
 		finally:
 			os.unlink(tmp_path)

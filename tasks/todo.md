@@ -33,11 +33,12 @@ five optional fields, `null` when the form value is empty.
 - [x] Setting/updating fields still merges as before — demoed
 - [x] Backend + frontend tests green; lint green — full suites + CI green
 
-## Status (2026-07-13)
-PR #394 open; all code CI gates green (backend/frontend/playwright/migrations/coverage/review);
-demo + both third-party reviews (pre-PR: 1 Minor + 2 Nits addressed; post-PR: no findings) posted.
-**BLOCKED on user decision:** CI dependency audit fails on NEW upstream CVE PYSEC-2026-2562
-(langchain-core 0.3.86, fix only in 1.2.11 — structurally capped by podcastfy==0.4.1, upgrade
-tracked in #363). Proposed ignore-list addition to apps/api/scripts/security-audit.sh is in the
-working tree UNCOMMITTED (permission classifier requires user sign-off on security-gate changes).
-Also uncommitted: docstring/OpenAPI clear-semantics notes in rss_feed router+schema.
+## Status: SHIPPED 2026-07-13
+Merged via PR #394 (squash, 362dfd0); issue #381 closed. All 12 CI checks green.
+Demo with outcome evidence (real Postgres + S3 + real dialog) posted to the PR.
+Reviews: opencode pre-PR (1 Minor + 2 Nits, addressed with tests), opencode post-PR
+(no findings), CI review bot both rounds (no defects).
+Rode along: (a) conftest RequestValidationError no-rollback fix; (b) user-approved
+pip-audit ignore for PYSEC-2026-2562 (langchain-core SSRF, Low, podcastfy-capped —
+no podcastfy release incl. 0.4.3 reaches the langchain-core 1.2.11 fix; unreachable
+code path here; context posted on #363).

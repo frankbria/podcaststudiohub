@@ -40,7 +40,11 @@ def upgrade() -> None:
 		sa.ForeignKeyConstraint(["project_id"], ["projects.id"], ondelete="CASCADE"),
 	)
 
-	# Indexes for common query patterns
+	# Indexes for common query patterns.
+	# Deliberately NOT CONCURRENTLY (issue #318): analytics_events is created
+	# in this same migration, so it is empty and invisible to any other
+	# transaction — a plain CREATE INDEX blocks nothing, while CONCURRENTLY
+	# would force an autocommit block and add partial-failure modes.
 	op.create_index("ix_analytics_events_tenant_id", "analytics_events", ["tenant_id"])
 	op.create_index("ix_analytics_events_episode_id", "analytics_events", ["episode_id"])
 	op.create_index("ix_analytics_events_project_id", "analytics_events", ["project_id"])

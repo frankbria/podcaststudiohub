@@ -31,30 +31,42 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+	# Nullable adds are metadata-only (no table rewrite). if_not_exists makes
+	# reruns safe: the adds commit when the autocommit block below opens, so
+	# a failed CONCURRENTLY build would otherwise wedge the re-run (#318).
+
 	# Add task_id column for Celery task UUID
 	op.add_column(
 		'episodes',
 		sa.Column('task_id', sa.Text(), nullable=True),
+		if_not_exists=True,
 	)
 
 	# Add task_started_at column
 	op.add_column(
 		'episodes',
 		sa.Column('task_started_at', sa.DateTime(timezone=True), nullable=True),
+		if_not_exists=True,
 	)
 
 	# Add task_completed_at column
 	op.add_column(
 		'episodes',
 		sa.Column('task_completed_at', sa.DateTime(timezone=True), nullable=True),
+		if_not_exists=True,
 	)
 
-	# Create index on task_id for fast lookups by Celery task UUID
-	op.create_index(
-		'idx_episodes_task_id',
-		'episodes',
-		['task_id'],
-	)
+	# Create index on task_id for fast lookups by Celery task UUID.
+	# episodes pre-exists and may be large: build CONCURRENTLY in an
+	# autocommit block so the build never blocks writes (issue #318).
+	with op.get_context().autocommit_block():
+		op.execute("DROP INDEX IF EXISTS idx_episodes_task_id")
+		op.create_index(
+			'idx_episodes_task_id',
+			'episodes',
+			['task_id'],
+			postgresql_concurrently=True,
+		)
 
 
 def downgrade() -> None:

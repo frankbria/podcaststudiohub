@@ -86,6 +86,7 @@ def test_upgrade_disables_row_security_first():
 	bind.execute.side_effect = rec_bind
 	with patch('alembic.op.get_bind', return_value=bind), \
 	     patch('alembic.op.execute', side_effect=rec_op), \
+	     patch('alembic.op.get_context', return_value=MagicMock()), \
 	     patch('alembic.op.create_index'):
 		mod.upgrade()
 
@@ -106,6 +107,7 @@ def test_upgrade_lowercases_and_creates_unique_index_when_clean():
 	bind = _bind_with_collisions([])
 	with patch('alembic.op.get_bind', return_value=bind), \
 	     patch('alembic.op.execute') as mock_exec, \
+	     patch('alembic.op.get_context', return_value=MagicMock()), \
 	     patch('alembic.op.create_index') as mock_idx:
 		mod.upgrade()
 	# op.execute carries the lowercase UPDATE.
@@ -115,12 +117,33 @@ def test_upgrade_lowercases_and_creates_unique_index_when_clean():
 	assert 'uq_users_email_lower' in index_names
 
 
+def test_upgrade_builds_index_concurrently_with_rerun_guard():
+	"""users pre-exists and may be large: the unique lower(email) index must
+	build CONCURRENTLY inside an autocommit block, with a DROP INDEX IF EXISTS
+	guard so a failed build (INVALID index) doesn't wedge reruns (#318)."""
+	mod = _load_migration()
+	bind = _bind_with_collisions([])
+	ctx = MagicMock()
+	with patch('alembic.op.get_bind', return_value=bind), \
+	     patch('alembic.op.execute') as mock_exec, \
+	     patch('alembic.op.get_context', return_value=ctx), \
+	     patch('alembic.op.create_index') as mock_idx:
+		mod.upgrade()
+	assert ctx.autocommit_block.called
+	idx_call = {c.args[0]: c for c in mock_idx.call_args_list}['uq_users_email_lower']
+	assert idx_call.kwargs.get('unique') is True
+	assert idx_call.kwargs.get('postgresql_concurrently') is True
+	executed = " ".join(str(c.args[0]).lower() for c in mock_exec.call_args_list)
+	assert "drop index if exists uq_users_email_lower" in executed
+
+
 def test_upgrade_aborts_on_case_variant_collision():
 	"""upgrade() must raise RuntimeError when case-variant duplicates exist."""
 	mod = _load_migration()
 	bind = _bind_with_collisions([SimpleNamespace(canonical="a@x.com", n=2)])
 	with patch('alembic.op.get_bind', return_value=bind), \
 	     patch('alembic.op.execute') as mock_exec, \
+	     patch('alembic.op.get_context', return_value=MagicMock()), \
 	     patch('alembic.op.create_index') as mock_idx:
 		with pytest.raises(RuntimeError, match="case-variant duplicate"):
 			mod.upgrade()

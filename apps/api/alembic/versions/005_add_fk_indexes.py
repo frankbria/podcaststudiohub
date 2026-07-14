@@ -31,12 +31,20 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
 	# EpisodeComposition.layout_id - foreign key to episode_layouts
 	# Used when: JOIN episode_layouts ON composition.layout_id = layout.id
-	op.create_index(
-		'idx_episode_compositions_layout_id',
-		'episode_compositions',
-		['layout_id'],
-		postgresql_using='btree',
-	)
+	#
+	# episode_compositions pre-exists and may hold data: build CONCURRENTLY
+	# in an autocommit block so the build never blocks writes (issue #318).
+	# The DROP guard makes reruns safe after a failed CONCURRENTLY build
+	# (which leaves an INVALID index behind).
+	with op.get_context().autocommit_block():
+		op.execute("DROP INDEX IF EXISTS idx_episode_compositions_layout_id")
+		op.create_index(
+			'idx_episode_compositions_layout_id',
+			'episode_compositions',
+			['layout_id'],
+			postgresql_using='btree',
+			postgresql_concurrently=True,
+		)
 
 
 def downgrade() -> None:

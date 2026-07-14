@@ -1,5 +1,4 @@
 from logging.config import fileConfig
-import os
 import sys
 from pathlib import Path
 
@@ -11,14 +10,12 @@ from alembic import context
 # Add parent directory to path for imports (so we can import from src package)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# Import database and models for metadata discovery
+# Import database and the WHOLE model package for metadata discovery.
+# Do not regress to a hand-maintained model list: an incomplete list makes
+# `--autogenerate` emit DROP TABLE for any live table whose model it can't
+# see (issue #318). tests/test_migration_metadata.py enforces completeness.
 from src.database import Base
-from src.models import (
-    User, Project, Episode, ContentSource,
-    ConversationTemplate, TTSConfiguration,
-    DistributionTarget, RSSFeed, AudioSnippet,
-    EpisodeLayout, EpisodeComposition
-)
+import src.models  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

@@ -27,42 +27,35 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade() -> None:
+INDEXES = [
 	# ContentSource: extraction-router discriminator
-	op.create_index(
-		'idx_content_sources_source_type',
-		'content_sources',
-		['source_type'],
-		postgresql_using='btree',
-	)
-
+	('idx_content_sources_source_type', 'content_sources', 'source_type'),
 	# ContentSource: background-job status filter
-	op.create_index(
-		'idx_content_sources_extraction_status',
-		'content_sources',
-		['extraction_status'],
-		postgresql_using='btree',
-	)
-
+	('idx_content_sources_extraction_status', 'content_sources', 'extraction_status'),
 	# DistributionTarget: platform-routing discriminator
-	op.create_index(
-		'idx_distribution_targets_target_type',
-		'distribution_targets',
-		['target_type'],
-		postgresql_using='btree',
-	)
-
+	('idx_distribution_targets_target_type', 'distribution_targets', 'target_type'),
 	# TTSConfiguration: provider-selection lookup
-	op.create_index(
-		'idx_tts_configurations_provider',
-		'tts_configurations',
-		['provider'],
-		postgresql_using='btree',
-	)
+	('idx_tts_configurations_provider', 'tts_configurations', 'provider'),
+]
+
+
+def upgrade() -> None:
+	# These tables pre-exist and may hold data: build CONCURRENTLY so the
+	# index build never blocks writes (issue #318). CONCURRENTLY cannot run
+	# inside a transaction, hence the autocommit block. The DROP guards make
+	# reruns safe — a failed CONCURRENTLY build leaves an INVALID index.
+	with op.get_context().autocommit_block():
+		for name, table, column in INDEXES:
+			op.execute(f"DROP INDEX IF EXISTS {name}")
+			op.create_index(
+				name,
+				table,
+				[column],
+				postgresql_using='btree',
+				postgresql_concurrently=True,
+			)
 
 
 def downgrade() -> None:
-	op.drop_index('idx_content_sources_source_type', table_name='content_sources')
-	op.drop_index('idx_content_sources_extraction_status', table_name='content_sources')
-	op.drop_index('idx_distribution_targets_target_type', table_name='distribution_targets')
-	op.drop_index('idx_tts_configurations_provider', table_name='tts_configurations')
+	for name, table, _column in INDEXES:
+		op.drop_index(name, table_name=table)

@@ -51,12 +51,22 @@ def upgrade() -> None:
 		)
 
 	op.execute("UPDATE users SET email = lower(email) WHERE email <> lower(email)")
-	op.create_index(
-		"uq_users_email_lower",
-		"users",
-		[sa.text("lower(email)")],
-		unique=True,
-	)
+
+	# users pre-exists and may be large: build the unique index CONCURRENTLY
+	# in an autocommit block so the build never blocks writes (issue #318).
+	# The guard/collision-check/UPDATE above stay inside the migration
+	# transaction (SET LOCAL is transaction-scoped) and commit when the
+	# autocommit block opens. The DROP guard makes reruns safe after a failed
+	# CONCURRENTLY build (which leaves an INVALID index behind).
+	with op.get_context().autocommit_block():
+		op.execute("DROP INDEX IF EXISTS uq_users_email_lower")
+		op.create_index(
+			"uq_users_email_lower",
+			"users",
+			[sa.text("lower(email)")],
+			unique=True,
+			postgresql_concurrently=True,
+		)
 
 
 def downgrade() -> None:

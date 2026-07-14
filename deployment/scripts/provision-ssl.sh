@@ -9,8 +9,12 @@
 #   sudo DOMAIN=dev.podcaststudiohub.me deployment/scripts/provision-ssl.sh
 #
 # Optional env overrides:
-#   DOMAIN  — FQDN to issue the cert for (default: dev.podcaststudiohub.me)
-#   EMAIL   — Let's Encrypt recovery email        (default: admin@<DOMAIN>)
+#   DOMAIN        — FQDN to issue the cert for (default: dev.podcaststudiohub.me)
+#   EMAIL         — Let's Encrypt recovery email    (default: admin@<DOMAIN>)
+#   API_PORT      — FastAPI upstream port           (default: 8005)
+#   FRONTEND_PORT — Next.js upstream port           (default: 3010)
+# Port defaults must match the committed deployment/nginx/podcastfy.conf —
+# deployment/tests/test_port_alignment.py enforces this (issue #317).
 #
 # Prerequisites:
 #   - DNS for $DOMAIN points at this server
@@ -19,6 +23,8 @@
 set -euo pipefail
 
 DOMAIN="${DOMAIN:-dev.podcaststudiohub.me}"
+API_PORT="${API_PORT:-8005}"
+FRONTEND_PORT="${FRONTEND_PORT:-3010}"
 WEBROOT="/var/www/html"
 EMAIL="${EMAIL:-admin@${DOMAIN}}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -69,7 +75,6 @@ if [ ! -f "${CERT_DIR}/fullchain.pem" ] || [ ! -f "${CERT_DIR}/privkey.pem" ] ||
 
 	rm -f /etc/nginx/sites-enabled/default
 	cat > "${NGINX_SITE}" <<HTTP
-upstream podcastfy_api { server 127.0.0.1:8001; }
 server {
 	listen 80;
 	server_name ${DOMAIN};
@@ -104,6 +109,14 @@ cp -a "${SITE_CONF}" "${NGINX_SITE}"
 # copy so server_name + cert paths match the certificate that was issued.
 if [ "${DOMAIN}" != "dev.podcaststudiohub.me" ]; then
 	sed -i "s/dev\.podcaststudiohub\.me/${DOMAIN}/g" "${NGINX_SITE}"
+fi
+# Honour port overrides the same way: rewrite the conf's committed dev
+# defaults (8005/3010) to this environment's upstream ports.
+if [ "${API_PORT}" != "8005" ]; then
+	sed -i "s/127\.0\.0\.1:8005/127.0.0.1:${API_PORT}/g" "${NGINX_SITE}"
+fi
+if [ "${FRONTEND_PORT}" != "3010" ]; then
+	sed -i "s/127\.0\.0\.1:3010/127.0.0.1:${FRONTEND_PORT}/g" "${NGINX_SITE}"
 fi
 ln -sf "${NGINX_SITE}" "${NGINX_ENABLED}"
 rm -f /etc/nginx/sites-enabled/default

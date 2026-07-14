@@ -5,6 +5,7 @@ Covers issue #116: happy path merging, normalize/fade flags,
 empty timeline edge case, and error-path return shape.
 """
 
+import os
 import types
 from unittest.mock import MagicMock, patch
 
@@ -172,3 +173,143 @@ class TestMergeAudioSnippetsTask:
 		assert result["duration_seconds"] == 0
 		assert result["file_size_bytes"] == 0
 		assert "FFmpeg not found" in result["error"]
+
+
+class TestS3BackedSegments:
+	"""S3-backed timeline entries are downloaded to tempfiles, merged, and
+	cleaned up; download failures degrade instead of failing the chain (#376)."""
+
+	def _pydub(self, from_file_side_effect=None):
+		mock_cls, mock_modules = _mock_pydub_modules()
+		seg = _make_mock_audio_segment(duration_ms=8000)
+		mock_cls.empty.return_value = seg
+		if from_file_side_effect is not None:
+			mock_cls.from_file.side_effect = from_file_side_effect
+		else:
+			mock_cls.from_file.return_value = seg
+		return mock_cls, mock_modules, seg
+
+	def test_s3_segment_downloaded_merged_and_temp_removed(self, tmp_path):
+		"""An s3_key segment is downloaded via boto3, merged, and its tempfile
+		is deleted after a successful merge."""
+		mock_cls, mock_modules, seg = self._pydub()
+		main = tmp_path / "gen.mp3"
+		main.write_bytes(b"m")
+		timeline = [
+			{"s3_key": "audio-snippets/u1/intro.mp3", "segment_type": "intro"},
+			{"file_path": str(main), "segment_type": "main_content"},
+		]
+
+		downloaded = []
+		def fake_download(bucket, key, dest):
+			downloaded.append((bucket, key, dest))
+			with open(dest, "wb") as f:
+				f.write(b"audio")
+
+		mock_s3 = MagicMock()
+		mock_s3.download_file.side_effect = fake_download
+
+		with patch.object(merge_audio_snippets_task, "update_state"), \
+			 patch_modules(mock_modules), \
+			 patch("src.tasks.audio_composition.boto3") as mock_boto3, \
+			 patch("src.tasks.audio_composition.settings") as mock_settings, \
+			 patch("os.path.getsize", return_value=4096):
+			mock_boto3.client.return_value = mock_s3
+			mock_settings.AWS_S3_BUCKET = "test-bucket"
+
+			result = merge_audio_snippets_task.run(
+				episode_id="ep-376a",
+				timeline=timeline,
+				output_path=str(tmp_path / "out.mp3"),
+			)
+
+		assert result["status"] == "success"
+		assert len(downloaded) == 1
+		bucket, key, dest = downloaded[0]
+		assert bucket == "test-bucket"
+		assert key == "audio-snippets/u1/intro.mp3"
+		# Both segments were merged: the downloaded tempfile, then the main file.
+		loaded = [c.args[0] for c in mock_cls.from_file.call_args_list]
+		assert loaded == [dest, str(main)]
+		# Tempfile cleaned up after the merge.
+		assert not os.path.exists(dest)
+
+	def test_s3_download_failure_skips_segment_and_merge_succeeds(self, tmp_path):
+		"""A failed snippet download degrades (segment skipped, warning) — the
+		merge still succeeds with the remaining segments and cleans its temp."""
+		mock_cls, mock_modules, seg = self._pydub()
+		main = tmp_path / "gen.mp3"
+		main.write_bytes(b"m")
+		timeline = [
+			{"s3_key": "audio-snippets/u1/intro.mp3", "segment_type": "intro"},
+			{"file_path": str(main), "segment_type": "main_content"},
+		]
+
+		attempted = []
+		def failing_download(bucket, key, dest):
+			attempted.append(dest)
+			raise RuntimeError("S3 unavailable")
+
+		mock_s3 = MagicMock()
+		mock_s3.download_file.side_effect = failing_download
+
+		with patch.object(merge_audio_snippets_task, "update_state"), \
+			 patch_modules(mock_modules), \
+			 patch("src.tasks.audio_composition.boto3") as mock_boto3, \
+			 patch("src.tasks.audio_composition.settings") as mock_settings, \
+			 patch("os.path.getsize", return_value=4096):
+			mock_boto3.client.return_value = mock_s3
+			mock_settings.AWS_S3_BUCKET = "test-bucket"
+
+			result = merge_audio_snippets_task.run(
+				episode_id="ep-376b",
+				timeline=timeline,
+				output_path=str(tmp_path / "out.mp3"),
+			)
+
+		assert result["status"] == "success"
+		# Only the main segment was merged.
+		loaded = [c.args[0] for c in mock_cls.from_file.call_args_list]
+		assert loaded == [str(main)]
+		# The pre-created tempfile for the failed download was cleaned up.
+		assert attempted and not os.path.exists(attempted[0])
+
+	def test_temps_cleaned_when_merge_fails(self, tmp_path):
+		"""Downloaded tempfiles are removed even when the merge itself fails."""
+		mock_cls, mock_modules, _ = self._pydub(
+			from_file_side_effect=RuntimeError("corrupt audio")
+		)
+		timeline = [
+			{"s3_key": "audio-snippets/u1/intro.mp3", "segment_type": "intro"},
+			{"file_path": str(tmp_path / "gen.mp3"), "segment_type": "main_content"},
+		]
+
+		downloaded = []
+		def fake_download(bucket, key, dest):
+			downloaded.append(dest)
+			with open(dest, "wb") as f:
+				f.write(b"audio")
+
+		mock_s3 = MagicMock()
+		mock_s3.download_file.side_effect = fake_download
+
+		with patch.object(merge_audio_snippets_task, "update_state"), \
+			 patch_modules(mock_modules), \
+			 patch("src.tasks.audio_composition.boto3") as mock_boto3, \
+			 patch("src.tasks.audio_composition.settings") as mock_settings, \
+			 patch.object(
+				merge_audio_snippets_task,
+				"retry",
+				side_effect=merge_audio_snippets_task.MaxRetriesExceededError(),
+			 ):
+			mock_boto3.client.return_value = mock_s3
+			mock_settings.AWS_S3_BUCKET = "test-bucket"
+
+			result = merge_audio_snippets_task.run(
+				episode_id="ep-376c",
+				timeline=timeline,
+				output_path=str(tmp_path / "out.mp3"),
+			)
+
+		assert result["status"] == "failed"
+		assert downloaded and not os.path.exists(downloaded[0])

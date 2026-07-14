@@ -2,13 +2,61 @@
 Celery tasks for audio snippet merging and composition
 """
 from celery import Task
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import logging
+import os
+import tempfile
+
+import boto3
 
 from src.worker import celery_app
+from src.config import settings
 from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_segment_files(
+    timeline: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Materialize S3-backed timeline segments as local tempfiles (issue #376).
+
+    Snippets uploaded with S3 configured exist only as S3 objects, so the
+    resolver emits ``{"s3_key": …}`` entries; download each to a tempfile with
+    sync boto3 (consistent with ``upload_to_s3_task``) so pydub can read it.
+    A failed download skips just that segment (log, don't fail the chain) —
+    worst case the merge degrades to the generated audio alone. Segments with
+    a ``file_path`` pass through untouched, including a missing main file,
+    which must still fail loudly in the merge loop.
+
+    Returns ``(segments, temp_paths)``; the caller must delete ``temp_paths``
+    after the merge (success and failure paths). Failed downloads' tempfiles
+    are also returned so one cleanup site covers everything.
+    """
+    resolved: List[Dict[str, Any]] = []
+    temp_paths: List[str] = []
+    s3_client = None
+    for segment in timeline:
+        s3_key = segment.get("s3_key")
+        if segment.get("file_path") or not s3_key:
+            resolved.append(segment)
+            continue
+        try:
+            fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(s3_key)[1] or ".mp3")
+            os.close(fd)
+            temp_paths.append(tmp)
+            if s3_client is None:
+                s3_client = boto3.client("s3")
+            s3_client.download_file(settings.AWS_S3_BUCKET, s3_key, tmp)
+        except Exception as exc:
+            logger.warning(
+                "Composition: skipping %s segment — download of s3://%s/%s "
+                "failed: %s",
+                segment.get("segment_type"), settings.AWS_S3_BUCKET, s3_key, exc,
+            )
+            continue
+        resolved.append({**segment, "file_path": tmp})
+    return resolved, temp_paths
 
 
 @celery_app.task(bind=True, name="merge_audio_snippets", time_limit=300, max_retries=2)
@@ -45,6 +93,7 @@ def merge_audio_snippets_task(
             "at least one segment (the generated audio) is required"
         )
 
+    temp_paths: List[str] = []
     try:
         self.update_state(
             state='PROGRESS',
@@ -55,8 +104,10 @@ def merge_audio_snippets_task(
             }
         )
 
+        # Download S3-backed segments to worker tempfiles (issue #376).
+        timeline, temp_paths = _resolve_segment_files(timeline)
+
         from pydub import AudioSegment
-        import os
 
         # Initialize empty audio
         final_audio = AudioSegment.empty()
@@ -124,3 +175,11 @@ def merge_audio_snippets_task(
                 "file_size_bytes": 0,
                 "error": str(e)
             }
+    finally:
+        # Downloaded snippet tempfiles are per-attempt artifacts: remove them on
+        # success, failure, AND the retry path (the next attempt re-downloads).
+        for tmp in temp_paths:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass

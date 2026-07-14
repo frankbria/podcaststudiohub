@@ -1,23 +1,44 @@
-# #363 [P4.5] Evaluate podcastfy 0.4.1 → 0.4.3 upgrade
+# #376 — Composition: download S3-backed snippets to the worker before merging
 
-## Findings so far (Phase 2)
-- Upstream repo has no 0.4.1+ tags; evaluated via PyPI sdist diff 0.4.1 → 0.4.3.
-- `podcastfy/client.py` (our `generate_podcast` entrypoint, #204 coupling): **byte-identical**. No signature risk.
-- `ContentGenerator`: only default `model_name` changed (`gemini-1.5-pro-latest` → `gemini-2.5-flash`); we pass it explicitly (env `GEMINI_MODEL_NAME`). `generate_qa_content` unchanged.
-- `PDFExtractor`: unchanged. `WebsiteExtractor` helpers we use (normalize_url, remove_unwanted_elements, clean_content, user_agent, timeout): unchanged.
-- **Breaking**: 0.4.3 `website_extractor.py` imports `playwright.sync_api` at module top but playwright is NOT a declared dependency (upstream packaging bug). Our `main.py` import guard + `content_extraction_service.py` import `WebsiteExtractor` → app import fails unless WE add playwright (+ chromium binaries in CI/VPS).
-- `content_extractor.py` now imports `google.genai` top-level; declared (`google-genai ^1.46`) — our lock has 1.2.0, would bump.
-- Dep bumps: openai ^1.56 (still <2), httpx ^0.28.1 (we lock 0.27.2), edge-tts 6→7 (major).
-- langchain still `<0.4` → PYSEC-2026-2193 / PYSEC-2026-2562 NOT cleared by 0.4.3 (as predicted in issue comments).
-- Functional gains for US: ~none. Topic-grounding fix (google-genai/gemini-2.5) only helps `topic=` path — not wired from our router. Playwright fetching only helps `extract_content`, which we deliberately bypass (SSRF #206/#234). Gemini TTS language-code fix only for google-cloud TTS voices.
+**Plan source**: self-authored (no plan comment on the issue). **Approved autonomously** — no architectural fork: the issue sanctions doing the download in `resolve_composition_timeline` *or* the merge task; the merge task is chosen so download, use, and cleanup live in one task with a `finally` (no tempfile lifetime across Celery task boundaries).
 
-## Plan
-1. [x] Upstream changelog/diff review (above)
-2. [x] Empirical spike on feature branch: bump pin → `uv lock` → `uv sync` → run test_imports + signature-guard tests. Record exact failure/success.
-3. [x] Verdict (DEFER — evidence: playwright ModuleNotFoundError on import, zero gain, CVEs uncleared) from evidence:
-   - If upgrade is drop-in + low cost → complete checklist (caps, CLAUDE.md, full suite, e2e generation).
-   - If upgrade costs (playwright+chromium in prod, dep churn) exceed ~zero benefit → **defer**: write evaluation doc (`apps/api/docs/`), update CLAUDE.md pin note + security-audit.sh comment if needed, PR the docs, comment verdict on issue, close.
-4. [x] Quality gates, PR #395, showboat demo, merged 2026-07-13. Issue #363 closed.
+## Current behavior (verified in code)
 
-## Review
-SHIPPED via PR #395 (squash 74f9073). Verdict: defer upgrade. Deliverables: apps/api/docs/podcastfy-0.4.3-evaluation.md, CLAUDE.md engine note, security-audit.sh comment fix. Spike reverted; 0.4.1 env verified green (32 guard tests).
+- `upload_audio_snippet` stores the S3 key in `AudioSnippet.file_path` (and in `s3_key`) and deletes the upload tempfile → snippets are never on worker disk (`audio_snippet_service.py:142`).
+- `resolve_composition_timeline` (`podcast_generation.py:107`) skips any snippet whose `file_path` isn't a local file → timeline degrades to main-only; snippets never play.
+- `merge_audio_snippets_task` (`audio_composition.py`) consumes `segment["file_path"]` blindly.
+
+## Changes
+
+### 1. `src/tasks/podcast_generation.py` — `resolve_composition_timeline`
+- For a snippet whose `file_path` is a local file: unchanged (local entry).
+- Else, if `snippet.s3_key` and `settings.AWS_S3_BUCKET` are set: emit `{"s3_key": ..., "segment_type": ...}` instead of skipping.
+- Else: skip with warning (unchanged).
+- Update the "none are on local disk" summary log / ponytail comment accordingly.
+
+### 2. `src/tasks/audio_composition.py` — `merge_audio_snippets_task`
+- Before the merge loop, resolve each segment to a local path:
+  - `file_path` exists on disk → use it.
+  - has `s3_key` → download via sync `boto3.client("s3").download_file(settings.AWS_S3_BUCKET, key, tmp)` to a `NamedTemporaryFile` (consistent with `upload_to_s3_task`); on any download failure, log a warning and **skip the segment** (degrade — never fail the chain; worst case timeline is main-only).
+  - neither usable → current behavior (unchanged for plain-file segments: missing main content still fails/retries).
+- Track downloaded temp paths; delete them in `finally` (covers success, failure, and retry paths).
+
+### 3. Tests (TDD — write first)
+- `tests/unit/test_podcast_generation_task.py::TestResolveCompositionTimeline`:
+  - S3-backed snippet (s3_key set, bucket configured) → included as `s3_key` entry, ordered correctly.
+  - s3_key set but no bucket → skipped.
+  - no local file and no s3_key → skipped (update existing `_snippet` helper with `s3_key`).
+- `tests/unit/test_audio_composition_task.py`:
+  - s3 segment downloaded (mock boto3), merged, tempfile removed on success.
+  - download failure → segment skipped, merge still succeeds with remaining segments (main-only worst case), no chain failure.
+  - tempfiles removed on merge failure path.
+
+## Acceptance criteria mapping
+- Composed episode contains intro → main → outro (duration-verified) → demo in Phase 11.
+- Download failure degrades, doesn't fail the chain → per-segment skip (strictly gentler than full main-only degrade).
+- Temp cleanup success + failure paths → `finally` block + tests.
+- Unit tests for download/degrade/cleanup → above.
+
+## Out of scope
+- No change to snippet upload, callbacks, or chain structure.
+- Router-supplied timelines (file_path-only entries) behave exactly as before.

@@ -147,8 +147,14 @@ def upgrade() -> None:
 
 		# Step 4: Unique constraint per project, built without blocking
 		# writes: CONCURRENTLY index first, then attach it as the constraint.
-		# The DROP guards make reruns safe — a failed CONCURRENTLY build
-		# leaves an INVALID index behind.
+		# The DROP guards make reruns safe across BOTH failure windows: the
+		# constraint drop (which takes its owned index with it) covers a
+		# failure after ADD CONSTRAINT committed, and the index drop covers
+		# the INVALID index a failed CONCURRENTLY build leaves behind.
+		op.execute(
+			"ALTER TABLE episodes DROP CONSTRAINT IF EXISTS "
+			"uq_episodes_project_number"
+		)
 		op.execute("DROP INDEX IF EXISTS uq_episodes_project_number")
 		op.execute(
 			"CREATE UNIQUE INDEX CONCURRENTLY uq_episodes_project_number "

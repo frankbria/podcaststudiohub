@@ -199,6 +199,15 @@ def test_upgrade_builds_unique_index_concurrently_then_attaches():
 	assert any(
 		"drop index if exists uq_episodes_project_number" in c for c in lowered
 	), "missing DROP INDEX IF EXISTS rerun guard"
+	# Rerun-safety, post-attach window: once the constraint owns the index,
+	# DROP INDEX alone errors — the constraint must be dropped first.
+	con_guard_idx = next(
+		(i for i, c in enumerate(lowered)
+		 if "drop constraint if exists uq_episodes_project_number" in c),
+		None,
+	)
+	assert con_guard_idx is not None, "missing DROP CONSTRAINT IF EXISTS rerun guard"
+	assert con_guard_idx < create_idx
 
 
 def test_upgrade_creates_composite_index_concurrently():

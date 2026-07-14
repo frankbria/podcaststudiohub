@@ -185,8 +185,8 @@ jobs:
             find . -type f -name '*.pyc' -delete 2>/dev/null || true
 
             # The API port is per-environment: this is a multi-tenant host, so the
-            # port that nginx proxies to differs per app (dev podcast = 8005, not the
-            # single-tenant 8001 in deployment/nginx/podcastfy.conf). The source of
+            # port that nginx proxies to differs per app (dev podcast = 8005, the
+            # committed default in deployment/nginx/podcastfy.conf). The source of
             # truth is the environment's API_PORT variable, which must match that
             # environment's nginx upstream. Require it to be set and numeric so a
             # missing/typo'd value fails fast BEFORE the running service is torn

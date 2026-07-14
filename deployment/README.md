@@ -437,7 +437,10 @@ logical dumps are the deliberate, lazy-correct choice for a single-VPS dev host.
 
 - `deployment/scripts/backup-db.sh` — `pg_dump -Fc` → timestamped object
   at `s3://$DB_BACKUP_S3_BUCKET/$DB_BACKUP_S3_PREFIX`, then prunes objects older
-  than `DB_BACKUP_RETENTION_DAYS` (default 14).
+  than `DB_BACKUP_RETENTION_DAYS` (default 14). Dumps connect as
+  `MIGRATION_DATABASE_URL` (the BYPASSRLS role) when set — tenant tables are
+  FORCE RLS, so a dump as the app role would error or omit every tenant row —
+  falling back to `DATABASE_URL` for single-role setups.
 - `deployment/scripts/install-db-backup-timer.sh` — installs a systemd service +
   nightly timer (`03:30` by default) that runs the backup as the non-root
   `podcastfy` service account, reading DB/S3 settings from the API `.env`.

@@ -66,6 +66,16 @@ def test_pre_migration_dumps_use_dedicated_prefix():
 	)
 
 
+def test_backup_dumps_with_privileged_role():
+	# Tenant tables are FORCE RLS (migration 014); a dump as the RLS-subject
+	# app role errors or silently omits tenant rows. The backup must prefer
+	# the BYPASSRLS migration role.
+	backup = REPO_ROOT / "deployment" / "scripts" / "backup-db.sh"
+	assert re.search(r"MIGRATION_DATABASE_URL[}:]", backup.read_text()), (
+		"backup-db.sh must prefer MIGRATION_DATABASE_URL so RLS doesn't truncate dumps"
+	)
+
+
 def test_manual_deploy_runbook_includes_pre_migration_dump():
 	text = README.read_text()
 	dump = text.find("backup-db.sh", text.find("Step 2: Deploy API"))

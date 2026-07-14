@@ -30,13 +30,20 @@ if [[ -z "$DB_BACKUP_S3_BUCKET" ]]; then
 	exit 1
 fi
 
-# pg_dump reads DATABASE_URL directly if given; otherwise it falls back to the
-# standard libpq PG* environment variables. We pass the conn string explicitly
-# so a DATABASE_URL with a +asyncpg driver suffix (SQLAlchemy style) is
-# normalised to a plain postgres:// URL pg_dump understands.
+# Prefer the privileged migration role (issue #319): tenant tables carry
+# FORCE ROW LEVEL SECURITY (migration 014), and pg_dump as the RLS-subject
+# podcastfy_app role either errors out or — with row security enabled —
+# silently omits every tenant row, producing a non-empty but unusable dump.
+# MIGRATION_DATABASE_URL is the BYPASSRLS owner the app .env already defines
+# for Alembic (issue #301); fall back to DATABASE_URL for single-role setups.
+#
+# The conn string is passed explicitly so a +asyncpg driver suffix
+# (SQLAlchemy style) is normalised to a plain postgres:// URL pg_dump
+# understands; without one, pg_dump falls back to the libpq PG* variables.
+SRC_URL="${MIGRATION_DATABASE_URL:-${DATABASE_URL:-}}"
 CONN=()
-if [[ -n "${DATABASE_URL:-}" ]]; then
-	CONN=("${DATABASE_URL/postgresql+asyncpg:/postgresql:}")
+if [[ -n "$SRC_URL" ]]; then
+	CONN=("${SRC_URL/postgresql+asyncpg:/postgresql:}")
 	CONN=("${CONN[0]/postgres+asyncpg:/postgres:}")
 fi
 

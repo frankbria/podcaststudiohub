@@ -164,6 +164,10 @@ jobs:
           # Sync the backup script so the pre-migration dump below always runs
           # the committed version (issue #319). Same path the #293 systemd
           # timer executes, so this also keeps the nightly backup fresh.
+          # mkdir -p first: rsync does not create intermediate remote dirs,
+          # and a host deployed only by this workflow has no deployment/ tree.
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST \
+            "mkdir -p $SERVER_PATH/deployment/scripts"
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
             deployment/scripts/backup-db.sh \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/deployment/scripts/

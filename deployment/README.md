@@ -252,8 +252,12 @@ Configure in **Settings** → **Environments** → **development**:
 > The dev host is **multi-tenant** (several apps share it), so these ports are
 > per-environment, not repo-wide constants. `API_PORT`/`FRONTEND_PORT` are the
 > source of truth and **must match that host's nginx upstream**
-> (`/etc/nginx/sites-available/podcaststudiohub` on the server). The values in
-> `deployment/nginx/podcastfy.conf` (8001/3003) are a single-tenant example.
+> (`/etc/nginx/sites-available/podcastfy` on the server).
+> `deployment/nginx/podcastfy.conf` commits the dev defaults (8005/3010);
+> `provision-ssl.sh` substitutes `API_PORT`/`FRONTEND_PORT` overrides into the
+> installed copy the same way it substitutes `DOMAIN`, and
+> `deployment/tests/test_port_alignment.py` pins the conf and script defaults
+> together (issue #317).
 
 **Secrets:**
 - `SSH_PRIVATE_KEY`: SSH key for deployment

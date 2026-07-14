@@ -142,11 +142,11 @@ pm2 logs podcaststudiohub-api --lines 50
 pm2 logs podcaststudiohub-frontend --lines 50
 pm2 logs podcaststudiohub-celery --lines 50
 
-# Check API health
-curl http://localhost:8001/health
+# Check API health (dev API_PORT — see deployment/README.md)
+curl http://localhost:8005/health
 
-# Check frontend
-curl http://localhost:3003
+# Check frontend (dev FRONTEND_PORT)
+curl http://localhost:3010
 ```
 
 ### Rollback Deployment

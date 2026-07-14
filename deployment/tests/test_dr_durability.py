@@ -36,11 +36,14 @@ def _server_deploy_block() -> str:
 
 def test_deploy_dumps_before_migrating():
 	block = _server_deploy_block()
-	dump = block.find("backup-db.sh")
-	migrate = block.find("alembic upgrade head")
-	assert dump != -1, "server-side deploy must run backup-db.sh (pre-migration dump)"
-	assert migrate != -1, "server-side deploy must still run migrations"
-	assert dump < migrate, "the pre-migration dump must run BEFORE alembic upgrade head"
+	# Match the actual invocation, not prose in comments that mentions the script.
+	dump = re.search(r"bash .*backup-db\.sh", block)
+	migrate = re.search(r"uv run alembic upgrade head", block)
+	assert dump, "server-side deploy must run backup-db.sh (pre-migration dump)"
+	assert migrate, "server-side deploy must still run migrations"
+	assert dump.start() < migrate.start(), (
+		"the pre-migration dump must run BEFORE alembic upgrade head"
+	)
 
 
 def test_deploy_block_fails_fast_so_dump_gates_migration():

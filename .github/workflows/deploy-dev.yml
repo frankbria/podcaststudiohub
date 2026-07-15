@@ -161,6 +161,17 @@ jobs:
             apps/api/alembic/ \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/api/alembic/
 
+          # Sync the backup script so the pre-migration dump below always runs
+          # the committed version (issue #319). Same path the #293 systemd
+          # timer executes, so this also keeps the nightly backup fresh.
+          # mkdir -p first: rsync does not create intermediate remote dirs,
+          # and a host deployed only by this workflow has no deployment/ tree.
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST \
+            "mkdir -p $SERVER_PATH/deployment/scripts"
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+            deployment/scripts/backup-db.sh \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/deployment/scripts/
+
           # Install dependencies and restart on server
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
             # Fail fast: a failed migration or sync must abort the deploy before
@@ -176,6 +187,20 @@ jobs:
 
             # Sync dependencies using uv (creates .venv automatically)
             uv sync
+
+            # Pre-migration off-host dump (issue #319): gate the migration on a
+            # fresh restore point. backup-db.sh hard-fails if the S3 bucket or
+            # creds are missing or the dump comes out empty, and set -e above
+            # aborts the deploy BEFORE the live schema is touched. The
+            # pre-migration/ prefix keeps these dumps distinguishable from the
+            # nightly ones and is pruned by the script's own retention window.
+            # The app .env supplies DATABASE_URL / AWS_* (values must stay
+            # shell-sourceable — see deployment/README.md).
+            set -a
+            . ./.env
+            set +a
+            DB_BACKUP_S3_PREFIX="db-backups/pre-migration/" \
+              bash $SERVER_PATH/deployment/scripts/backup-db.sh
 
             # Run database migrations
             uv run alembic upgrade head

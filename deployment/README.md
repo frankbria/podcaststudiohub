@@ -93,6 +93,12 @@ rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
 ssh root@<SERVER_IP> << 'EOF'
 cd /opt/podcaststudiohub/api
 uv sync
+# Pre-migration off-host dump (issue #319): take a fresh restore point BEFORE
+# touching the live schema. backup-db.sh fails hard (aborting the deploy) if
+# the bucket/creds are missing or the dump is empty.
+set -a && . ./.env && set +a
+DB_BACKUP_S3_PREFIX="db-backups/pre-migration/" \
+  bash /opt/podcaststudiohub/deployment/scripts/backup-db.sh
 # Migrations MUST run under the privileged role (issue #301): MIGRATION_DATABASE_URL
 # (set in .env) points Alembic at the superuser/BYPASSRLS owner so RLS-affected
 # backfills apply to all rows. The app keeps connecting as the non-privileged
@@ -368,6 +374,17 @@ one-time **administrative** action — run it from AWS CloudShell (admin identit
 deployment/scripts/enable-s3-versioning.sh podcaststudiohub-audio
 ```
 
+**MFA-delete (optional hardening):** with versioning on, a leaked app credential can still
+`DeleteObject` current versions (recoverable) — MFA-delete additionally requires the **root
+account's MFA device** to permanently delete versions or suspend versioning. It can only be
+enabled by the root identity via the CLI, so it is documented rather than scripted:
+
+```bash
+aws s3api put-bucket-versioning --bucket podcaststudiohub-audio \
+  --versioning-configuration Status=Enabled,MFADelete=Enabled \
+  --mfa "arn:aws:iam::<ACCOUNT_ID>:mfa/root-account-mfa-device <MFA_CODE>"
+```
+
 ### Tenant offboarding / GDPR erasure — issue #308
 
 `DELETE /auth/me` (authenticated, self-service — the app has no admin/superuser role) permanently
@@ -420,12 +437,18 @@ logical dumps are the deliberate, lazy-correct choice for a single-VPS dev host.
 
 - `deployment/scripts/backup-db.sh` — `pg_dump -Fc` → timestamped object
   at `s3://$DB_BACKUP_S3_BUCKET/$DB_BACKUP_S3_PREFIX`, then prunes objects older
-  than `DB_BACKUP_RETENTION_DAYS` (default 14).
+  than `DB_BACKUP_RETENTION_DAYS` (default 14). Dumps connect as
+  `MIGRATION_DATABASE_URL` (the BYPASSRLS role) when set — tenant tables are
+  FORCE RLS, so a dump as the app role would error or omit every tenant row —
+  falling back to `DATABASE_URL` for single-role setups.
 - `deployment/scripts/install-db-backup-timer.sh` — installs a systemd service +
   nightly timer (`03:30` by default) that runs the backup as the non-root
   `podcastfy` service account, reading DB/S3 settings from the API `.env`.
 - `deployment/scripts/restore-db.sh` — pulls a dump from S3 and `pg_restore`s it
   (latest by default, or a named backup), guarded by a confirmation prompt.
+  Like the dump side, it targets `MIGRATION_DATABASE_URL` when set — restoring
+  as the RLS-subject app role would trip the FORCE RLS `WITH CHECK` policies
+  and abort the whole `--exit-on-error` restore.
 
 Settings (env, defaulting to the app's existing `AWS_*` / `DATABASE_URL`):
 
@@ -480,8 +503,10 @@ bash deployment/scripts/restore-db.sh podcastfy-20260601T033000Z.dump
 
 ```bash
 # Restore the latest dump into a throwaway database and sanity-check row counts.
+# Override MIGRATION_DATABASE_URL (not just DATABASE_URL): it takes precedence,
+# so a value inherited from api/.env would silently retarget the live database.
 createdb podcastfy_restore_test
-DATABASE_URL="postgresql://user:pass@localhost/podcastfy_restore_test" \
+MIGRATION_DATABASE_URL="postgresql://user:pass@localhost/podcastfy_restore_test" \
   DB_RESTORE_FORCE=1 bash deployment/scripts/restore-db.sh
 psql podcastfy_restore_test -c "SELECT count(*) FROM users;"
 dropdb podcastfy_restore_test
@@ -489,6 +514,90 @@ dropdb podcastfy_restore_test
 
 A green restore-test is the only proof the backups are usable — an untested
 backup is not a backup.
+
+### Pre-migration dumps — issue #319
+
+Every deploy (automated and manual) takes an extra dump to
+`s3://$DB_BACKUP_S3_BUCKET/db-backups/pre-migration/` **before** running
+`alembic upgrade head`, and the deploy aborts if the dump fails — a partial or
+destructive migration always has a seconds-old restore point. To roll back a
+bad migration, restore the newest object under that prefix:
+
+```bash
+aws s3 ls s3://$AWS_S3_BUCKET/db-backups/pre-migration/
+DB_BACKUP_S3_PREFIX="db-backups/pre-migration/" \
+  bash deployment/scripts/restore-db.sh podcastfy-<stamp>.dump
+```
+
+These dumps are pruned by the same `DB_BACKUP_RETENTION_DAYS` window as the
+nightly ones. The deploy sources the API `.env` in a shell to feed the backup
+script, so its values must stay shell-sourceable (plain `KEY=value`, quotes
+around anything with spaces — true of every var the app uses today).
+
+## Redis durability — issue #319
+
+Redis serves four roles (one instance, db 0): Celery **broker** (queued +
+in-flight generation jobs), Celery **result backend**, **rate-limit counters**,
+and **OAuth CSRF state** + **generation idempotency locks**. Only the broker
+holds data whose loss matters: a flush/restart without persistence silently
+drops queued and in-flight episodes. The rest is ephemeral by design (counters
+reset, 10-minute OAuth states are re-initiated, locks re-acquire).
+
+**Stance (decided): AOF persistence on, reaper as backstop.**
+
+- Enable append-only-file persistence once per host (idempotent, verified by
+  readback, persisted to `redis.conf` via `CONFIG REWRITE`):
+
+  ```bash
+  bash deployment/scripts/configure-redis-persistence.sh
+  ```
+
+  `appendfsync everysec` bounds broker loss on a crash to ≤1s of writes.
+
+  The script **exits 1 if `CONFIG REWRITE` is refused** (unwritable or absent
+  `redis.conf`) rather than reporting success — otherwise AOF would be live in
+  memory but silently lost on the next restart. If you hit this, fix the
+  `redis.conf` path/permissions and re-run; do not ignore it.
+- **Backstop:** the `reap_stuck_episodes` beat task (every 5 min) marks any
+  episode stuck in a non-terminal generation status for >45 min as `failed`,
+  so even a job lost despite AOF (e.g. a manual `FLUSHALL`) surfaces to the
+  user as a retryable failure instead of hanging forever. It does **not**
+  auto-requeue — the user retries generation from the UI.
+
+## S3 object storage DR — issue #319
+
+Generated audio lives in the versioned S3 bucket (versioning is a required
+setup step — see "Enable bucket versioning" above). **Recovery targets: RPO = 0
+for overwrites/deletes of existing objects** (every prior version is retained);
+**RTO ≈ minutes** (one `aws s3api` call per object). An object mid-upload when
+a job dies is simply regenerated — Postgres is the source of truth for what
+should exist.
+
+### Restore runbook: recover an overwritten or deleted object
+
+```bash
+# 1. List versions of the object (shows delete markers too):
+aws s3api list-object-versions --bucket podcaststudiohub-audio \
+  --prefix "episodes/<episode_id>/audio.mp3"
+
+# 2a. Object was DELETED → remove the delete marker (newest "DeleteMarkers" entry);
+#     the previous version becomes current again:
+aws s3api delete-object --bucket podcaststudiohub-audio \
+  --key "episodes/<episode_id>/audio.mp3" --version-id "<DELETE_MARKER_VERSION_ID>"
+
+# 2b. Object was OVERWRITTEN → copy the good old version over the current one:
+aws s3api copy-object --bucket podcaststudiohub-audio \
+  --copy-source "podcaststudiohub-audio/episodes/<episode_id>/audio.mp3?versionId=<GOOD_VERSION_ID>" \
+  --key "episodes/<episode_id>/audio.mp3"
+
+# 3. Verify the object serves again (presigned URL via the app, or):
+aws s3api head-object --bucket podcaststudiohub-audio --key "episodes/<episode_id>/audio.mp3"
+```
+
+Run steps 1–3 against a scratch key at least once after enabling versioning to
+prove the runbook (upload → overwrite → restore → verify). Note: the app's
+least-privilege IAM user lacks `ListBucket`, so `list-object-versions` needs
+the admin/backup credential, same as the versioning toggle.
 
 ## Nginx Configuration
 

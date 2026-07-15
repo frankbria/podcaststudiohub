@@ -187,19 +187,28 @@ jobs:
           # /etc/logrotate.d/nginx does NOT cover: it only globs
           # /var/log/nginx/*.log. Without this drop-in those files are never
           # rotated and eventually fill the VPS disk (issue #320).
-          # mkdir -p first: rsync does not create intermediate remote dirs.
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST \
-            "mkdir -p $SERVER_PATH/deployment/logrotate"
+          # Stage in the deploy user's HOME, not under $SERVER_PATH:
+          # /opt/podcaststudiohub/deployment is not writable by the deploy
+          # account, so creating a new subdir there fails with EACCES (the
+          # sibling `mkdir -p .../deployment/scripts` only works because that
+          # directory already exists — mkdir -p on an existing path is a no-op
+          # and never needs write permission on the parent).
+          # HOME rather than /tmp on purpose: this file is about to be installed
+          # into /etc/logrotate.d and run by root, and world-writable /tmp would
+          # let a local user pre-place a symlink there and have root copy in
+          # content of their choosing. The drop-in's real home is
+          # /etc/logrotate.d, so nothing needs to persist under $SERVER_PATH.
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
             deployment/logrotate/podcaststudiohub-nginx \
-            $SSH_USER@$SSH_HOST:$SERVER_PATH/deployment/logrotate/
+            $SSH_USER@$SSH_HOST:podcaststudiohub-nginx.logrotate
 
           # NOTE: no backticks anywhere below — this is an unquoted heredoc, so
           # the runner's shell command-substitutes backticks (even inside #
           # comments) before the text is ever sent to the server.
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
             set -e
-            SRC="$SERVER_PATH/deployment/logrotate/podcaststudiohub-nginx"
+            # Matches the rsync target above: staged in HOME, not $SERVER_PATH.
+            SRC="\$HOME/podcaststudiohub-nginx.logrotate"
             DEST="/etc/logrotate.d/podcaststudiohub-nginx"
 
             # Privileged ops: the deploy account is the non-root service user
@@ -240,6 +249,10 @@ jobs:
             \$SUDO install -m 0644 -o root -g root \
               "\$SRC" \
               "\$DEST"
+
+            # The installed copy under /etc/logrotate.d is the live one; drop
+            # the staging copy so it can't drift or be mistaken for source.
+            rm -f "\$SRC"
 
             echo "nginx log rotation installed at \$DEST"
           EOF

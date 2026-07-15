@@ -285,13 +285,23 @@ Notes:
 
 Both log producers on this box write unbounded by default. A single VPS disk
 backs Postgres, Redis and the app tree, so an unrotated log does not just lose
-logs — it takes the whole host down. Both are rotated automatically by the
-deploy workflow; neither needs manual setup.
+logs — it takes the whole host down.
 
-| Producer | Path | Rotated by | Policy |
-| --- | --- | --- | --- |
-| nginx | `/opt/podcaststudiohub/logs/frontend-{access,error}.log` | `/etc/logrotate.d/podcaststudiohub-nginx` (system logrotate, daily cron/timer) | daily, keep **14**, compressed |
-| PM2 (api / frontend / celery) | `~/.pm2/logs/*.log` (service account's home) | `pm2-logrotate` module | roll at **10M** or daily at 00:00, keep **7**, compressed |
+| Producer | Path | Rotated by | Installed by | Policy |
+| --- | --- | --- | --- | --- |
+| nginx | `/opt/podcaststudiohub/logs/frontend-{access,error}.log` | `/etc/logrotate.d/podcaststudiohub-nginx` (system logrotate, daily cron/timer) | **`provision-ssl.sh`** (root, one-time) | daily, keep **14**, compressed |
+| PM2 (api / frontend / celery) | `~/.pm2/logs/*.log` (service account's home) | `pm2-logrotate` module | the deploy workflow (every run, idempotent) | roll at **10M** or daily at 00:00, keep **7**, compressed |
+
+> ⚠️ **Existing hosts need one manual step.** The nginx drop-in is installed by
+> `provision-ssl.sh`, so a box provisioned before issue #320 has **no nginx log
+> rotation** until you re-run it (it is idempotent and leaves a valid cert
+> alone):
+>
+> ```bash
+> sudo DOMAIN=dev.podcaststudiohub.me deployment/scripts/provision-ssl.sh
+> ```
+>
+> PM2 rotation needs nothing — the next deploy configures it.
 
 ### nginx
 
@@ -299,25 +309,32 @@ The site config logs to a **custom** path (`/opt/podcaststudiohub/logs/`), which
 the distro's stock `/etc/logrotate.d/nginx` does **not** cover — that file only
 globs `/var/log/nginx/*.log`, so these logs match nothing and grow forever. The
 repo therefore ships its own drop-in at
-`deployment/logrotate/podcaststudiohub-nginx`; the deploy rsyncs it and installs
-it to `/etc/logrotate.d/podcaststudiohub-nginx`.
+`deployment/logrotate/podcaststudiohub-nginx`, installed to
+`/etc/logrotate.d/podcaststudiohub-nginx`.
+
+**Why provisioning and not the deploy.** `/etc/logrotate.d` is root-owned, and
+the deploy account is deliberately **non-root** (issue #209). Installing this
+per-deploy would mean granting that account passwordless root for a file that
+changes about once a year — so it lives in `provision-ssl.sh`, the root-run,
+operator-invoked, idempotent step that already installs the nginx site config
+these logs come from and creates `/opt/podcaststudiohub/logs` itself. (The first
+attempt did put it in the deploy; it failed on the real host with `sudo: a
+password is required`, which is the same conclusion arrived at the hard way.)
 
 If you change `access_log` / `error_log` in `deployment/nginx/podcastfy.conf`,
 change the glob in the drop-in to match — `deployment/tests/test_log_rotation.py`
 fails the build if the two drift apart.
 
-The deploy validates the drop-in with `logrotate -d` (dry run) **before**
+`provision-ssl.sh` validates the drop-in with `logrotate -d` (dry run) **before**
 installing it, because a malformed file in `/etc/logrotate.d` breaks the entire
-daily rotation, not just this one entry. Note that `logrotate -d` exits **0** on
-an unknown option (it prints `error: ... -- ignoring line` and continues), so
-the deploy also greps its output for `error:` lines — the exit status alone is
-not a gate.
+daily rotation, not just this one entry — and refuses to install it if the dry
+run objects.
 
-Installing to `/etc/logrotate.d` needs root; the deploy account is the non-root
-service user from `harden-host.sh`, so the step escalates with `sudo -n`
-(non-interactive — it fails loudly rather than hanging on a password prompt).
-**The deploy account therefore needs NOPASSWD sudo** for `install` and
-`logrotate`, or that step fails.
+Note the trap it defends against: **`logrotate -d` exits `0` on an unknown
+option.** A typo like `rotat 14` prints `error: ... -- ignoring line`, returns
+`0`, and silently drops the retention window, so `set -e` alone is *not* a gate.
+Provisioning therefore also greps the dry-run output for `^error:` lines. (Same
+family as the `redis-cli` exit-0 trap documented under Redis durability.)
 
 Verify / force a rotation by hand:
 ```bash

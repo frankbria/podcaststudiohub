@@ -25,6 +25,7 @@ DEPLOY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy-dev.yml"
 NGINX_CONF = REPO_ROOT / "deployment" / "nginx" / "podcastfy.conf"
 LOGROTATE_CONF = REPO_ROOT / "deployment" / "logrotate" / "podcaststudiohub-nginx"
 README = REPO_ROOT / "deployment" / "README.md"
+PROVISION_SSL = REPO_ROOT / "deployment" / "scripts" / "provision-ssl.sh"
 
 LOGROTATE_INSTALL_PATH = "/etc/logrotate.d/podcaststudiohub-nginx"
 
@@ -197,146 +198,89 @@ def test_logrotate_postrotate_cannot_fail_the_rotation():
 	)
 
 
-# ── AC2: the deploy installs + validates the drop-in ───────────────────────
+# ── AC2: PROVISIONING installs + validates the drop-in ─────────────────────
+#
+# Not the deploy workflow. /etc/logrotate.d is root-owned and the deploy account
+# is deliberately non-root (#209); installing per-deploy would mean granting it
+# passwordless root for a file that changes about once a year. The first real
+# deploy proved the point by failing with "sudo: a password is required".
+# provision-ssl.sh is already the root-run, operator-invoked, idempotent step
+# that installs the very nginx config whose logs this rotates.
 
 
-def test_deploy_syncs_logrotate_conf_to_server():
+def test_provisioning_installs_the_logrotate_drop_in():
+	text = PROVISION_SSL.read_text()
+	assert re.search(r"install\s+-m\s+0644\s+-o\s+root\s+-g\s+root.*LOGROTATE_CONF", text), (
+		"provision-ssl.sh must install the logrotate drop-in as root-owned 0644"
+	)
+	assert 'LOGROTATE_DEST="/etc/logrotate.d/podcaststudiohub-nginx"' in text, (
+		f"the drop-in must land at {LOGROTATE_INSTALL_PATH}"
+	)
+
+
+def test_provisioning_points_at_the_repo_drop_in():
+	text = PROVISION_SSL.read_text()
+	assert 'LOGROTATE_CONF="${REPO_ROOT}/deployment/logrotate/podcaststudiohub-nginx"' in text, (
+		"provisioning must install the drop-in committed in this repo"
+	)
+
+
+def test_provisioning_validates_before_installing():
+	# A malformed file in /etc/logrotate.d breaks the whole daily run, not just
+	# this entry — so it must never be installed unvalidated.
+	text = PROVISION_SSL.read_text()
+	validate = text.find("logrotate -d --state")
+	install = text.find("install -m 0644 -o root -g root")
+	assert validate != -1, "provisioning must dry-run the drop-in before installing"
+	assert install != -1, "provisioning must install the drop-in"
+	assert validate < install, "validation must happen BEFORE the install"
+
+
+def test_provisioning_catches_silently_ignored_directives():
+	# logrotate -d EXITS 0 on an unknown option: it prints
+	# "error: ... -- ignoring line" and carries on. So a typo like "rotat 14"
+	# silently drops the retention window and `set -e` never fires. Verified
+	# against logrotate 3.21. The grep is the real gate.
+	text = PROVISION_SSL.read_text()
+	assert re.search(r"grep\s+-qi\s+'\^error:'", text), (
+		"exit status alone is not a gate — must also grep logrotate -d output for error lines"
+	)
+
+
+def test_provisioning_logrotate_dry_run_uses_throwaway_state():
+	# --state: a dry run must not disturb the host's real logrotate state.
+	text = PROVISION_SSL.read_text()
+	assert re.search(r"logrotate -d --state \"\$\{lr_state\}\"", text), (
+		"the dry run must use a throwaway --state file"
+	)
+
+
+def test_provisioning_aborts_when_the_drop_in_is_rejected():
+	text = PROVISION_SSL.read_text()
+	assert text.count("refusing to install it.") >= 2, (
+		"both the exit-status and the error-grep path must refuse to install"
+	)
+
+
+def test_deploy_does_not_install_the_logrotate_drop_in():
+	# Regression: this lived in the deploy and failed on the real host with
+	# "sudo: a password is required". Keep root-owned config out of the
+	# non-root deploy path.
 	text = DEPLOY_WORKFLOW.read_text()
-	assert re.search(r"rsync.*(\n.*)*?logrotate/podcaststudiohub-nginx", text), (
-		"deploy must rsync the logrotate drop-in to the server"
+	assert "Install nginx log rotation" not in text, (
+		"the deploy must not install the drop-in — provisioning does (root, one-time)"
+	)
+	assert LOGROTATE_INSTALL_PATH not in text, (
+		"the deploy must not write to /etc/logrotate.d — the deploy account is non-root"
 	)
 
 
-def test_deploy_installs_logrotate_conf_to_logrotate_d():
+def test_deploy_does_not_need_passwordless_root():
+	# The deploy account is non-root by design (#209). If a step needs sudo, that
+	# is a signal the work belongs in provisioning instead.
 	text = DEPLOY_WORKFLOW.read_text()
-	assert LOGROTATE_INSTALL_PATH in text, (
-		f"deploy must install the drop-in to {LOGROTATE_INSTALL_PATH}"
-	)
-
-
-def test_deploy_installs_logrotate_conf_idempotently():
-	# Re-running the deploy must overwrite in place — never append or duplicate.
-	step = _logrotate_step()
-	install = re.search(r"install\s+-m\s+0644((?:[^\n]*\\\n)*[^\n]*)", step)
-	assert install, "drop-in must be installed with `install -m 0644` (overwrite in place)"
-	# The destination may be spelled literally or via a variable assigned to it.
-	target = install.group(1)
-	assert LOGROTATE_INSTALL_PATH in target or re.search(r"\$\{?DEST\b", target), (
-		f"the `install` must target {LOGROTATE_INSTALL_PATH}"
-	)
-	assert LOGROTATE_INSTALL_PATH in step, "the install path must appear in the step"
-	assert ">>" not in step, "must not append to the drop-in (not idempotent)"
-
-
-def test_deploy_validates_logrotate_conf_before_it_can_break_rotation():
-	# `logrotate -d` is a parse-only dry run: a malformed drop-in must fail the
-	# deploy, not silently sit in /etc/logrotate.d breaking every daily run.
-	step = _logrotate_step()
-	assert re.search(r"logrotate\s+-d\b", step), "deploy must validate with `logrotate -d`"
-	assert "set -e" in step, "the logrotate SSH block must fail fast on a bad config"
-
-
-def test_deploy_logrotate_validation_catches_silently_ignored_directives():
-	# Verified against real logrotate 3.21: `logrotate -d` exits 0 on an unknown
-	# option — it prints "error: ... unknown option 'x' -- ignoring line" and
-	# carries on. So `set -e` alone CANNOT catch a typo'd directive (e.g.
-	# `rotat 14`), which would silently drop that setting. The step must inspect
-	# the output for error lines, not just trust the exit status.
-	step = _logrotate_step()
-	assert re.search(r"grep[^\n]*error", step, re.I), (
-		"validation must grep logrotate's output for 'error:' lines — its exit "
-		"status is 0 for unknown/ignored directives"
-	)
-
-
-def test_deploy_does_privileged_logrotate_install_non_interactively():
-	# The deploy account is the non-root service user (harden-host.sh), so
-	# /etc/logrotate.d needs sudo — and `-n` fails loudly rather than hanging
-	# forever on a password prompt.
-	step = _logrotate_step()
-	assert "sudo -n" in step, "privileged install must use non-interactive sudo (sudo -n)"
-
-
-def test_deploy_ssh_heredocs_contain_no_backticks():
-	# Found the hard way while adding the steps above: these are UNQUOTED
-	# heredocs (<< EOF), so the *runner's* shell command-substitutes backticks
-	# before the text is ever sent to the server — including backticks inside
-	# '#' comments. A markdown-style comment like `pm2 install` therefore RUNS
-	# pm2 install on the runner and is stripped from what the server receives.
-	# Quoting the heredoc would break the intentional $SERVER_PATH expansion, so
-	# the rule is simply: no backticks inside these bodies.
-	text = DEPLOY_WORKFLOW.read_text()
-	bodies = re.findall(r"<< EOF\n(.*?)\n\s*EOF$", text, re.S | re.M)
-	assert bodies, "expected unquoted SSH heredocs in deploy-dev.yml"
-	for body in bodies:
-		assert "`" not in body, (
-			"backtick inside an unquoted SSH heredoc: the runner will execute it "
-			"as a command substitution instead of sending it to the server.\n"
-			f"Offending block:\n{body[:400]}"
-		)
-
-
-def _logrotate_step() -> str:
-	"""The nginx-logrotate workflow step body."""
-	text = DEPLOY_WORKFLOW.read_text()
-	match = re.search(r"- name: Install nginx log rotation\n(.*?)\n      - name:", text, re.S)
-	assert match, "expected an 'Install nginx log rotation' step in deploy-dev.yml"
-	return match.group(1)
-
-
-def _logrotate_commands() -> str:
-	"""The nginx-logrotate step with comment lines stripped.
-
-	Assert forbidden commands against THIS, not the raw step: the step's comments
-	deliberately name the traps it avoids (mkdir, /tmp), and matching prose
-	instead of the actual invocation is its own documented trap.
-	"""
-	return "\n".join(
-		line for line in _logrotate_step().splitlines()
-		if not line.lstrip().startswith("#")
-	)
-
-
-def test_logrotate_step_does_not_create_dirs_under_server_path():
-	"""Regression: the deploy account cannot write inside $SERVER_PATH.
-
-	The first real deploy of this step died on
-	`mkdir: cannot create directory '/opt/podcaststudiohub/deployment/logrotate':
-	Permission denied`. The sibling `mkdir -p $SERVER_PATH/deployment/scripts`
-	is not a counter-example: mkdir -p on an ALREADY-EXISTING path is a no-op
-	and never needs write permission on the parent. Stage in HOME instead — the
-	drop-in's real home is /etc/logrotate.d, so nothing needs to live under
-	$SERVER_PATH at all.
-	"""
-	step = _logrotate_commands()
-	assert "mkdir" not in step, (
-		"do not mkdir under $SERVER_PATH — the deploy account cannot write there; "
-		"stage the drop-in in the deploy user's HOME"
-	)
-	assert "SERVER_PATH/deployment/logrotate" not in step, (
-		"do not stage the drop-in under $SERVER_PATH (not writable by the deploy user)"
-	)
-
-
-def test_logrotate_step_does_not_stage_in_world_writable_tmp():
-	"""This file is installed to /etc/logrotate.d and run by root.
-
-	Staging it in world-writable /tmp would let a local user pre-place a symlink
-	there and have root copy in content of their choosing. HOME is owned by the
-	deploy account, so it has no such race.
-	"""
-	step = _logrotate_commands()
-	assert "/tmp/" not in step, "stage the drop-in in HOME, not world-writable /tmp"
-	assert "$HOME/" in step or "\\$HOME/" in step, (
-		"the drop-in should be staged under the deploy user's HOME"
-	)
-
-
-def test_logrotate_step_removes_its_staging_copy():
-	"""The installed /etc/logrotate.d copy is the live one; staging must not linger."""
-	step = _logrotate_commands()
-	assert re.search(r"rm -f\s+\"?\\?\$SRC", step), (
-		"remove the staged copy after install so it cannot drift from the live file"
+	assert "sudo" not in text, (
+		"no deploy step may require sudo — put root-owned work in provision-ssl.sh"
 	)
 
 

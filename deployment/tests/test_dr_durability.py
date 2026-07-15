@@ -117,6 +117,19 @@ def test_redis_persistence_script_enables_aof_durably():
 	)
 
 
+def test_redis_persistence_script_checks_rewrite_result():
+	# redis-cli exits 0 even on an ERR reply, so `set -e` cannot catch a failed
+	# CONFIG REWRITE (found live: rewrite denied → script reported success, AOF
+	# evaporated on restart). The script must capture the reply and assert OK.
+	text = REDIS_SCRIPT.read_text()
+	assert re.search(r'=\s*"?\$\([^)]*CONFIG\s+REWRITE[^)]*\)', text, re.I), (
+		"script must capture the CONFIG REWRITE reply into a variable"
+	)
+	assert re.search(r'!=\s*"OK"', text), (
+		"script must hard-fail when the CONFIG REWRITE reply isn't OK"
+	)
+
+
 def test_redis_persistence_script_verifies_readback():
 	# Trust but verify: the script must read the setting back, not assume it.
 	assert re.search(r"CONFIG\s+GET\s+appendonly", REDIS_SCRIPT.read_text(), re.I)

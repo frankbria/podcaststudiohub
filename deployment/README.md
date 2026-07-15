@@ -446,6 +446,9 @@ logical dumps are the deliberate, lazy-correct choice for a single-VPS dev host.
   `podcastfy` service account, reading DB/S3 settings from the API `.env`.
 - `deployment/scripts/restore-db.sh` — pulls a dump from S3 and `pg_restore`s it
   (latest by default, or a named backup), guarded by a confirmation prompt.
+  Like the dump side, it targets `MIGRATION_DATABASE_URL` when set — restoring
+  as the RLS-subject app role would trip the FORCE RLS `WITH CHECK` policies
+  and abort the whole `--exit-on-error` restore.
 
 Settings (env, defaulting to the app's existing `AWS_*` / `DATABASE_URL`):
 
@@ -500,8 +503,10 @@ bash deployment/scripts/restore-db.sh podcastfy-20260601T033000Z.dump
 
 ```bash
 # Restore the latest dump into a throwaway database and sanity-check row counts.
+# Override MIGRATION_DATABASE_URL (not just DATABASE_URL): it takes precedence,
+# so a value inherited from api/.env would silently retarget the live database.
 createdb podcastfy_restore_test
-DATABASE_URL="postgresql://user:pass@localhost/podcastfy_restore_test" \
+MIGRATION_DATABASE_URL="postgresql://user:pass@localhost/podcastfy_restore_test" \
   DB_RESTORE_FORCE=1 bash deployment/scripts/restore-db.sh
 psql podcastfy_restore_test -c "SELECT count(*) FROM users;"
 dropdb podcastfy_restore_test

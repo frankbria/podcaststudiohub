@@ -76,6 +76,16 @@ def test_backup_dumps_with_privileged_role():
 	)
 
 
+def test_restore_targets_privileged_role():
+	# Symmetric half of the dump-side RLS fix: pg_restore as the RLS-subject
+	# app role trips every FORCE RLS WITH CHECK policy and --exit-on-error
+	# aborts the whole restore. The restore must prefer the BYPASSRLS role.
+	restore = REPO_ROOT / "deployment" / "scripts" / "restore-db.sh"
+	assert re.search(r"MIGRATION_DATABASE_URL[}:]", restore.read_text()), (
+		"restore-db.sh must prefer MIGRATION_DATABASE_URL so RLS doesn't abort restores"
+	)
+
+
 def test_manual_deploy_runbook_includes_pre_migration_dump():
 	text = README.read_text()
 	dump = text.find("backup-db.sh", text.find("Step 2: Deploy API"))

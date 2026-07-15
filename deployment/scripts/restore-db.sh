@@ -11,7 +11,7 @@
 #   DB_RESTORE_FORCE=1 bash deployment/scripts/restore-db.sh   # skip the prompt
 #
 # Configuration mirrors backup-db.sh:
-#   DATABASE_URL / PG* libpq vars   target database
+#   MIGRATION_DATABASE_URL / DATABASE_URL / PG* libpq vars   target database
 #   DB_BACKUP_S3_BUCKET (default $AWS_S3_BUCKET), DB_BACKUP_S3_PREFIX (db-backups/)
 #   DB_RESTORE_FORCE=1              skip the confirmation prompt
 
@@ -25,11 +25,15 @@ if [[ -z "$DB_BACKUP_S3_BUCKET" ]]; then
 	exit 1
 fi
 
-# pg_restore --dbname needs an explicit target. Prefer DATABASE_URL (normalised
-# off any +asyncpg driver suffix); otherwise fall back to PGDATABASE so the
-# remaining libpq PG* vars (host/user/password) still apply.
-if [[ -n "${DATABASE_URL:-}" ]]; then
-	TARGET_DB="${DATABASE_URL/postgresql+asyncpg:/postgresql:}"
+# pg_restore --dbname needs an explicit target. Prefer the BYPASSRLS migration
+# role (mirrors backup-db.sh): tenant tables are FORCE RLS (migration 014), and
+# a restore as the RLS-subject app role trips every WITH CHECK policy —
+# --exit-on-error then aborts the whole restore. Normalise off any +asyncpg
+# driver suffix; otherwise fall back to PGDATABASE so the remaining libpq PG*
+# vars (host/user/password) still apply.
+SRC_URL="${MIGRATION_DATABASE_URL:-${DATABASE_URL:-}}"
+if [[ -n "$SRC_URL" ]]; then
+	TARGET_DB="${SRC_URL/postgresql+asyncpg:/postgresql:}"
 	TARGET_DB="${TARGET_DB/postgres+asyncpg:/postgres:}"
 elif [[ -n "${PGDATABASE:-}" ]]; then
 	TARGET_DB="$PGDATABASE"

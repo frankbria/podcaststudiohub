@@ -1,6 +1,7 @@
 """
 Main FastAPI application for Podcastfy GUI API
 """
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
@@ -9,14 +10,15 @@ import logging
 
 from src.config import settings
 from src.dependencies import meter_api_call
+from src.logging_config import init_sentry, setup_logging
+from src.middleware.correlation import CorrelationIdMiddleware
 from src.middleware.cors import setup_cors
 from src.middleware.tenant import TenantContextMiddleware
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Structured logging + error tracking (issue #320). setup_logging replaces the
+# old basicConfig; init_sentry is a no-op unless SENTRY_DSN is set.
+setup_logging()
+init_sentry()
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +58,11 @@ setup_cors(app)
 # Add tenant context middleware
 app.add_middleware(TenantContextMiddleware)
 
+# Correlation ID middleware is added LAST so it is OUTERMOST: Starlette applies
+# add_middleware in LIFO order, and the request id must be bound before CORS and
+# tenant resolution run so their log lines carry it too (issue #320).
+app.add_middleware(CorrelationIdMiddleware)
+
 
 @app.get("/")
 async def root():
@@ -69,8 +76,68 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint for load balancers"""
+    """Liveness probe: is this process up?
+
+    Deliberately checks nothing external. A dependency outage must not make this
+    fail, or a supervisor would restart a perfectly healthy process and turn a
+    Redis blip into an API outage. Use /ready to gate traffic (issue #320).
+    """
     return {"status": "healthy", "version": settings.APP_VERSION}
+
+
+async def _check_database() -> None:
+    """Round-trip the DB. Raises on failure."""
+    from sqlalchemy import text
+
+    from src.database import engine
+
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
+
+async def _check_redis() -> None:
+    """Round-trip Redis. Raises on failure."""
+    # redis>=5 ships redis.asyncio, so this needs no new dependency.
+    from redis.asyncio import from_url
+
+    client = from_url(settings.REDIS_URL)
+    try:
+        await client.ping()
+    finally:
+        await client.aclose()
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness probe: can this process actually serve traffic?
+
+    Checks the dependencies a request needs (Postgres, Redis) and returns 503 if
+    either is unreachable, so the deploy gate and uptime monitoring fail loudly
+    instead of reporting green through a brownout (issue #320).
+    """
+    checks: dict[str, str] = {}
+    for name, check in (("database", _check_database), ("redis", _check_redis)):
+        try:
+            # A hung dependency must fail the probe fast rather than hang it:
+            # without this the probe blocks until the caller's own timeout and
+            # the gate can't tell "slow" from "down".
+            await asyncio.wait_for(
+                check(), timeout=settings.READINESS_CHECK_TIMEOUT_SECONDS
+            )
+            checks[name] = "ok"
+        except Exception as e:
+            # Log the cause (the response deliberately doesn't carry it: /ready
+            # is unauthenticated, and connection errors quote DSNs/hostnames).
+            logger.error("Readiness check failed for %s: %s", name, e, exc_info=True)
+            checks[name] = "error"
+
+    if all(status == "ok" for status in checks.values()):
+        return {"status": "ready", "version": settings.APP_VERSION, "checks": checks}
+
+    return JSONResponse(
+        status_code=503,
+        content={"status": "not_ready", "version": settings.APP_VERSION, "checks": checks},
+    )
 
 
 @app.exception_handler(404)

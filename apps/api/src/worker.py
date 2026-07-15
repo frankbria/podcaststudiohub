@@ -1,10 +1,24 @@
 """
 Celery worker configuration for background tasks
 """
+import uuid
+
 from celery import Celery
+from celery.signals import (
+    before_task_publish,
+    setup_logging as setup_logging_signal,
+    task_postrun,
+    task_prerun,
+)
 from datetime import timedelta
 
 from src.config import settings
+from src.logging_config import (
+    CORRELATION_ID,
+    TENANT_ID,
+    init_sentry,
+    setup_logging,
+)
 
 # Create Celery app
 celery_app = Celery(
@@ -86,6 +100,65 @@ celery_app.conf.beat_schedule = {
         "schedule": timedelta(seconds=settings.STORAGE_GC_INTERVAL_SECONDS),
     },
 }
+
+# ── Observability: structured logs + correlation across the API→chain hop (#320)
+#
+# Propagation rides on message HEADERS, not task kwargs. Kwargs would mean
+# touching every dispatch site and adding a parameter to every task signature —
+# and the generation chain uses immutable .si() signatures precisely so that
+# nothing extra is threaded positionally (issue #211). Headers are invisible to
+# task code and survive chains, links and retries untouched.
+
+# Header names. Celery reserves the plain `id` header, hence the prefix.
+CORRELATION_ID_HEADER = "x_request_id"
+TENANT_ID_HEADER = "x_tenant_id"
+
+
+@setup_logging_signal.connect
+def _configure_worker_logging(**_kwargs):
+    """Use our formatter in the worker instead of Celery's default.
+
+    Connecting to this signal at all disables Celery's own logging config, which
+    is what lets the worker and uvicorn share one JSON format (issue #320, AC5).
+    """
+    setup_logging()
+    init_sentry()
+
+
+@before_task_publish.connect
+def _propagate_context_to_task(headers=None, **_kwargs):
+    """Stamp the publisher's request/tenant ids onto the outgoing message.
+
+    Fires in whichever process publishes: the API (so a task inherits the HTTP
+    request's id) and the worker (so a chained/retried task inherits its
+    parent's), which is what stitches a whole generation run to one id.
+    """
+    if headers is None:
+        return
+    # A task published outside any request context (beat: reap_stuck_episodes,
+    # drain_storage_deletion_outbox) has no id to inherit, so mint one — every
+    # run stays traceable, and its logs group.
+    headers[CORRELATION_ID_HEADER] = CORRELATION_ID.get() or str(uuid.uuid4())
+    tenant_id = TENANT_ID.get()
+    if tenant_id:
+        headers[TENANT_ID_HEADER] = tenant_id
+
+
+@task_prerun.connect
+def _bind_task_context(task=None, **_kwargs):
+    """Bind the message's ids into the worker's context for the task's lifetime."""
+    request = getattr(task, "request", None)
+    correlation_id = getattr(request, CORRELATION_ID_HEADER, None) or str(uuid.uuid4())
+    CORRELATION_ID.set(correlation_id)
+    TENANT_ID.set(getattr(request, TENANT_ID_HEADER, None))
+
+
+@task_postrun.connect
+def _unbind_task_context(**_kwargs):
+    """Clear the ids so a pooled worker can't leak them into the next task."""
+    CORRELATION_ID.set(None)
+    TENANT_ID.set(None)
+
 
 if __name__ == "__main__":
     celery_app.start()

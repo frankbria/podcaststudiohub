@@ -141,6 +141,22 @@ class Settings(BaseSettings):
 
     # Logging
     LOG_LEVEL: str = "INFO"
+    # "json" emits one structured record per line (request_id/tenant_id bound),
+    # shared by uvicorn and Celery so an incident can be stitched across both.
+    # "text" is the human-readable escape hatch for local dev (issue #320).
+    LOG_FORMAT: str = "json"
+
+    # Observability (issue #320)
+    # Error tracking. Unset -> Sentry is never initialised, so dev/CI/tests stay
+    # offline with no opt-out ceremony. Same Optional-override convention as
+    # CELERY_BROKER_URL above.
+    SENTRY_DSN: Optional[str] = None
+    # Fraction of requests traced for performance monitoring. 0.0 = errors only:
+    # this issue asks for error tracking, not APM.
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0
+    # Per-dependency ceiling for the /ready probe. A hung DB or Redis must fail
+    # the probe fast rather than hang it until the client's own timeout.
+    READINESS_CHECK_TIMEOUT_SECONDS: float = 2.0
 
     # Transcript Validation Settings
     MIN_TRANSCRIPT_WORDS: int = 100

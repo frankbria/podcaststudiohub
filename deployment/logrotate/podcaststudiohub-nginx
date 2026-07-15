@@ -1,0 +1,46 @@
+# Log rotation for the Podcastfy Studio nginx site (issue #320).
+#
+# Installed to /etc/logrotate.d/podcaststudiohub-nginx by the deploy workflow
+# (.github/workflows/deploy-dev.yml) — see deployment/README.md.
+#
+# WHY THIS FILE EXISTS: deployment/nginx/podcastfy.conf writes its access/error
+# logs to a CUSTOM path (/opt/podcaststudiohub/logs/), not the distro default.
+# The stock /etc/logrotate.d/nginx only globs /var/log/nginx/*.log, so these
+# files match nothing and grow unbounded until they fill the VPS disk — which
+# takes the whole box down, not just nginx.
+#
+# Keep the glob below in sync with the access_log/error_log paths in
+# podcastfy.conf; deployment/tests/test_log_rotation.py enforces the pairing.
+
+/opt/podcaststudiohub/logs/*.log {
+	daily
+	rotate 14
+	compress
+	# nginx keeps writing to the renamed inode until it reopens on USR1 below,
+	# so compressing on the same pass would truncate in-flight lines.
+	delaycompress
+	notifempty
+	# A freshly provisioned host has no logs until nginx serves its first
+	# request; a missing file must not error the daily run.
+	missingok
+	# nginx's master (root) reopens the path and its workers (www-data) write
+	# it, so the replacement file must be writable by www-data.
+	create 0640 www-data adm
+	# Both the access and error log match this glob: without sharedscripts the
+	# postrotate below (and its USR1) would run once per file.
+	sharedscripts
+	postrotate
+		# USR1 makes the nginx master reopen its log files. Without it nginx
+		# holds the rotated inode open: the live log stops growing and the disk
+		# is never actually reclaimed.
+		#
+		# Guarded on purpose: logrotate treats a non-zero postrotate as a
+		# failure of the whole rotation, so a stopped nginx (no pidfile) or an
+		# already-reaped pid must not block rotating the logs.
+		if [ -f /run/nginx.pid ]; then
+			kill -USR1 "$(cat /run/nginx.pid)" || true
+		elif [ -f /var/run/nginx.pid ]; then
+			kill -USR1 "$(cat /var/run/nginx.pid)" || true
+		fi
+	endscript
+}

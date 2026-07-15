@@ -9,6 +9,7 @@ from typing import Optional
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from src.logging_config import TENANT_ID
 from src.middleware.auth import extract_token_from_header, get_tenant_id_from_token
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
     PUBLIC_PATHS = {
         "/",
         "/health",
+        "/ready",
         "/docs",
         "/redoc",
         "/openapi.json",
@@ -66,6 +68,11 @@ class TenantContextMiddleware(BaseHTTPMiddleware):
                     # Store tenant_id in request state for database dependency
                     request.state.tenant_id = tenant_id
                     request.state.set_tenant_context = True
+                    # Additionally bind it for logging (issue #320). request.state
+                    # stays the source of truth for RLS; this contextvar only
+                    # exists so log records emitted deeper in the stack — where
+                    # no Request is in scope — carry the tenant.
+                    TENANT_ID.set(tenant_id)
         except ValueError:
             # Expected: invalid/expired token — continue without tenant context.
             # The auth dependency (get_current_user) handles the actual 401.

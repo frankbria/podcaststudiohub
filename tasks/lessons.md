@@ -348,6 +348,10 @@ re-applying the exact inverse edit — never a whole-file checkout.
   Markdown-style comments (`` `pm2 install` ``) in a deploy heredoc *execute on the CI runner*
   and are stripped from what the server receives. Static tests never see it; render the heredoc
   through a stubbed `ssh` to catch it. All of deploy-dev.yml's SSH blocks are unquoted heredocs.
+  **The same trap bit again minutes later**, outside any deploy: `gh pr comment --body "...markdown
+  with backticked `paths`..."` command-substituted the path, which executed and vanished from the
+  posted comment. Any double-quoted shell arg carrying markdown must go through `--body-file` plus a
+  quoted `<<'EOF'` heredoc. The rule is about double-quoted shell context generally, not heredocs.
 - **A module-global async engine + pytest-asyncio's per-test event loop = pooled connections
   crossing loops.** `/ready` using `src.database.engine` passed alone but poisoned the *next*
   test with "got Future attached to a different loop", because the pool cached a connection

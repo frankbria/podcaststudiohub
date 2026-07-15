@@ -75,7 +75,12 @@ async def test_root_endpoint(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_ready_endpoint_reports_dependency_checks(client: AsyncClient):
-    """/ready round-trips the real DB and Redis (both up in the test env)."""
+    """/ready round-trips the real DB and Redis.
+
+    Needs a live Redis at REDIS_URL as well as the test Postgres — deliberately
+    unmocked, per the repo's real-services rule, since a probe that only ever
+    PINGs a mock proves nothing. CI provisions both as service containers.
+    """
     response = await client.get("/ready")
 
     assert response.status_code == 200

@@ -47,6 +47,20 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
+      # This job runs the API suite too, so it needs the same broker test.yml
+      # provisions: the env below already points CELERY_BROKER_URL at
+      # redis://localhost:6379 while nothing listened there, and /ready PINGs
+      # Redis for real (issue #320).
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -87,6 +101,9 @@ jobs:
           JWT_SECRET_KEY: test-jwt-secret-for-ci-0000000000
           CELERY_BROKER_URL: redis://localhost:6379/0
           CELERY_RESULT_BACKEND: redis://localhost:6379/0
+          # Explicit rather than relying on the settings default, so the /ready
+          # probe's PING target is visible next to the service that serves it.
+          REDIS_URL: redis://localhost:6379/0
         run: |
           uv run pytest tests/ \
             --cov=src \

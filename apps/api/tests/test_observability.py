@@ -37,6 +37,21 @@ def _record(**kwargs) -> logging.LogRecord:
     return logging.LogRecord(**defaults)
 
 
+def _context(headers: dict):
+    """A REAL Celery request Context built from message headers.
+
+    Not a MagicMock: a mock answers any attribute, so a mock-based test would
+    pass even if the worker never read the header at all — it would assert an
+    outcome impossible under real semantics. Context is what Celery actually
+    hands a task, so this test fails if the header plumbing is wrong.
+    Verified against a live worker: Celery exposes custom headers both as
+    top-level Context attributes and via .headers.
+    """
+    from celery.app.task import Context
+
+    return Context(dict(headers))
+
+
 # ── AC5: JSON formatter ────────────────────────────────────────────────────
 
 
@@ -232,9 +247,7 @@ def test_prerun_binds_ids_from_message_headers():
     )
 
     task = MagicMock()
-    task.request = MagicMock(
-        **{CORRELATION_ID_HEADER: "req-2", TENANT_ID_HEADER: "tenant-2"}
-    )
+    task.request = _context({CORRELATION_ID_HEADER: "req-2", TENANT_ID_HEADER: "tenant-2"})
     try:
         _bind_task_context(task=task)
         assert CORRELATION_ID.get() == "req-2"
@@ -276,7 +289,7 @@ def test_api_to_task_roundtrip_preserves_id():
     assert CORRELATION_ID.get() is None  # publisher context gone, as in a worker
 
     task = MagicMock()
-    task.request = MagicMock(**{k: v for k, v in headers.items()})
+    task.request = _context(headers)
     try:
         _bind_task_context(task=task)
         assert CORRELATION_ID.get() == "end-to-end"

@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from httpx import AsyncClient
 
+from src.main import app
 from src.logging_config import (
     CORRELATION_ID,
     REQUEST_ID_HEADER,
@@ -142,6 +143,50 @@ async def test_request_ids_differ_across_requests(client: AsyncClient):
 async def test_correlation_id_does_not_leak_after_request(client: AsyncClient):
     await client.get("/health")
     assert CORRELATION_ID.get() is None
+
+
+@pytest.mark.asyncio
+async def test_unhandled_500_still_carries_request_id():
+    """The response a user most needs an id for.
+
+    An unhandled exception propagates past CorrelationIdMiddleware to
+    Starlette's ServerErrorMiddleware (which sits outside it), so the header has
+    to be re-stamped by the 500 handler or it is lost exactly here.
+    """
+    from httpx import ASGITransport
+
+    @app.get("/_test_unhandled_error")
+    async def _boom():
+        raise RuntimeError("kaboom")
+
+    try:
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            response = await c.get(
+                "/_test_unhandled_error", headers={REQUEST_ID_HEADER: "trace-500"}
+            )
+
+        assert response.status_code == 500
+        assert response.headers[REQUEST_ID_HEADER] == "trace-500"
+        # The id must not come at the cost of leaking the exception.
+        assert "kaboom" not in response.text
+    finally:
+        app.router.routes = [
+            r for r in app.router.routes
+            if getattr(r, "path", None) != "/_test_unhandled_error"
+        ]
+
+
+def test_request_id_is_cors_allowed_and_exposed():
+    """A browser can neither send nor read the id unless CORS lists it."""
+    from src.config import settings
+
+    assert "X-Request-ID" in settings.CORS_ALLOW_HEADERS
+
+    cors = next(
+        m for m in app.user_middleware if m.cls.__name__ == "CORSMiddleware"
+    )
+    assert "X-Request-ID" in cors.kwargs["expose_headers"]
 
 
 # ── AC3: propagation into Celery ───────────────────────────────────────────

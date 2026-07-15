@@ -50,6 +50,10 @@ class Settings(BaseSettings):
         "Accept-Language",
         "Content-Type",
         "Authorization",
+        # Lets a cross-origin client supply its own correlation id so its trace
+        # and ours share one. Without it the browser's preflight rejects the
+        # header outright (issue #320).
+        "X-Request-ID",
     ]
 
     # API Keys - LLM Providers

@@ -10,7 +10,7 @@ import logging
 
 from src.config import settings
 from src.dependencies import meter_api_call
-from src.logging_config import init_sentry, setup_logging
+from src.logging_config import REQUEST_ID_HEADER, init_sentry, setup_logging
 from src.middleware.correlation import CorrelationIdMiddleware
 from src.middleware.cors import setup_cors
 from src.middleware.tenant import TenantContextMiddleware
@@ -157,11 +157,26 @@ async def not_found_handler(request, exc):
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
-    """Custom 500 handler"""
-    logger.error(f"Internal server error: {exc}")
+    """Custom 500 handler.
+
+    Re-stamps X-Request-ID because this handler runs in Starlette's
+    ServerErrorMiddleware, which sits OUTSIDE CorrelationIdMiddleware: an
+    unhandled exception propagates past that middleware before it can set the
+    header, so a 500 would otherwise be the one response with no id — exactly
+    the response a user needs an id for when reporting the failure. The
+    contextvar is already unwound by here, so read request.state (set before
+    call_next) and pass the id explicitly to the log record (issue #320).
+    """
+    request_id = getattr(request.state, "request_id", None)
+    logger.error(
+        "Internal server error: %s", exc, exc_info=True,
+        extra={"request_id": request_id} if request_id else {},
+    )
+    headers = {REQUEST_ID_HEADER: request_id} if request_id else None
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error"}
+        content={"detail": "Internal server error"},
+        headers=headers,
     )
 
 

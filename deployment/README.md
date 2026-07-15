@@ -245,6 +245,42 @@ ssh root@<SERVER_IP> "pm2 restart podcaststudiohub-celery"
 ssh root@<SERVER_IP> "pm2 restart all"
 ```
 
+## Error tracking (Sentry) — issue #320
+
+Both the API and the Celery worker report unhandled exceptions to Sentry, but
+**only when `SENTRY_DSN` is set** — with no DSN, `init_sentry()` is a no-op, so
+local dev and CI never phone home. Nothing in the deploy sets it for you.
+
+To enable it on a host, add the DSN to the API's env file (the same file the
+API and worker already read; PM2 starts both from `$SERVER_PATH/api`):
+
+```bash
+# /opt/podcaststudiohub/api/.env
+SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<project>
+```
+
+then restart both processes so they pick it up:
+
+```bash
+pm2 restart podcaststudiohub-api podcaststudiohub-celery
+```
+
+Verify it took effect — this logs an exception the worker will also report:
+
+```bash
+pm2 logs podcaststudiohub-api --lines 50 | grep -i sentry
+```
+
+Notes:
+- `send_default_pii=False` and a `before_send` scrub strip the request body,
+  cookies and `Authorization` before an event leaves the process. This is a
+  multi-tenant app: a request body can contain another tenant's content, so do
+  not relax those without a deliberate decision.
+- `SENTRY_TRACES_SAMPLE_RATE` defaults to `0.0` (errors only). Raise it only
+  deliberately — performance tracing is billed per transaction.
+- `ENVIRONMENT` (already set per host) becomes the Sentry environment, so dev
+  and production events stay separated.
+
 ## Log rotation — issue #320
 
 Both log producers on this box write unbounded by default. A single VPS disk

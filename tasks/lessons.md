@@ -335,3 +335,35 @@ first compile); fresh CI venvs recompile. Clear __pycache__ to reproduce compile
 `git checkout <file>` to revert a test mutation also wipes any uncommitted edits in that file.
 When running mutation sanity checks, either commit pending work first or revert the mutation by
 re-applying the exact inverse edit — never a whole-file checkout.
+
+## 2026-07-14 (#320, PR #400) — observability
+
+- **`logrotate -d` exits 0 on an unknown option.** A typo (`rotat 14`) prints
+  `error: ... -- ignoring line` and returns **0**, so `set -e` cannot gate it and the
+  retention window silently vanishes. Verified against logrotate 3.21: exit 1 only when the
+  *log file is missing*, which masks the real signal. Must also grep output for `^error:`.
+  Same family as the `redis-cli exits 0 on ERR` lesson — **never trust a CLI's exit status
+  for config validation without checking what it prints.**
+- **Unquoted `<< EOF` heredocs command-substitute backticks — including inside `#` comments.**
+  Markdown-style comments (`` `pm2 install` ``) in a deploy heredoc *execute on the CI runner*
+  and are stripped from what the server receives. Static tests never see it; render the heredoc
+  through a stubbed `ssh` to catch it. All of deploy-dev.yml's SSH blocks are unquoted heredocs.
+  **The same trap bit again minutes later**, outside any deploy: `gh pr comment --body "...markdown
+  with backticked `paths`..."` command-substituted the path, which executed and vanished from the
+  posted comment. Any double-quoted shell arg carrying markdown must go through `--body-file` plus a
+  quoted `<<'EOF'` heredoc. The rule is about double-quoted shell context generally, not heredocs.
+- **A module-global async engine + pytest-asyncio's per-test event loop = pooled connections
+  crossing loops.** `/ready` using `src.database.engine` passed alone but poisoned the *next*
+  test with "got Future attached to a different loop", because the pool cached a connection
+  bound to a dead loop. Production is unaffected (uvicorn = one loop per process), so dispose
+  the engine between tests rather than weakening the probe. Same root cause as the documented
+  Celery `asyncio.run` pool trap.
+- **An unhandled 500 escapes `BaseHTTPMiddleware` entirely.** Starlette's `ServerErrorMiddleware`
+  sits *outside* user middleware, so a response-header-setting middleware never runs for a 500 —
+  the response users most need a correlation id on was the only one without one. `request.state`
+  (unlike a contextvar reset in `finally`) *does* survive into the 500 handler; stamp it there so
+  the exception still reaches Sentry instead of being swallowed by the middleware.
+- **opencode now stalls even on small diffs**: `zhipuai/glm-5-turbo` timed out at 10m on a full
+  diff and again at 7m20s on a 536-line one. `codex review --base <branch>` worked both times
+  and is the reliable fallback — but disclose which reviewer actually ran, since the repo rule
+  names opencode as primary.

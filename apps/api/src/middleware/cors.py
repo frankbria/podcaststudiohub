@@ -29,5 +29,9 @@ def setup_cors(app: FastAPI) -> None:
             "X-Total-Count",
             "X-Page-Number",
             "Content-Disposition",
+            # Without this the browser hides the echoed correlation id from JS,
+            # so a cross-origin client cannot show the user an id to quote in a
+            # bug report — the whole point of echoing it (issue #320).
+            "X-Request-ID",
         ],
     )

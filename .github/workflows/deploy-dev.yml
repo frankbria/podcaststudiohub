@@ -127,6 +127,106 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
 
+      - name: Configure PM2 log rotation
+        env:
+          SSH_HOST: ${{ vars.SERVER_HOST }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          # PM2 captures stdout/stderr for all three processes into ~/.pm2/logs
+          # and never rotates them (issue #320) — on a long-lived host they grow
+          # until they fill the disk. pm2-logrotate is a *global* pm2 module
+          # (not per-process), so it is configured once here, before the
+          # API/frontend/celery processes start writing under it. There is no
+          # ecosystem file to carry this config, hence `pm2 set`.
+          # NOTE: no backticks anywhere below — this is an unquoted heredoc, so
+          # the runner's shell command-substitutes backticks (even inside #
+          # comments) before the text is ever sent to the server.
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+            set -e
+
+            # Idempotent: pm2 install on an already-installed module updates it
+            # in place, and each pm2 set overwrites the stored value.
+            pm2 install pm2-logrotate
+
+            # Rotate at 10M per file, keep 7 compressed generations per process,
+            # and force a daily roll at midnight even on quiet days so a file
+            # can't sit unrotated for weeks.
+            pm2 set pm2-logrotate:max_size 10M
+            pm2 set pm2-logrotate:retain 7
+            pm2 set pm2-logrotate:compress true
+            pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
+
+            echo "PM2 log rotation configured"
+          EOF
+
+      - name: Install nginx log rotation
+        env:
+          SSH_HOST: ${{ vars.SERVER_HOST }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
+          SERVER_PATH: ${{ vars.SERVER_PATH }}
+        run: |
+          # nginx logs to a CUSTOM path (/opt/podcaststudiohub/logs/*.log — see
+          # deployment/nginx/podcastfy.conf), which the distro's stock
+          # /etc/logrotate.d/nginx does NOT cover: it only globs
+          # /var/log/nginx/*.log. Without this drop-in those files are never
+          # rotated and eventually fill the VPS disk (issue #320).
+          # mkdir -p first: rsync does not create intermediate remote dirs.
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST \
+            "mkdir -p $SERVER_PATH/deployment/logrotate"
+          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+            deployment/logrotate/podcaststudiohub-nginx \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/deployment/logrotate/
+
+          # NOTE: no backticks anywhere below — this is an unquoted heredoc, so
+          # the runner's shell command-substitutes backticks (even inside #
+          # comments) before the text is ever sent to the server.
+          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+            set -e
+            SRC="$SERVER_PATH/deployment/logrotate/podcaststudiohub-nginx"
+            DEST="/etc/logrotate.d/podcaststudiohub-nginx"
+
+            # Privileged ops: the deploy account is the non-root service user
+            # created by deployment/scripts/harden-host.sh, and /etc/logrotate.d
+            # is root-owned. Match the repo convention (provision-ssl.sh /
+            # harden-host.sh assume root) by escalating only for the install.
+            # sudo -n is non-interactive: a host without NOPASSWD sudo fails
+            # loudly here instead of hanging forever on a password prompt.
+            SUDO=""
+            if [ "\$(id -u)" -ne 0 ]; then SUDO="sudo -n"; fi
+
+            # Validate BEFORE installing: a malformed drop-in in /etc/logrotate.d
+            # is not contained to this file — it breaks the whole daily run.
+            #
+            # Exit status alone is NOT a sufficient gate: logrotate -d exits 0 on
+            # an unknown option (it prints "error: ... -- ignoring line" and
+            # carries on), so a typo such as "rotat 14" would silently drop the
+            # retention window. Grep the output for error lines too.
+            # --state points at a throwaway file so the dry run cannot touch the
+            # host's real logrotate status.
+            echo "Validating \$SRC ..."
+            lr_state="\$(mktemp)"
+            lr_out="\$(\$SUDO logrotate -d --state "\$lr_state" "\$SRC" 2>&1)" || {
+              echo "\$lr_out" >&2
+              echo "logrotate rejected \$SRC — aborting deploy" >&2
+              rm -f "\$lr_state"
+              exit 1
+            }
+            rm -f "\$lr_state"
+            echo "\$lr_out"
+            if echo "\$lr_out" | grep -qi '^error:'; then
+              echo "logrotate reported errors in \$SRC — aborting deploy" >&2
+              exit 1
+            fi
+
+            # Idempotent: install overwrites the destination in place, so
+            # re-running the deploy just refreshes the drop-in (never appends).
+            \$SUDO install -m 0644 -o root -g root \
+              "\$SRC" \
+              "\$DEST"
+
+            echo "nginx log rotation installed at \$DEST"
+          EOF
+
       - name: Deploy API
         env:
           SSH_HOST: ${{ vars.SERVER_HOST }}
@@ -375,7 +475,13 @@ jobs:
             return 1
           }
 
-          wait_for "API" "$API_URL/health" "200" || exit 1
+          # Gate on /ready, NOT /health (issue #320). /health is a liveness
+          # probe: it returns 200 as soon as the uvicorn process is answering,
+          # so a deploy goes green even when Postgres or Redis is unreachable
+          # and every real request 500s. /ready is the readiness probe — it
+          # checks those dependencies and returns 503 until they are reachable,
+          # so it fails the deploy on exactly the states /health hides.
+          wait_for "API" "$API_URL/ready" "200" || exit 1
           wait_for "Frontend" "$FRONTEND_URL" "200" || exit 1
 
           echo "🚀 Deployment successful!"

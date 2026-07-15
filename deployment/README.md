@@ -187,8 +187,13 @@ EOF
 # Check PM2 processes
 ssh root@<SERVER_IP> "pm2 list"
 
-# Check API health
-curl https://dev.podcaststudiohub.me/api/health
+# Check API liveness (200 = the process is up)
+curl https://dev.podcaststudiohub.me/health
+
+# Check API readiness (200 = Postgres + Redis reachable; 503 = a dependency is
+# down). This is what the automated deploy gates on — /health would pass on an
+# API that is up but cannot serve a single real request.
+curl -i https://dev.podcaststudiohub.me/ready
 
 # Check frontend
 curl https://dev.podcaststudiohub.me
@@ -238,6 +243,111 @@ ssh root@<SERVER_IP> "pm2 restart podcaststudiohub-celery"
 **Restart all:**
 ```bash
 ssh root@<SERVER_IP> "pm2 restart all"
+```
+
+## Error tracking (Sentry) — issue #320
+
+Both the API and the Celery worker report unhandled exceptions to Sentry, but
+**only when `SENTRY_DSN` is set** — with no DSN, `init_sentry()` is a no-op, so
+local dev and CI never phone home. Nothing in the deploy sets it for you.
+
+To enable it on a host, add the DSN to the API's env file (the same file the
+API and worker already read; PM2 starts both from `$SERVER_PATH/api`):
+
+```bash
+# /opt/podcaststudiohub/api/.env
+SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<project>
+```
+
+then restart both processes so they pick it up:
+
+```bash
+pm2 restart podcaststudiohub-api podcaststudiohub-celery
+```
+
+Verify it took effect — this logs an exception the worker will also report:
+
+```bash
+pm2 logs podcaststudiohub-api --lines 50 | grep -i sentry
+```
+
+Notes:
+- `send_default_pii=False` and a `before_send` scrub strip the request body,
+  cookies and `Authorization` before an event leaves the process. This is a
+  multi-tenant app: a request body can contain another tenant's content, so do
+  not relax those without a deliberate decision.
+- `SENTRY_TRACES_SAMPLE_RATE` defaults to `0.0` (errors only). Raise it only
+  deliberately — performance tracing is billed per transaction.
+- `ENVIRONMENT` (already set per host) becomes the Sentry environment, so dev
+  and production events stay separated.
+
+## Log rotation — issue #320
+
+Both log producers on this box write unbounded by default. A single VPS disk
+backs Postgres, Redis and the app tree, so an unrotated log does not just lose
+logs — it takes the whole host down. Both are rotated automatically by the
+deploy workflow; neither needs manual setup.
+
+| Producer | Path | Rotated by | Policy |
+| --- | --- | --- | --- |
+| nginx | `/opt/podcaststudiohub/logs/frontend-{access,error}.log` | `/etc/logrotate.d/podcaststudiohub-nginx` (system logrotate, daily cron/timer) | daily, keep **14**, compressed |
+| PM2 (api / frontend / celery) | `~/.pm2/logs/*.log` (service account's home) | `pm2-logrotate` module | roll at **10M** or daily at 00:00, keep **7**, compressed |
+
+### nginx
+
+The site config logs to a **custom** path (`/opt/podcaststudiohub/logs/`), which
+the distro's stock `/etc/logrotate.d/nginx` does **not** cover — that file only
+globs `/var/log/nginx/*.log`, so these logs match nothing and grow forever. The
+repo therefore ships its own drop-in at
+`deployment/logrotate/podcaststudiohub-nginx`; the deploy rsyncs it and installs
+it to `/etc/logrotate.d/podcaststudiohub-nginx`.
+
+If you change `access_log` / `error_log` in `deployment/nginx/podcastfy.conf`,
+change the glob in the drop-in to match — `deployment/tests/test_log_rotation.py`
+fails the build if the two drift apart.
+
+The deploy validates the drop-in with `logrotate -d` (dry run) **before**
+installing it, because a malformed file in `/etc/logrotate.d` breaks the entire
+daily rotation, not just this one entry. Note that `logrotate -d` exits **0** on
+an unknown option (it prints `error: ... -- ignoring line` and continues), so
+the deploy also greps its output for `error:` lines — the exit status alone is
+not a gate.
+
+Installing to `/etc/logrotate.d` needs root; the deploy account is the non-root
+service user from `harden-host.sh`, so the step escalates with `sudo -n`
+(non-interactive — it fails loudly rather than hanging on a password prompt).
+**The deploy account therefore needs NOPASSWD sudo** for `install` and
+`logrotate`, or that step fails.
+
+Verify / force a rotation by hand:
+```bash
+# Dry run (prints what it would do; never rotates)
+ssh root@<SERVER_IP> "logrotate -d /etc/logrotate.d/podcaststudiohub-nginx"
+
+# Force a real rotation now
+ssh root@<SERVER_IP> "logrotate -f /etc/logrotate.d/podcaststudiohub-nginx"
+
+ssh root@<SERVER_IP> "ls -lh /opt/podcaststudiohub/logs/"
+```
+
+### PM2
+
+`pm2-logrotate` is a **global** pm2 module (not per-process config), so it
+covers all three processes at once — which is why there is no ecosystem file
+entry for it. The deploy installs and configures it idempotently on every run:
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 7
+pm2 set pm2-logrotate:compress true
+pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
+```
+
+Inspect the live settings (they are stored in pm2's module config, not in git):
+```bash
+ssh root@<SERVER_IP> "pm2 conf pm2-logrotate"
+ssh root@<SERVER_IP> "ls -lh ~/.pm2/logs/"
 ```
 
 ## Environment Variables

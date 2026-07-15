@@ -553,6 +553,11 @@ reset, 10-minute OAuth states are re-initiated, locks re-acquire).
   ```
 
   `appendfsync everysec` bounds broker loss on a crash to ≤1s of writes.
+
+  The script **exits 1 if `CONFIG REWRITE` is refused** (unwritable or absent
+  `redis.conf`) rather than reporting success — otherwise AOF would be live in
+  memory but silently lost on the next restart. If you hit this, fix the
+  `redis.conf` path/permissions and re-run; do not ignore it.
 - **Backstop:** the `reap_stuck_episodes` beat task (every 5 min) marks any
   episode stuck in a non-terminal generation status for >45 min as `failed`,
   so even a job lost despite AOF (e.g. a manual `FLUSHALL`) surfaces to the

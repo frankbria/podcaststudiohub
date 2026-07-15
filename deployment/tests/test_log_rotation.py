@@ -284,6 +284,62 @@ def _logrotate_step() -> str:
 	return match.group(1)
 
 
+def _logrotate_commands() -> str:
+	"""The nginx-logrotate step with comment lines stripped.
+
+	Assert forbidden commands against THIS, not the raw step: the step's comments
+	deliberately name the traps it avoids (mkdir, /tmp), and matching prose
+	instead of the actual invocation is its own documented trap.
+	"""
+	return "\n".join(
+		line for line in _logrotate_step().splitlines()
+		if not line.lstrip().startswith("#")
+	)
+
+
+def test_logrotate_step_does_not_create_dirs_under_server_path():
+	"""Regression: the deploy account cannot write inside $SERVER_PATH.
+
+	The first real deploy of this step died on
+	`mkdir: cannot create directory '/opt/podcaststudiohub/deployment/logrotate':
+	Permission denied`. The sibling `mkdir -p $SERVER_PATH/deployment/scripts`
+	is not a counter-example: mkdir -p on an ALREADY-EXISTING path is a no-op
+	and never needs write permission on the parent. Stage in HOME instead — the
+	drop-in's real home is /etc/logrotate.d, so nothing needs to live under
+	$SERVER_PATH at all.
+	"""
+	step = _logrotate_commands()
+	assert "mkdir" not in step, (
+		"do not mkdir under $SERVER_PATH — the deploy account cannot write there; "
+		"stage the drop-in in the deploy user's HOME"
+	)
+	assert "SERVER_PATH/deployment/logrotate" not in step, (
+		"do not stage the drop-in under $SERVER_PATH (not writable by the deploy user)"
+	)
+
+
+def test_logrotate_step_does_not_stage_in_world_writable_tmp():
+	"""This file is installed to /etc/logrotate.d and run by root.
+
+	Staging it in world-writable /tmp would let a local user pre-place a symlink
+	there and have root copy in content of their choosing. HOME is owned by the
+	deploy account, so it has no such race.
+	"""
+	step = _logrotate_commands()
+	assert "/tmp/" not in step, "stage the drop-in in HOME, not world-writable /tmp"
+	assert "$HOME/" in step or "\\$HOME/" in step, (
+		"the drop-in should be staged under the deploy user's HOME"
+	)
+
+
+def test_logrotate_step_removes_its_staging_copy():
+	"""The installed /etc/logrotate.d copy is the live one; staging must not linger."""
+	step = _logrotate_commands()
+	assert re.search(r"rm -f\s+\"?\\?\$SRC", step), (
+		"remove the staged copy after install so it cannot drift from the live file"
+	)
+
+
 # ── AC3: pm2-logrotate ─────────────────────────────────────────────────────
 
 

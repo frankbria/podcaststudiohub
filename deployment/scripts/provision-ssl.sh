@@ -29,6 +29,8 @@ WEBROOT="/var/www/html"
 EMAIL="${EMAIL:-admin@${DOMAIN}}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SITE_CONF="${REPO_ROOT}/deployment/nginx/podcastfy.conf"
+LOGROTATE_CONF="${REPO_ROOT}/deployment/logrotate/podcaststudiohub-nginx"
+LOGROTATE_DEST="/etc/logrotate.d/podcaststudiohub-nginx"
 SITE_NAME="podcastfy"
 NGINX_SITE="/etc/nginx/sites-available/${SITE_NAME}"
 NGINX_ENABLED="/etc/nginx/sites-enabled/${SITE_NAME}"
@@ -123,6 +125,46 @@ rm -f /etc/nginx/sites-enabled/default
 
 log "Validating nginx config..."
 nginx -t
+
+# ── 4b. Rotate the custom nginx logs ──────────────────────────────────────
+# The site config above logs to /opt/podcaststudiohub/logs/ (the directory this
+# script just created), which the distro's stock /etc/logrotate.d/nginx does NOT
+# cover — it only globs /var/log/nginx/*.log. Unrotated, those files grow until
+# they fill the VPS disk, which takes Postgres and the app down with it, not
+# just nginx (issue #320).
+#
+# This lives here, not in the deploy workflow, for the same reason the site
+# config does: /etc/logrotate.d is root-owned, and the deploy account is
+# deliberately non-root (issue #209). Installing it per-deploy would mean
+# granting that account passwordless root for a file that changes about once a
+# year. Provisioning is already the root-run, operator-invoked step.
+log "Installing nginx logrotate drop-in -> ${LOGROTATE_DEST}"
+
+# Validate BEFORE installing: a malformed file in /etc/logrotate.d breaks the
+# whole daily run, not just this entry.
+#
+# Exit status alone is NOT a sufficient gate — logrotate -d exits 0 on an
+# unknown option (it prints "error: ... -- ignoring line" and carries on), so a
+# typo like "rotat 14" would silently drop the retention window. Grep for error
+# lines too. --state points at a throwaway file so the dry run cannot disturb
+# the host's real logrotate state.
+lr_state="$(mktemp)"
+if ! lr_out="$(logrotate -d --state "${lr_state}" "${LOGROTATE_CONF}" 2>&1)"; then
+	rm -f "${lr_state}"
+	echo "${lr_out}" >&2
+	log "logrotate rejected ${LOGROTATE_CONF} — refusing to install it."
+	exit 1
+fi
+rm -f "${lr_state}"
+if echo "${lr_out}" | grep -qi '^error:'; then
+	echo "${lr_out}" >&2
+	log "logrotate reported errors in ${LOGROTATE_CONF} — refusing to install it."
+	exit 1
+fi
+
+# Idempotent: install overwrites in place, so re-running just refreshes it.
+install -m 0644 -o root -g root "${LOGROTATE_CONF}" "${LOGROTATE_DEST}"
+log "nginx log rotation installed (daily, keep 14, compressed)."
 
 # ── 5. Auto-renewal ───────────────────────────────────────────────────────
 log "Configuring auto-renewal (certbot.timer + nginx reload deploy-hook)..."

@@ -1,7 +1,9 @@
 # Log rotation for the Podcastfy Studio nginx site (issue #320).
 #
-# Installed to /etc/logrotate.d/podcaststudiohub-nginx by the deploy workflow
-# (.github/workflows/deploy-dev.yml) — see deployment/README.md.
+# Installed to /etc/logrotate.d/podcaststudiohub-nginx by provision-ssl.sh
+# (deployment/scripts/provision-ssl.sh, run as root) — see deployment/README.md.
+# NOT by the deploy workflow: /etc/logrotate.d is root-owned and the deploy
+# account is deliberately non-root (issue #209).
 #
 # WHY THIS FILE EXISTS: deployment/nginx/podcastfy.conf writes its access/error
 # logs to a CUSTOM path (/opt/podcaststudiohub/logs/), not the distro default.

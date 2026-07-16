@@ -295,9 +295,12 @@ logs — it takes the whole host down.
 > ⚠️ **Existing hosts need one manual step.** The nginx drop-in is installed by
 > `provision-ssl.sh`, so a box provisioned before issue #320 has **no nginx log
 > rotation** until you re-run it (it is idempotent and leaves a valid cert
-> alone):
+> alone). Run it from the on-host checkout, and **update that checkout first** —
+> the deploy only rsyncs app code, not `provision-ssl.sh` or the drop-in, so a
+> stale checkout would re-run the pre-#320 script and silently rotate nothing:
 >
 > ```bash
+> cd /opt/podcaststudiohub && git pull   # get the updated script + drop-in
 > sudo DOMAIN=dev.podcaststudiohub.me deployment/scripts/provision-ssl.sh
 > ```
 >

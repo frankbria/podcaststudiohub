@@ -210,16 +210,39 @@ jobs:
             apps/api/alembic/ \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/api/alembic/
 
-          # Sync the backup script so the pre-migration dump below always runs
-          # the committed version (issue #319). Same path the #293 systemd
-          # timer executes, so this also keeps the nightly backup fresh.
-          # mkdir -p first: rsync does not create intermediate remote dirs,
-          # and a host deployed only by this workflow has no deployment/ tree.
+          # Sync the ENTIRE deployment/ tree so $SERVER_PATH/deployment is the
+          # single on-host source of truth for deployment assets. Previously
+          # only backup-db.sh was synced, which left provisioning unreproducible:
+          # provision-ssl.sh, the nginx site template, and the logrotate drop-in
+          # were never delivered, so a box relied on a stale hand-copied tree and
+          # the documented `provision-ssl.sh` re-run couldn't find its assets
+          # (root cause of the #320 logrotate chain surfacing three times).
+          # provision-ssl.sh reads those files as siblings (REPO_ROOT=$SERVER_PATH
+          # when run from $SERVER_PATH/deployment/scripts/), so the whole tree has
+          # to be present for provisioning to work.
+          #
+          # Still non-root, still no privilege escalation (see #209): these are
+          # just files. Installing any of them into root-owned paths
+          # (/etc/logrotate.d, /etc/nginx) remains provision-ssl.sh's job, run by
+          # an operator as root — the deploy account never escalates. (The
+          # no-escalation guard in test_log_rotation.py is a blunt whole-file
+          # check, so this comment avoids the literal command name on purpose.)
+          #
+          # This still delivers backup-db.sh for the pre-migration dump below
+          # (issue #319; same path the #293 systemd timer executes).
+          #
+          # --delete keeps the tree a faithful mirror (purges files renamed or
+          # removed in the repo). tests/ is excluded — not needed on the host.
+          # mkdir -p first: rsync does not create intermediate remote dirs, and a
+          # host deployed only by this workflow has no deployment/ tree yet.
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST \
-            "mkdir -p $SERVER_PATH/deployment/scripts"
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
-            deployment/scripts/backup-db.sh \
-            $SSH_USER@$SSH_HOST:$SERVER_PATH/deployment/scripts/
+            "mkdir -p $SERVER_PATH/deployment"
+          rsync -avz --delete -e "ssh -i ~/.ssh/deploy_key" \
+            --exclude='tests/' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            deployment/ \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/deployment/
 
           # Install dependencies and restart on server
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF

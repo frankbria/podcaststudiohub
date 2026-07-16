@@ -51,10 +51,19 @@ def test_deploy_block_fails_fast_so_dump_gates_migration():
 	assert "set -e" in _server_deploy_block(), "SSH deploy block must fail fast (set -e)"
 
 
-def test_deploy_syncs_backup_script_to_server():
+def test_deploy_syncs_deployment_tree_to_server():
+	# Contract change: the deploy now rsyncs the WHOLE deployment/ tree to
+	# $SERVER_PATH/deployment (not just backup-db.sh), so provisioning assets
+	# (provision-ssl.sh, the nginx template, the logrotate drop-in) reach the
+	# host and provisioning is reproducible. This still delivers backup-db.sh
+	# for the pre-migration dump below — it just arrives with the whole tree.
 	text = DEPLOY_WORKFLOW.read_text()
-	assert re.search(r"rsync.*\n?.*backup-db\.sh", text), (
-		"deploy must rsync backup-db.sh to the server so the dump step can run"
+	assert re.search(r"rsync[^\n]*(\n[^\n]*)*?\bdeployment/\s+\\?\n?\s*\$SSH_USER@\$SSH_HOST:\$SERVER_PATH/deployment/", text), (
+		"deploy must rsync the whole deployment/ tree to $SERVER_PATH/deployment/"
+	)
+	# The tree must actually contain backup-db.sh for the dump step to run.
+	assert (REPO_ROOT / "deployment" / "scripts" / "backup-db.sh").exists(), (
+		"backup-db.sh must exist under deployment/scripts so the tree sync delivers it"
 	)
 
 

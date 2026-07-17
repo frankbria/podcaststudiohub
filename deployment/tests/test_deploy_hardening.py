@@ -94,6 +94,32 @@ def test_harden_script_installs_pm2_startup_for_service_user():
 	assert m, "pm2 startup must target the dedicated service account, not root"
 
 
+def test_harden_script_installs_aws_cli():
+	"""backup-db.sh pushes to S3 via the AWS CLI and runs as the service account,
+	so provisioning must install `aws` — otherwise the pre-migration dump (which
+	gates every deploy) dies with 'aws: command not found' once S3 is configured.
+	The distro only ships v1, so it must come from AWS's official installer."""
+	text = HARDEN_SCRIPT.read_text()
+	assert "awscli-exe-linux" in text, (
+		"harden-host.sh must install AWS CLI v2 from AWS's official bundle "
+		"(backup-db.sh needs `aws` on the service account's PATH)"
+	)
+	# Idempotent AND version-correct: the guard must check for aws-cli/2 on the
+	# guard line itself, not just any `aws` — a distro v1 would otherwise satisfy a
+	# presence-only check and the v2 requirement would silently go unmet (codex,
+	# PR #405). Match the actual `aws --version … aws-cli/2` guard, not comment
+	# prose that merely mentions the version.
+	assert re.search(r"aws --version[^\n]*aws-cli/2", text), (
+		"AWS CLI install must gate on `aws --version … aws-cli/2`, so v1-only boxes "
+		"still get upgraded (a bare `command -v aws` would skip them)"
+	)
+	# curl + unzip are used by the install and may be absent on a minimal image;
+	# provisioning must ensure them or `set -e` aborts mid-run (codex, PR #405).
+	assert "curl unzip" in text or ("install -y" in text and "curl" in text and "unzip" in text), (
+		"harden-host.sh must ensure curl and unzip before the AWS CLI download"
+	)
+
+
 # ── AC1: docs no longer assume a root deploy ───────────────────────────────
 
 

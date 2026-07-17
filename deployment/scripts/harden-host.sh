@@ -10,7 +10,11 @@
 # Idempotent: safe to re-run. Run once as root on the VPS:
 #
 #   ssh root@<server>
-#   cd /opt/podcaststudiohub && bash deployment/scripts/harden-host.sh
+#   sudo git clone https://github.com/frankbria/podcaststudiohub /root/podcaststudiohub
+#   cd /root/podcaststudiohub && bash deployment/scripts/harden-host.sh
+#
+# Runs from the root-owned provisioning clone, never the deploy-account tree
+# (deployment/README.md → "How the box gets deployment assets").
 #
 # After running, point the GitHub `SERVER_USER` deploy secret at $SERVICE_USER
 # and re-run the deploy workflow so PM2 processes start under the new account.
@@ -88,6 +92,41 @@ ufw default allow outgoing
 # Non-interactive enable (no-op if already active).
 ufw --force enable
 ufw status verbose
+
+# ── 5. AWS CLI v2 (S3 backups — issue #319) ────────────────────────────────
+# backup-db.sh (the pre-migration dump gating every deploy, and the nightly
+# timer) pushes to S3 with the AWS CLI. It runs as $SERVICE_USER, so `aws` must
+# be on that account's PATH — installing to /usr/local/bin covers it. The distro
+# ships only AWS CLI v1, so pull v2 from AWS's official bundle. Without this the
+# deploy dies with "aws: command not found" the moment S3 backups are configured
+# (found the hard way on the dev host: rsync-permission masked it until fixed).
+#
+# Gate on aws-cli/2 specifically, not just `command -v aws`: a box with the
+# distro's v1 package would otherwise skip the installer and keep v1, which is
+# NOT what we require. This branch fires when aws is absent OR is v1.
+if ! aws --version 2>&1 | grep -q 'aws-cli/2'; then
+	echo "Installing AWS CLI v2..."
+	# curl (download) and unzip (extract) may both be absent on a minimal VPS
+	# image; ensure them before use or `set -e` would abort mid-provision.
+	if ! command -v curl >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
+		apt-get update -qq && apt-get install -y -qq curl unzip
+	fi
+	_aws_tmp="$(mktemp -d)"
+	# uname -m is x86_64 or aarch64 — AWS ships an exe bundle for each.
+	curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" \
+		-o "$_aws_tmp/awscliv2.zip"
+	unzip -q -o "$_aws_tmp/awscliv2.zip" -d "$_aws_tmp"
+	# The installer REFUSES to overwrite an existing /usr/local/bin/aws (a prior
+	# v2, or a v1 that landed there) unless --update is passed; without it set -e
+	# would abort. Pass --update whenever either the v2 install dir OR the bin
+	# symlink already exists. (An `if` — not `&& _x=...` — so a both-absent host
+	# doesn't trip set -e on the failed test.)
+	_aws_update=""
+	if [ -e /usr/local/aws-cli ] || [ -e /usr/local/bin/aws ]; then _aws_update="--update"; fi
+	"$_aws_tmp/aws/install" $_aws_update
+	rm -rf "$_aws_tmp"
+fi
+echo "AWS CLI: $(aws --version 2>&1)"
 
 echo
 echo "Host hardening complete."

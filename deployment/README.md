@@ -615,7 +615,10 @@ logical dumps are the deliberate, lazy-correct choice for a single-VPS dev host.
 
 - `deployment/scripts/backup-db.sh` — `pg_dump -Fc` → timestamped object
   at `s3://$DB_BACKUP_S3_BUCKET/$DB_BACKUP_S3_PREFIX`, then prunes objects older
-  than `DB_BACKUP_RETENTION_DAYS` (default 14). Dumps connect as
+  than `DB_BACKUP_RETENTION_DAYS` (default 14). Uploads via the **AWS CLI v2**,
+  which `harden-host.sh` installs to `/usr/local/bin` (on the service account's
+  PATH) — without it the pre-migration dump fails `aws: command not found` and
+  aborts the deploy. Dumps connect as
   `MIGRATION_DATABASE_URL` (the BYPASSRLS role) when set — tenant tables are
   FORCE RLS, so a dump as the app role would error or omit every tenant row —
   falling back to `DATABASE_URL` for single-role setups.

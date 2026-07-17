@@ -94,6 +94,20 @@ def test_harden_script_installs_pm2_startup_for_service_user():
 	assert m, "pm2 startup must target the dedicated service account, not root"
 
 
+def test_harden_script_installs_aws_cli():
+	"""backup-db.sh pushes to S3 via the AWS CLI and runs as the service account,
+	so provisioning must install `aws` — otherwise the pre-migration dump (which
+	gates every deploy) dies with 'aws: command not found' once S3 is configured.
+	The distro only ships v1, so it must come from AWS's official installer."""
+	text = HARDEN_SCRIPT.read_text()
+	assert "awscli-exe-linux" in text, (
+		"harden-host.sh must install AWS CLI v2 from AWS's official bundle "
+		"(backup-db.sh needs `aws` on the service account's PATH)"
+	)
+	# guarded so a re-run doesn't reinstall on every provisioning pass
+	assert re.search(r"command -v aws\b", text), "AWS CLI install must be idempotent"
+
+
 # ── AC1: docs no longer assume a root deploy ───────────────────────────────
 
 

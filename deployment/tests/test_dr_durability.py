@@ -51,20 +51,49 @@ def test_deploy_block_fails_fast_so_dump_gates_migration():
 	assert "set -e" in _server_deploy_block(), "SSH deploy block must fail fast (set -e)"
 
 
-def test_deploy_syncs_deployment_tree_to_server():
-	# Contract change: the deploy now rsyncs the WHOLE deployment/ tree to
-	# $SERVER_PATH/deployment (not just backup-db.sh), so provisioning assets
-	# (provision-ssl.sh, the nginx template, the logrotate drop-in) reach the
-	# host and provisioning is reproducible. This still delivers backup-db.sh
-	# for the pre-migration dump below — it just arrives with the whole tree.
+def test_deploy_syncs_backup_script_to_server():
+	# The deploy runs backup-db.sh itself (as the non-root deploy account) for
+	# the pre-migration dump, so it must ship the committed copy each run.
 	text = DEPLOY_WORKFLOW.read_text()
-	assert re.search(r"rsync[^\n]*(\n[^\n]*)*?\bdeployment/\s+\\?\n?\s*\$SSH_USER@\$SSH_HOST:\$SERVER_PATH/deployment/", text), (
-		"deploy must rsync the whole deployment/ tree to $SERVER_PATH/deployment/"
+	assert re.search(r"rsync.*\n?.*backup-db\.sh", text), (
+		"deploy must rsync backup-db.sh to the server so the dump step can run"
 	)
-	# The tree must actually contain backup-db.sh for the dump step to run.
-	assert (REPO_ROOT / "deployment" / "scripts" / "backup-db.sh").exists(), (
-		"backup-db.sh must exist under deployment/scripts so the tree sync delivers it"
-	)
+
+
+def _rsync_commands() -> list[str]:
+	"""Every rsync invocation in the workflow, each spanning its \\-continued lines.
+
+	rsync commands are multi-line (backslash continuations), so a single-line
+	regex misses sources on later lines. Match `rsync` + any continued lines +
+	the final line. Comments (which legitimately name provision-ssl.sh) are NOT
+	continuations, so they aren't captured.
+	"""
+	return re.findall(r"rsync(?:[^\n]*\\\n)*[^\n]*", DEPLOY_WORKFLOW.read_text())
+
+
+def test_deploy_does_not_sync_root_run_provisioning_scripts():
+	# Security invariant (privilege escalation): the deploy account is non-root
+	# and owns everything it rsyncs. provision-ssl.sh / harden-host.sh are run by
+	# an operator as ROOT — if the deploy shipped them into the deploy-writable
+	# tree, a compromise of the app account (same account) could rewrite a script
+	# root later executes. Those assets live in a root-owned clone instead; the
+	# deploy must NOT sync them. (Guards the fix for codex's PR #404 finding.)
+	cmds = _rsync_commands()
+	assert cmds, "expected rsync commands in the deploy workflow"
+	for cmd in cmds:
+		for script in ("provision-ssl.sh", "harden-host.sh", "install-db-backup-timer.sh"):
+			assert script not in cmd, (
+				f"deploy must not rsync root-run {script} into the deploy-writable "
+				f"tree — it belongs in the root-owned provisioning clone.\nOffending "
+				f"rsync:\n{cmd}"
+			)
+		# A whole-tree source (`deployment/ \\`) would drag them all in. The legit
+		# backup-db.sh sync has source `deployment/scripts/backup-db.sh`, so a bare
+		# `deployment/` followed by whitespace+continuation is the forbidden form.
+		assert not re.search(r"\bdeployment/\s*\\", cmd), (
+			f"deploy must not rsync the whole deployment/ tree (pulls in root-run "
+			f"scripts).\nOffending rsync:\n{cmd}"
+		)
 
 
 def test_pre_migration_dumps_use_dedicated_prefix():

@@ -104,8 +104,15 @@ def test_harden_script_installs_aws_cli():
 		"harden-host.sh must install AWS CLI v2 from AWS's official bundle "
 		"(backup-db.sh needs `aws` on the service account's PATH)"
 	)
-	# guarded so a re-run doesn't reinstall on every provisioning pass
-	assert re.search(r"command -v aws\b", text), "AWS CLI install must be idempotent"
+	# Idempotent AND version-correct: the guard must check for aws-cli/2 on the
+	# guard line itself, not just any `aws` — a distro v1 would otherwise satisfy a
+	# presence-only check and the v2 requirement would silently go unmet (codex,
+	# PR #405). Match the actual `aws --version … aws-cli/2` guard, not comment
+	# prose that merely mentions the version.
+	assert re.search(r"aws --version[^\n]*aws-cli/2", text), (
+		"AWS CLI install must gate on `aws --version … aws-cli/2`, so v1-only boxes "
+		"still get upgraded (a bare `command -v aws` would skip them)"
+	)
 
 
 # ── AC1: docs no longer assume a root deploy ───────────────────────────────

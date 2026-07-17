@@ -100,7 +100,11 @@ ufw status verbose
 # ships only AWS CLI v1, so pull v2 from AWS's official bundle. Without this the
 # deploy dies with "aws: command not found" the moment S3 backups are configured
 # (found the hard way on the dev host: rsync-permission masked it until fixed).
-if ! command -v aws >/dev/null 2>&1; then
+#
+# Gate on aws-cli/2 specifically, not just `command -v aws`: a box with the
+# distro's v1 package would otherwise skip the installer and keep v1, which is
+# NOT what we require. This branch fires when aws is absent OR is v1.
+if ! aws --version 2>&1 | grep -q 'aws-cli/2'; then
 	echo "Installing AWS CLI v2..."
 	command -v unzip >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq unzip; }
 	_aws_tmp="$(mktemp -d)"

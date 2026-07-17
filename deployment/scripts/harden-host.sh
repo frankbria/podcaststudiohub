@@ -116,8 +116,14 @@ if ! aws --version 2>&1 | grep -q 'aws-cli/2'; then
 	curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" \
 		-o "$_aws_tmp/awscliv2.zip"
 	unzip -q -o "$_aws_tmp/awscliv2.zip" -d "$_aws_tmp"
-	# --update makes a partial/older install idempotent; plain install otherwise.
-	"$_aws_tmp/aws/install" $([ -e /usr/local/aws-cli ] && echo --update)
+	# The installer REFUSES to overwrite an existing /usr/local/bin/aws (a prior
+	# v2, or a v1 that landed there) unless --update is passed; without it set -e
+	# would abort. Pass --update whenever either the v2 install dir OR the bin
+	# symlink already exists. (An `if` — not `&& _x=...` — so a both-absent host
+	# doesn't trip set -e on the failed test.)
+	_aws_update=""
+	if [ -e /usr/local/aws-cli ] || [ -e /usr/local/bin/aws ]; then _aws_update="--update"; fi
+	"$_aws_tmp/aws/install" $_aws_update
 	rm -rf "$_aws_tmp"
 fi
 echo "AWS CLI: $(aws --version 2>&1)"

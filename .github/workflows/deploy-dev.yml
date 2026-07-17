@@ -210,11 +210,25 @@ jobs:
             apps/api/alembic/ \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/api/alembic/
 
-          # Sync the backup script so the pre-migration dump below always runs
-          # the committed version (issue #319). Same path the #293 systemd
-          # timer executes, so this also keeps the nightly backup fresh.
-          # mkdir -p first: rsync does not create intermediate remote dirs,
-          # and a host deployed only by this workflow has no deployment/ tree.
+          # Sync ONLY backup-db.sh — the one deployment/ asset this workflow runs
+          # itself, as the non-root deploy account, in the pre-migration dump
+          # below (issue #319; same path the #293 timer executes). The deploy
+          # account both owns and runs it, so it running its own committed copy
+          # is no escalation.
+          #
+          # Deliberately NOT the rest of deployment/. provision-ssl.sh,
+          # harden-host.sh, install-db-backup-timer.sh, configure-redis-*.sh and
+          # the nginx/logrotate assets are run (or installed) by an operator as
+          # ROOT. Staging them in this deploy-account-writable tree and then
+          # running them as root would let anyone who compromises the app account
+          # (which runs as this same account) rewrite a script root later
+          # executes — a privilege-escalation path. #209 hardened this box to run
+          # deploys non-root precisely to avoid that. Root-run provisioning
+          # therefore lives in a ROOT-OWNED clone the deploy account cannot write;
+          # see deployment/README.md → "How the box gets deployment assets".
+          #
+          # mkdir -p first: rsync does not create intermediate remote dirs, and a
+          # host deployed only by this workflow has no deployment/ tree yet.
           ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST \
             "mkdir -p $SERVER_PATH/deployment/scripts"
           rsync -avz -e "ssh -i ~/.ssh/deploy_key" \

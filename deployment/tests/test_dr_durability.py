@@ -52,10 +52,52 @@ def test_deploy_block_fails_fast_so_dump_gates_migration():
 
 
 def test_deploy_syncs_backup_script_to_server():
+	# The deploy runs backup-db.sh itself (as the non-root deploy account) for
+	# the pre-migration dump, so it must ship the committed copy each run.
 	text = DEPLOY_WORKFLOW.read_text()
 	assert re.search(r"rsync.*\n?.*backup-db\.sh", text), (
 		"deploy must rsync backup-db.sh to the server so the dump step can run"
 	)
+
+
+def _rsync_commands() -> list[str]:
+	"""Every rsync invocation in the workflow, each spanning its \\-continued lines.
+
+	rsync commands are multi-line (backslash continuations), so a single-line
+	regex misses sources on later lines. Match `rsync` + any continued lines +
+	the final line. Comments (which legitimately name provision-ssl.sh) are NOT
+	continuations, so they aren't captured.
+	"""
+	return re.findall(r"rsync(?:[^\n]*\\\n)*[^\n]*", DEPLOY_WORKFLOW.read_text())
+
+
+def test_deploy_does_not_sync_root_run_provisioning_scripts():
+	# Security invariant (privilege escalation): the deploy account is non-root
+	# and owns everything it rsyncs. provision-ssl.sh / harden-host.sh are run by
+	# an operator as ROOT — if the deploy shipped them into the deploy-writable
+	# tree, a compromise of the app account (same account) could rewrite a script
+	# root later executes. Those assets live in a root-owned clone instead; the
+	# deploy must NOT sync them. (Guards the fix for codex's PR #404 finding.)
+	cmds = _rsync_commands()
+	assert cmds, "expected rsync commands in the deploy workflow"
+	for cmd in cmds:
+		for script in ("provision-ssl.sh", "harden-host.sh", "install-db-backup-timer.sh"):
+			assert script not in cmd, (
+				f"deploy must not rsync root-run {script} into the deploy-writable "
+				f"tree — it belongs in the root-owned provisioning clone.\nOffending "
+				f"rsync:\n{cmd}"
+			)
+		# A whole-tree source (`deployment/`) would drag them all in. The legit
+		# backup-db.sh sync uses `deployment/scripts/backup-db.sh`, so the forbidden
+		# form is `deployment/` NOT followed by another path segment — whether it's
+		# `deployment/ \` (multi-line) or `deployment/ $dest` (one line). Matching a
+		# trailing backslash only would miss the single-line form (codex, PR #404).
+		# The dest `:$SERVER_PATH/deployment/scripts/` is followed by `scripts`, so
+		# it doesn't false-positive.
+		assert not re.search(r"\bdeployment/(?![\w.])", cmd), (
+			f"deploy must not rsync the whole deployment/ tree (pulls in root-run "
+			f"scripts).\nOffending rsync:\n{cmd}"
+		)
 
 
 def test_pre_migration_dumps_use_dedicated_prefix():

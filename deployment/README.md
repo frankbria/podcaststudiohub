@@ -8,11 +8,14 @@ This application deploys to **<SERVER_IP>** at `/opt/podcaststudiohub/` using **
 
 Services run under a **dedicated non-root service account** (`podcastfy`), the API
 binds **127.0.0.1 only** (nginx reverse-proxies to it), and a host firewall blocks
-direct external access. Provision this once on the VPS:
+direct external access. Provision this once on the VPS, from a **root-owned clone**
+(all root-run provisioning lives here — never in the deploy-account tree; see
+*[How the box gets deployment assets](#how-the-box-gets-deployment-assets)*):
 
 ```bash
 ssh root@<SERVER_IP>
-cd /opt/podcaststudiohub && bash deployment/scripts/harden-host.sh
+sudo git clone https://github.com/frankbria/podcaststudiohub /root/podcaststudiohub
+cd /root/podcaststudiohub && bash deployment/scripts/harden-host.sh
 ```
 
 `harden-host.sh` (idempotent):
@@ -210,14 +213,58 @@ curl https://dev.podcaststudiohub.me
 │   ├── pyproject.toml     # Python dependencies
 │   └── .env               # Environment variables (not in git)
 │
-└── frontend/              # Next.js frontend
-    ├── .next/             # Built Next.js files
-    ├── node_modules/      # Node dependencies
-    ├── src/               # Source code
-    ├── public/            # Static files
-    ├── package.json       # Node dependencies
-    └── .env.production    # Environment variables (not in git)
+├── frontend/              # Next.js frontend
+│   ├── .next/             # Built Next.js files
+│   ├── node_modules/      # Node dependencies
+│   ├── src/               # Source code
+│   ├── public/            # Static files
+│   ├── package.json       # Node dependencies
+│   └── .env.production    # Environment variables (not in git)
+│
+├── deployment/            # Only backup-db.sh — see "How the box gets…" below
+│   └── scripts/
+│       └── backup-db.sh   # deploy account runs this itself (pre-migration dump)
+│
+└── logs/                  # nginx custom access/error logs (rotated by the drop-in)
+
+/root/podcaststudiohub/    # ROOT-OWNED provisioning clone (git; app user cannot write)
+└── deployment/            # provision-ssl.sh, harden-host.sh, nginx/, logrotate/, …
 ```
+
+## How the box gets deployment assets
+
+Two sources, split by **who runs each file** — because a non-root deploy cannot
+safely deliver root-run scripts.
+
+**1. App code + `backup-db.sh` → rsync (non-root deploy account).** The deploy
+workflow runs `actions/checkout` on the GitHub runner and `rsync`s subtrees to the
+box as `podcastfy`: `apps/api` → `api/`, `apps/web` → `frontend/`, and
+`deployment/scripts/backup-db.sh` → `deployment/scripts/`. `$SERVER_PATH`
+(`/opt/podcaststudiohub`) is **not** a git clone and there is no `git pull` on it —
+don't reach for one. Everything here is owned and *run* by `podcastfy`, so it
+running its own committed copy is no privilege change.
+
+**2. Root-run provisioning → a root-owned git clone (`/root/podcaststudiohub`).**
+`provision-ssl.sh`, `harden-host.sh`, `install-db-backup-timer.sh`, the nginx
+template and the logrotate drop-in are run (or installed) by an operator as
+**root**. They deliberately do **not** ride the rsync: staging a root-run script
+in the deploy-account-writable tree would let anyone who compromises the app
+account (same account) rewrite a script root later executes — a privilege
+escalation the non-root deploy (#209) exists to prevent. They live in a clone only
+`root` can write, refreshed and run by `root`:
+
+```bash
+sudo git -C /root/podcaststudiohub pull      # refresh the trusted source
+cd /root/podcaststudiohub && sudo DOMAIN=dev.podcaststudiohub.me \
+  deployment/scripts/provision-ssl.sh        # reads ../nginx, ../logrotate as siblings
+```
+
+> First-time setup: `sudo git clone https://github.com/frankbria/podcaststudiohub \
+> /root/podcaststudiohub` (root-owned). Keep it on `main`. Because only `root` can
+> write it, the app account cannot tamper with what provisioning runs as root.
+>
+> Do **not** run provisioning from `$SERVER_PATH/deployment` — that path is
+> writable by the deploy account and must never be a source of root-run code.
 
 ## PM2 Processes
 
@@ -294,14 +341,15 @@ logs — it takes the whole host down.
 
 > ⚠️ **Existing hosts need one manual step.** The nginx drop-in is installed by
 > `provision-ssl.sh`, so a box provisioned before issue #320 has **no nginx log
-> rotation** until you re-run it (it is idempotent and leaves a valid cert
-> alone). Run it from the on-host checkout, and **update that checkout first** —
-> the deploy only rsyncs app code, not `provision-ssl.sh` or the drop-in, so a
-> stale checkout would re-run the pre-#320 script and silently rotate nothing:
+> rotation** until you re-run it (it is idempotent and leaves a valid cert alone).
+> Run it from the **root-owned provisioning clone** — never from
+> `$SERVER_PATH/deployment`, which the deploy account can write (see
+> *[How the box gets deployment assets](#how-the-box-gets-deployment-assets)*):
 >
 > ```bash
-> cd /opt/podcaststudiohub && git pull   # get the updated script + drop-in
-> sudo DOMAIN=dev.podcaststudiohub.me deployment/scripts/provision-ssl.sh
+> sudo git -C /root/podcaststudiohub pull
+> cd /root/podcaststudiohub && sudo DOMAIN=dev.podcaststudiohub.me \
+>   deployment/scripts/provision-ssl.sh
 > ```
 >
 > PM2 rotation needs nothing — the next deploy configures it.
@@ -600,9 +648,15 @@ Settings (env, defaulting to the app's existing `AWS_*` / `DATABASE_URL`):
 
 ```bash
 ssh root@<SERVER_IP>
-cd /opt/podcaststudiohub && bash deployment/scripts/install-db-backup-timer.sh
+sudo git -C /root/podcaststudiohub pull
+cd /root/podcaststudiohub && bash deployment/scripts/install-db-backup-timer.sh
 systemctl list-timers podcastfy-db-backup.timer   # confirm the next run
 ```
+
+> The installed timer runs `backup-db.sh` **as the non-root `podcastfy` account**
+> from `$SERVER_PATH` (`APP_ROOT`), which the deploy keeps current — that copy is
+> app-account-owned *and* app-account-run, so it is not a root-escalation path.
+> Only the installer itself is run from the root clone.
 
 Trigger an immediate backup to verify the pipeline end-to-end:
 
@@ -614,12 +668,17 @@ aws s3 ls s3://$AWS_S3_BUCKET/db-backups/           # the dump object is present
 
 ### Restore runbook (tested)
 
+`restore-db.sh` is a root-run DR action, so it lives in the root-owned clone
+(`/root/podcaststudiohub`), not `$SERVER_PATH/deployment` — that tree only carries
+`backup-db.sh` (see *[How the box gets deployment assets](#how-the-box-gets-deployment-assets)*).
+
 ```bash
 ssh root@<SERVER_IP>
-cd /opt/podcaststudiohub
+sudo git -C /root/podcaststudiohub pull      # restore-db.sh comes from the trusted clone
+cd /root/podcaststudiohub
 
-# Make DB/S3 settings available (same as the app):
-set -a && . api/.env && set +a
+# Make DB/S3 settings available (the .env lives in the app tree, not the clone):
+set -a && . /opt/podcaststudiohub/api/.env && set +a
 
 # Restore the latest backup (prompts before overwriting):
 bash deployment/scripts/restore-db.sh
@@ -637,7 +696,7 @@ bash deployment/scripts/restore-db.sh podcastfy-20260601T033000Z.dump
 # so a value inherited from api/.env would silently retarget the live database.
 createdb podcastfy_restore_test
 MIGRATION_DATABASE_URL="postgresql://user:pass@localhost/podcastfy_restore_test" \
-  DB_RESTORE_FORCE=1 bash deployment/scripts/restore-db.sh
+  DB_RESTORE_FORCE=1 bash /root/podcaststudiohub/deployment/scripts/restore-db.sh
 psql podcastfy_restore_test -c "SELECT count(*) FROM users;"
 dropdb podcastfy_restore_test
 ```
@@ -656,7 +715,7 @@ bad migration, restore the newest object under that prefix:
 ```bash
 aws s3 ls s3://$AWS_S3_BUCKET/db-backups/pre-migration/
 DB_BACKUP_S3_PREFIX="db-backups/pre-migration/" \
-  bash deployment/scripts/restore-db.sh podcastfy-<stamp>.dump
+  bash /root/podcaststudiohub/deployment/scripts/restore-db.sh podcastfy-<stamp>.dump
 ```
 
 These dumps are pruned by the same `DB_BACKUP_RETENTION_DAYS` window as the
@@ -679,7 +738,7 @@ reset, 10-minute OAuth states are re-initiated, locks re-acquire).
   readback, persisted to `redis.conf` via `CONFIG REWRITE`):
 
   ```bash
-  bash deployment/scripts/configure-redis-persistence.sh
+  cd /root/podcaststudiohub && sudo bash deployment/scripts/configure-redis-persistence.sh
   ```
 
   `appendfsync everysec` bounds broker loss on a crash to ≤1s of writes.
@@ -756,9 +815,10 @@ Run it once on the VPS (idempotent — safe to re-run):
 
 ```bash
 # Prerequisites: DNS for the domain points at the server, port 80 open.
-scp -r deployment root@<SERVER_IP>:/opt/podcaststudiohub/deployment
+# Provisioning runs from the root-owned clone — not the deploy-account tree.
 ssh root@<SERVER_IP>
-cd /opt/podcaststudiohub && DOMAIN=dev.podcaststudiohub.me \
+sudo git -C /root/podcaststudiohub pull   # (or clone it first, see Host Hardening)
+cd /root/podcaststudiohub && DOMAIN=dev.podcaststudiohub.me \
   bash deployment/scripts/provision-ssl.sh
 ```
 

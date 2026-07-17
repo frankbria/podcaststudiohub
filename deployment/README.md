@@ -668,12 +668,17 @@ aws s3 ls s3://$AWS_S3_BUCKET/db-backups/           # the dump object is present
 
 ### Restore runbook (tested)
 
+`restore-db.sh` is a root-run DR action, so it lives in the root-owned clone
+(`/root/podcaststudiohub`), not `$SERVER_PATH/deployment` — that tree only carries
+`backup-db.sh` (see *[How the box gets deployment assets](#how-the-box-gets-deployment-assets)*).
+
 ```bash
 ssh root@<SERVER_IP>
-cd /opt/podcaststudiohub
+sudo git -C /root/podcaststudiohub pull      # restore-db.sh comes from the trusted clone
+cd /root/podcaststudiohub
 
-# Make DB/S3 settings available (same as the app):
-set -a && . api/.env && set +a
+# Make DB/S3 settings available (the .env lives in the app tree, not the clone):
+set -a && . /opt/podcaststudiohub/api/.env && set +a
 
 # Restore the latest backup (prompts before overwriting):
 bash deployment/scripts/restore-db.sh
@@ -691,7 +696,7 @@ bash deployment/scripts/restore-db.sh podcastfy-20260601T033000Z.dump
 # so a value inherited from api/.env would silently retarget the live database.
 createdb podcastfy_restore_test
 MIGRATION_DATABASE_URL="postgresql://user:pass@localhost/podcastfy_restore_test" \
-  DB_RESTORE_FORCE=1 bash deployment/scripts/restore-db.sh
+  DB_RESTORE_FORCE=1 bash /root/podcaststudiohub/deployment/scripts/restore-db.sh
 psql podcastfy_restore_test -c "SELECT count(*) FROM users;"
 dropdb podcastfy_restore_test
 ```
@@ -710,7 +715,7 @@ bad migration, restore the newest object under that prefix:
 ```bash
 aws s3 ls s3://$AWS_S3_BUCKET/db-backups/pre-migration/
 DB_BACKUP_S3_PREFIX="db-backups/pre-migration/" \
-  bash deployment/scripts/restore-db.sh podcastfy-<stamp>.dump
+  bash /root/podcaststudiohub/deployment/scripts/restore-db.sh podcastfy-<stamp>.dump
 ```
 
 These dumps are pruned by the same `DB_BACKUP_RETENTION_DAYS` window as the

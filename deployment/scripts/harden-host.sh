@@ -106,7 +106,11 @@ ufw status verbose
 # NOT what we require. This branch fires when aws is absent OR is v1.
 if ! aws --version 2>&1 | grep -q 'aws-cli/2'; then
 	echo "Installing AWS CLI v2..."
-	command -v unzip >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq unzip; }
+	# curl (download) and unzip (extract) may both be absent on a minimal VPS
+	# image; ensure them before use or `set -e` would abort mid-provision.
+	if ! command -v curl >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
+		apt-get update -qq && apt-get install -y -qq curl unzip
+	fi
 	_aws_tmp="$(mktemp -d)"
 	# uname -m is x86_64 or aarch64 — AWS ships an exe bundle for each.
 	curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" \

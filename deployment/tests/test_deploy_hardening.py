@@ -113,6 +113,11 @@ def test_harden_script_installs_aws_cli():
 		"AWS CLI install must gate on `aws --version … aws-cli/2`, so v1-only boxes "
 		"still get upgraded (a bare `command -v aws` would skip them)"
 	)
+	# curl + unzip are used by the install and may be absent on a minimal image;
+	# provisioning must ensure them or `set -e` aborts mid-run (codex, PR #405).
+	assert "curl unzip" in text or ("install -y" in text and "curl" in text and "unzip" in text), (
+		"harden-host.sh must ensure curl and unzip before the AWS CLI download"
+	)
 
 
 # ── AC1: docs no longer assume a root deploy ───────────────────────────────

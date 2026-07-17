@@ -87,10 +87,14 @@ def test_deploy_does_not_sync_root_run_provisioning_scripts():
 				f"tree — it belongs in the root-owned provisioning clone.\nOffending "
 				f"rsync:\n{cmd}"
 			)
-		# A whole-tree source (`deployment/ \\`) would drag them all in. The legit
-		# backup-db.sh sync has source `deployment/scripts/backup-db.sh`, so a bare
-		# `deployment/` followed by whitespace+continuation is the forbidden form.
-		assert not re.search(r"\bdeployment/\s*\\", cmd), (
+		# A whole-tree source (`deployment/`) would drag them all in. The legit
+		# backup-db.sh sync uses `deployment/scripts/backup-db.sh`, so the forbidden
+		# form is `deployment/` NOT followed by another path segment — whether it's
+		# `deployment/ \` (multi-line) or `deployment/ $dest` (one line). Matching a
+		# trailing backslash only would miss the single-line form (codex, PR #404).
+		# The dest `:$SERVER_PATH/deployment/scripts/` is followed by `scripts`, so
+		# it doesn't false-positive.
+		assert not re.search(r"\bdeployment/(?![\w.])", cmd), (
 			f"deploy must not rsync the whole deployment/ tree (pulls in root-run "
 			f"scripts).\nOffending rsync:\n{cmd}"
 		)

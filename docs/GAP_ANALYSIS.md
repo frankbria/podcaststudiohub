@@ -196,18 +196,15 @@ But the API uses JWT token-based auth, not cookies.
 
 | ID | Gap | Location | Severity |
 |----|-----|----------|----------|
-| GAP-021 | StorageService async methods use sync boto3 | `services/storage_service.py:43-152` | HIGH |
+| GAP-021 | ~~StorageService async methods use sync boto3~~ RESOLVED (#321): all network-bound boto3 calls in async paths offloaded via `asyncio.to_thread` (incl. `delete_file`/`file_exists` and the episode download handler) | `services/storage_service.py` | HIGH |
 | GAP-022 | PodcastService methods return hardcoded lists | `services/podcast_service.py:20-30` | MEDIUM |
 | GAP-023 | Script generation has no timeout for Gemini API | `services/script_generation_service.py:170` | MEDIUM |
 | GAP-024 | ~~S3 PDF extraction not implemented~~ RESOLVED (#242): `extract_from_pdf` implemented | `services/content_extraction_service.py` | HIGH |
 | GAP-025 | Transcript validation is minimal (only checks tags) | `services/script_generation_service.py:314-326` | LOW |
 
-**StorageService Blocking Issue:**
-```python
-async def upload_file(...):  # Declared async
-    self.s3_client.upload_file(...)  # But calls sync boto3!
-```
-This blocks the event loop on every S3 operation.
+**StorageService Blocking Issue (RESOLVED in #321):** all StorageService methods now wrap
+boto3 in `await asyncio.to_thread(...)`, and the episode download handler offloads its
+`head_object`/`get_object` calls, so S3 round-trips no longer block the event loop.
 
 ---
 

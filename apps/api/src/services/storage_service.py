@@ -137,7 +137,10 @@ class StorageService:
             s3_key: S3 object key
         """
         try:
-            self.s3_client.delete_object(
+            # boto3 is synchronous; run it off the event loop so concurrent
+            # requests/tasks are not blocked during the delete (#321).
+            await asyncio.to_thread(
+                self.s3_client.delete_object,
                 Bucket=self.bucket_name,
                 Key=s3_key,
             )
@@ -185,7 +188,10 @@ class StorageService:
             True if file exists, False otherwise
         """
         try:
-            self.s3_client.head_object(
+            # boto3 is synchronous; run it off the event loop so concurrent
+            # requests/tasks are not blocked during the existence check (#321).
+            await asyncio.to_thread(
+                self.s3_client.head_object,
                 Bucket=self.bucket_name,
                 Key=s3_key,
             )

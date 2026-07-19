@@ -6,6 +6,7 @@ status filtering, and generation management. All endpoints require authenticatio
 and automatically enforce tenant isolation via RLS.
 """
 
+import asyncio
 import os
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
@@ -406,7 +407,10 @@ async def download_episode_audio(
 
 	if has_s3:
 		storage = StorageService()
-		head_response = storage.s3_client.head_object(
+		# boto3 is synchronous; run it off the event loop so concurrent
+		# requests are not blocked during the head (#321).
+		head_response = await asyncio.to_thread(
+			storage.s3_client.head_object,
 			Bucket=storage.bucket_name,
 			Key=episode.s3_key
 		)
@@ -432,14 +436,18 @@ async def download_episode_audio(
 		extra_headers["Content-Range"] = f"bytes {start_byte}-{end_byte}/{total_size}"
 
 	if has_s3:
+		# boto3 is synchronous; run it off the event loop so concurrent
+		# requests are not blocked during the object fetch (#321).
 		if range:
-			s3_response = storage.s3_client.get_object(
+			s3_response = await asyncio.to_thread(
+				storage.s3_client.get_object,
 				Bucket=storage.bucket_name,
 				Key=episode.s3_key,
 				Range=f"bytes={start_byte}-{end_byte}"
 			)
 		else:
-			s3_response = storage.s3_client.get_object(
+			s3_response = await asyncio.to_thread(
+				storage.s3_client.get_object,
 				Bucket=storage.bucket_name,
 				Key=episode.s3_key
 			)

@@ -26,6 +26,16 @@ def _make_client_error(code="NoSuchKey"):
 	return ClientError({"Error": {"Code": code, "Message": "Test error"}}, "test_op")
 
 
+async def _run_inline(func, /, *args, **kwargs):
+	"""Stand-in for asyncio.to_thread that runs the callable inline.
+
+	Patching asyncio.to_thread with this lets tests assert a boto3 call was
+	offloaded to a thread (and inspect the call) without a real thread
+	handoff (#321).
+	"""
+	return func(*args, **kwargs)
+
+
 @pytest.fixture
 def mock_boto3_client():
 	"""Patch boto3.client so StorageService can be instantiated without AWS creds."""
@@ -193,6 +203,17 @@ async def test_delete_file_client_error_raises(service, mock_boto3_client):
 		await service.delete_file("key.mp3")
 
 
+@pytest.mark.asyncio
+async def test_delete_file_offloads_boto3_to_thread(service, mock_boto3_client):
+	"""delete_object is network-bound; it must be offloaded via asyncio.to_thread
+	so it cannot pin the event loop (#321)."""
+	with patch("asyncio.to_thread", side_effect=_run_inline) as mock_tt:
+		await service.delete_file("some/key.mp3")
+	mock_tt.assert_awaited_once()
+	assert mock_tt.await_args.args[0] == mock_boto3_client.delete_object
+	assert mock_tt.await_args.kwargs == {"Bucket": "test-bucket", "Key": "some/key.mp3"}
+
+
 # ===========================================================================
 # generate_presigned_url
 # ===========================================================================
@@ -227,3 +248,15 @@ async def test_file_exists_returns_true_when_object_found(service, mock_boto3_cl
 async def test_file_exists_returns_false_on_client_error(service, mock_boto3_client):
 	mock_boto3_client.head_object.side_effect = _make_client_error("NoSuchKey")
 	assert await service.file_exists("key.mp3") is False
+
+
+@pytest.mark.asyncio
+async def test_file_exists_offloads_boto3_to_thread(service, mock_boto3_client):
+	"""head_object is network-bound; it must be offloaded via asyncio.to_thread
+	so it cannot pin the event loop (#321)."""
+	mock_boto3_client.head_object.return_value = {"ContentLength": 1}
+	with patch("asyncio.to_thread", side_effect=_run_inline) as mock_tt:
+		assert await service.file_exists("some/key.mp3") is True
+	mock_tt.assert_awaited_once()
+	assert mock_tt.await_args.args[0] == mock_boto3_client.head_object
+	assert mock_tt.await_args.kwargs == {"Bucket": "test-bucket", "Key": "some/key.mp3"}

@@ -377,3 +377,30 @@ async def test_download_invalid_range_returns_416(client, episode_and_auth):
 		)
 
 	assert response.status_code == 416
+
+
+# ============================================================================
+# Event-loop offload (issue #321)
+# ============================================================================
+
+async def _run_inline(func, /, *args, **kwargs):
+	"""Stand-in for asyncio.to_thread that runs the callable inline (#321)."""
+	return func(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_download_s3_calls_offloaded_to_thread(client, episode_and_auth):
+	"""head_object/get_object are network-bound; both must go through
+	asyncio.to_thread so the download handler cannot pin the event loop (#321)."""
+	episode_id, headers = episode_and_auth
+	fake_audio = b"FAKE_MP3_CONTENT_" * 10
+
+	with patch("src.routers.episodes.StorageService") as MockStorage:
+		mock_instance = _mock_s3_storage(len(fake_audio), fake_audio, MockStorage)
+		with patch("asyncio.to_thread", side_effect=_run_inline) as mock_tt:
+			response = await client.get(f"/episodes/{episode_id}/download", headers=headers)
+
+	assert response.status_code == 200
+	offloaded = {await_call.args[0] for await_call in mock_tt.await_args_list}
+	assert mock_instance.s3_client.head_object in offloaded
+	assert mock_instance.s3_client.get_object in offloaded

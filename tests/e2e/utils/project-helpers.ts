@@ -32,8 +32,8 @@ export async function createProject(page: Page, project: ProjectData): Promise<s
   await dialog.locator('button[type="submit"]').click();
   await expect(dialog).toBeHidden({ timeout: 10000 });
 
-  // The new project appears as a clickable card; navigate via it.
-  const card = page.getByRole('button', { name: `Open project: ${project.title}` });
+  // The new project appears as a card whose title is a link; navigate via it.
+  const card = page.getByRole('link', { name: `Open project: ${project.title}` });
   await expect(card).toBeVisible({ timeout: 10000 });
   await card.click();
 

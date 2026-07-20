@@ -46,7 +46,7 @@ test.describe('End-to-End Integration Workflows', () => {
 
 			// 6. Back to dashboard, project listed, then logout
 			await page.goto('/dashboard');
-			await expect(page.getByRole('button', { name: `Open project: ${project.title}` })).toBeVisible();
+			await expect(page.getByRole('link', { name: `Open project: ${project.title}` })).toBeVisible();
 			await logout(page);
 			await expect(page).toHaveURL(/\/login/);
 		});
@@ -335,7 +335,7 @@ test.describe('End-to-End Integration Workflows', () => {
 				// User B's dashboard must not list User A's project.
 				await userBPage.goto('/dashboard');
 				await expect(
-					userBPage.getByRole('button', { name: `Open project: ${userAProject.title}` })
+					userBPage.getByRole('link', { name: `Open project: ${userAProject.title}` })
 				).toHaveCount(0);
 
 				// User B cannot open User A's project directly.

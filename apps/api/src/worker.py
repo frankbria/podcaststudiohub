@@ -33,6 +33,7 @@ celery_app = Celery(
         "src.tasks.content_extraction",
         "src.tasks.callbacks",
         "src.tasks.maintenance",
+        "src.tasks.analytics",
     ]
 )
 
@@ -72,6 +73,7 @@ celery_app.conf.task_routes = {
     "src.tasks.s3_upload.*": {"queue": "uploads"},
     "src.tasks.platform_distribution.*": {"queue": "distribution"},
     "extract_content": {"queue": "content_extraction"},
+    "validate_url_reachability": {"queue": "content_extraction"},
     "src.tasks.content_extraction.*": {"queue": "content_extraction"},
     "src.tasks.callbacks.*": {"queue": "callbacks"},
     "on_upload_complete": {"queue": "callbacks"},
@@ -81,6 +83,8 @@ celery_app.conf.task_routes = {
     "on_workflow_failure": {"queue": "callbacks"},
     "reap_stuck_episodes": {"queue": "callbacks"},
     "drain_storage_deletion_outbox": {"queue": "callbacks"},
+    "track_analytics_event": {"queue": "callbacks"},
+    "src.tasks.analytics.*": {"queue": "callbacks"},
 }
 
 # Beat schedule — periodic reaper that fails episodes stuck in a non-terminal

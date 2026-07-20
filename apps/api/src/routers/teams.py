@@ -2,7 +2,7 @@
 Teams router: team management, membership, and invitation endpoints.
 """
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
@@ -29,11 +29,15 @@ router = APIRouter(prefix="/teams", tags=["teams"])
 # ---------------------------------------------------------------------------
 
 
-async def _team_response(team, db: AsyncSession) -> TeamResponse:
-	count = await team_service.get_member_count(db, team.id)
+def _team_response_with_count(team, count: int) -> TeamResponse:
 	data = TeamResponse.model_validate(team)
 	data.member_count = count
 	return data
+
+
+async def _team_response(team, db: AsyncSession) -> TeamResponse:
+	count = await team_service.get_member_count(db, team.id)
+	return _team_response_with_count(team, count)
 
 
 # ---------------------------------------------------------------------------
@@ -54,13 +58,26 @@ async def create_team(
 
 @router.get("", response_model=TeamListResponse)
 async def list_teams(
+	limit: int = Query(100, ge=1, le=500),
+	offset: int = Query(0, ge=0),
 	current_user: User = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db),
 ):
-	"""List all teams the current user belongs to."""
-	teams = await team_service.get_teams_for_user(db, current_user.id)
-	team_responses = [await _team_response(t, db) for t in teams]
-	return TeamListResponse(teams=team_responses, total=len(team_responses))
+	"""List teams the current user belongs to (paginated).
+
+	Constant query count regardless of page size: one page query, one total
+	COUNT, one grouped member-count query — never a COUNT per team. ``total``
+	is the full membership count so a UI can page through it.
+	"""
+	teams = await team_service.get_teams_for_user(
+		db, current_user.id, limit=limit, offset=offset
+	)
+	total = await team_service.count_teams_for_user(db, current_user.id)
+	counts = await team_service.get_member_counts(db, [t.id for t in teams])
+	team_responses = [
+		_team_response_with_count(t, counts.get(t.id, 0)) for t in teams
+	]
+	return TeamListResponse(teams=team_responses, total=total)
 
 
 @router.get("/{team_id}", response_model=TeamResponse)

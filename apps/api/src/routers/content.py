@@ -129,6 +129,24 @@ async def create_content_source(
             logger.warning(
                 f"Could not queue extraction task for {content_source.id}: {e}"
             )
+    elif content_source.source_type == 'url':
+        # auto_extract disabled: create no longer verifies reachability inline
+        # (issue #322 — a blocking HEAD could tie the request up ~40s), so check
+        # it off the request path. The auto_extract path above needs no separate
+        # check — extraction re-fetches the URL and reports failure itself.
+        try:
+            from ..tasks.content_extraction import validate_url_reachability_task
+            validate_url_reachability_task.delay(
+                content_source_id=str(content_source.id),
+            )
+            logger.info(
+                f"Queued URL reachability check for content source {content_source.id}"
+            )
+        except Exception as e:
+            # Broker unavailable — log but don't fail creation
+            logger.warning(
+                f"Could not queue reachability check for {content_source.id}: {e}"
+            )
 
     return content_source
 

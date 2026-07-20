@@ -2,6 +2,7 @@
 Analytics router: event tracking and usage metrics endpoints.
 """
 
+import logging
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
@@ -22,6 +23,8 @@ from ..schemas.analytics import (
 	TrackEventRequest,
 )
 from ..services import analytics_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["analytics"])
 
@@ -65,18 +68,39 @@ async def track_event(
 	user_agent = request.headers.get("User-Agent")
 	referer = request.headers.get("Referer")
 
-	event = await analytics_service.track_event(
-		db=db,
-		tenant_id=current_user.tenant_id,
-		event_type=body.event_type,
-		episode_id=body.episode_id,
-		project_id=body.project_id,
-		user_agent=user_agent,
-		referer=referer,
-		ip_address=client_ip,
-		event_metadata=body.metadata,
+	# Build the event payload in-process (id + created_at minted here) and queue
+	# the insert so the per-event commit is off the request path (issue #322).
+	# ValueError → 422 for an invalid event_type (Pydantic already constrains the
+	# request, but keep the contract explicit).
+	try:
+		payload = analytics_service.build_event_payload(
+			tenant_id=current_user.tenant_id,
+			event_type=body.event_type,
+			episode_id=body.episode_id,
+			project_id=body.project_id,
+			user_agent=user_agent,
+			referer=referer,
+			ip_address=client_ip,
+			event_metadata=body.metadata,
+		)
+	except ValueError as exc:
+		raise HTTPException(status_code=422, detail=str(exc))
+
+	try:
+		from ..tasks.analytics import track_analytics_event_task
+		track_analytics_event_task.delay(payload=payload)
+	except Exception as e:
+		# Broker unavailable — analytics are fire-and-forget; log and still 201.
+		logger.warning(f"Could not queue analytics event {payload['id']}: {e}")
+
+	return AnalyticsEventResponse(
+		id=payload["id"],
+		event_type=payload["event_type"],
+		episode_id=payload["episode_id"],
+		project_id=payload["project_id"],
+		event_metadata=payload["event_metadata"],
+		created_at=payload["created_at"],
 	)
-	return event
 
 
 # ---------------------------------------------------------------------------

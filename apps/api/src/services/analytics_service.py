@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import Boolean, Float, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,8 +21,7 @@ from ..models.analytics_event import (
 logger = logging.getLogger(__name__)
 
 
-async def track_event(
-	db: AsyncSession,
+def build_event_payload(
 	tenant_id: UUID,
 	event_type: str,
 	episode_id: Optional[UUID] = None,
@@ -31,31 +30,33 @@ async def track_event(
 	referer: Optional[str] = None,
 	ip_address: Optional[str] = None,
 	event_metadata: Optional[Dict[str, Any]] = None,
-) -> AnalyticsEvent:
-	"""Persist a single engagement event. IP is hashed before storage."""
+) -> Dict[str, Any]:
+	"""Build a JSON-safe engagement-event payload WITHOUT touching the DB.
+
+	The per-event commit is moved off the request path (issue #322): the router
+	returns immediately from this payload and a Celery task
+	(``track_analytics_event_task``) performs the insert. The id and created_at
+	are minted here so the response is answerable without a DB read (no
+	``refresh``), and every value is JSON-serializable so it survives Celery's
+	JSON task serializer. IP is hashed before it leaves this function.
+	"""
 	if event_type not in VALID_EVENT_TYPES:
 		raise ValueError(f"Invalid event_type: {event_type}")
 
-	hashed_ip = hash_ip(ip_address) if ip_address else None
-	device_type = detect_device_type(user_agent or "")
-	app_name = detect_app_name(user_agent or "")
-
-	event = AnalyticsEvent(
-		tenant_id=tenant_id,
-		episode_id=episode_id,
-		project_id=project_id,
-		event_type=event_type,
-		user_agent=user_agent,
-		referer=referer,
-		ip_address=hashed_ip,
-		device_type=device_type,
-		app_name=app_name,
-		event_metadata=event_metadata,
-	)
-	db.add(event)
-	await db.commit()
-	await db.refresh(event)
-	return event
+	return {
+		"id": str(uuid4()),
+		"tenant_id": str(tenant_id),
+		"episode_id": str(episode_id) if episode_id else None,
+		"project_id": str(project_id) if project_id else None,
+		"event_type": event_type,
+		"user_agent": user_agent,
+		"referer": referer,
+		"ip_address": hash_ip(ip_address) if ip_address else None,
+		"device_type": detect_device_type(user_agent or ""),
+		"app_name": detect_app_name(user_agent or ""),
+		"event_metadata": event_metadata,
+		"created_at": utcnow().isoformat(),
+	}
 
 
 async def get_episode_analytics(

@@ -237,9 +237,15 @@ class SourceValidatorService:
 
 	async def validate_url_source(self, url: str, title: str) -> Tuple[bool, Optional[str]]:
 		"""
-		Validate URL source for podcast content.
+		Validate a URL source's format and SSRF-safety.
 
-		Checks URL format and accessibility via a HEAD request.
+		Reachability is deliberately NOT checked here (issue #322): a network
+		HEAD following up to MAX_REDIRECT_HOPS × URL_FETCH_TIMEOUT could tie the
+		request up for ~40s on a slow target. Verification happens off the
+		request path — the extraction task re-fetches the URL for the default
+		``auto_extract`` path, and ``validate_url_reachability_task`` covers the
+		``auto_extract=False`` case. ``_check_url_accessibility`` is retained for
+		that task.
 
 		Args:
 			url: URL string to validate
@@ -249,11 +255,11 @@ class SourceValidatorService:
 			Tuple of (is_valid, error_message)
 
 		Raises:
-			URLValidationError: If validation fails
+			URLValidationError: If the format is invalid or the target is a
+				private/loopback/reserved address (SSRF).
 		"""
 		self._validate_url_format(url)
 		self._validate_url_not_internal(url)
-		await self._check_url_accessibility(url)
 		return True, None
 
 	async def validate_text_source(self, content: str) -> Tuple[bool, Optional[str]]:

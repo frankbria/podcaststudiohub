@@ -117,22 +117,16 @@ describe('DashboardPage', () => {
     expect(screen.getByLabelText(/project title/i)).toBeInTheDocument()
   })
 
-  it('navigates to the project page when a card is clicked', async () => {
+  it('links the project title to the project page (link, not a role=button card)', async () => {
     global.fetch = mockFetchRouter()
     render(<DashboardPage />)
 
-    await userEvent.click(await screen.findByRole('button', { name: /open project: my first podcast/i }))
-    expect(mockPush).toHaveBeenCalledWith('/projects/1')
-  })
-
-  it('navigates to the project page on Enter key', async () => {
-    global.fetch = mockFetchRouter()
-    render(<DashboardPage />)
-
-    const card = await screen.findByRole('button', { name: /open project: my first podcast/i })
-    card.focus()
-    await userEvent.keyboard('{Enter}')
-    expect(mockPush).toHaveBeenCalledWith('/projects/1')
+    const link = await screen.findByRole('link', { name: /open project: my first podcast/i })
+    expect(link).toHaveAttribute('href', '/projects/1')
+    // the card itself must not masquerade as a button wrapping other controls
+    expect(screen.queryByRole('button', { name: /open project: my first podcast/i })).not.toBeInTheDocument()
+    // Edit/Delete remain reachable as siblings of the title link
+    expect(screen.getByRole('button', { name: 'Edit My First Podcast' })).toBeInTheDocument()
   })
 
   it('creates a project and reloads the list', async () => {

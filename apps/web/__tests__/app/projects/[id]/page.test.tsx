@@ -148,22 +148,15 @@ describe('ProjectPage', () => {
     )
   })
 
-  it('navigates to the episode page when a card is clicked', async () => {
+  it('links the episode title to the episode page (link, not a role=button card)', async () => {
     global.fetch = mockFetchRouter()
     render(<ProjectPage />)
 
-    await userEvent.click(await screen.findByRole('button', { name: /open episode: pilot/i }))
-    expect(mockPush).toHaveBeenCalledWith('/episodes/e1')
-  })
-
-  it('navigates to the episode page on Enter key', async () => {
-    global.fetch = mockFetchRouter()
-    render(<ProjectPage />)
-
-    const card = await screen.findByRole('button', { name: /open episode: pilot/i })
-    card.focus()
-    await userEvent.keyboard('{Enter}')
-    expect(mockPush).toHaveBeenCalledWith('/episodes/e1')
+    const link = await screen.findByRole('link', { name: /open episode: pilot/i })
+    expect(link).toHaveAttribute('href', '/episodes/e1')
+    // the card itself must not masquerade as a button wrapping the badge + controls
+    expect(screen.queryByRole('button', { name: /open episode: pilot/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Edit Pilot' })).toBeInTheDocument()
   })
 
   it('creates an episode and navigates to it', async () => {

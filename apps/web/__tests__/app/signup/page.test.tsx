@@ -57,4 +57,21 @@ describe('SignupPage', () => {
     expect(screen.getByRole('button', { name: /sign up/i })).toBeEnabled()
     expect(mockPush).not.toHaveBeenCalled()
   })
+
+  it('announces the error via role=alert and marks the inputs invalid', async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: false, json: async () => ({ detail: 'Email taken' }) }) as jest.Mock
+
+    render(<SignupPage />)
+    await fillAndSubmit()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Email taken')
+    expect(alert).toHaveAttribute('id', 'signup-error')
+
+    const email = screen.getByLabelText(/email/i)
+    expect(email).toHaveAttribute('aria-invalid', 'true')
+    expect(email).toHaveAttribute('aria-describedby', 'signup-error')
+  })
 })

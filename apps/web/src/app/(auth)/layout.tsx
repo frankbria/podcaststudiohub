@@ -8,7 +8,7 @@ export default function AuthLayout({
   return (
     <div className="min-h-screen bg-background">
       <MainNav />
-      <main>{children}</main>
+      <main id="main-content">{children}</main>
     </div>
   )
 }

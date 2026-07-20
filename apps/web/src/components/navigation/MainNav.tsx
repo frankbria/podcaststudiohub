@@ -1,6 +1,7 @@
 "use client"
 
 import { useSession, signOut } from "next-auth/react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -46,19 +47,19 @@ export function MainNav() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center gap-4">
-            <a href="/dashboard" className="text-2xl font-bold text-primary">
+            <Link href="/dashboard" className="text-2xl font-bold text-primary">
               Podcastfy Studio
-            </a>
+            </Link>
             <div className="hidden sm:flex items-center gap-1">
               {NAV_LINKS.map((link) => (
-                <a
+                <Link
                   key={link.href}
                   href={link.href}
                   className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-all hover:bg-muted hover:text-foreground"
                 >
                   <HugeiconsIcon icon={link.icon} size={16} />
                   {link.label}
-                </a>
+                </Link>
               ))}
             </div>
           </div>

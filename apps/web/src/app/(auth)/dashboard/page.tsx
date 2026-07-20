@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { useForm } from "react-hook-form"
@@ -213,27 +214,32 @@ export default function DashboardPage() {
             {projects.map((project) => (
               <Card
                 key={project.id}
-                className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                role="button"
-                tabIndex={0}
-                aria-label={`Open project: ${project.title}`}
-                onClick={() => router.push(`/projects/${project.id}`)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    router.push(`/projects/${project.id}`)
-                  }
-                }}
+                className="hover:shadow-lg transition-shadow"
               >
                 <CardHeader>
                   <div className="flex justify-between items-start gap-2">
                     <div className="min-w-0">
-                      <CardTitle className="truncate">{project.title}</CardTitle>
+                      {/*
+                        Only the title is the activatable region — the whole
+                        card used to be role=button while wrapping the Edit/Delete
+                        buttons, which is invalid ARIA (a control nesting other
+                        controls). A next/link around the title alone fixes both
+                        the nesting and the full-reload from raw <a href> (#323).
+                      */}
+                      <CardTitle className="truncate">
+                        <Link
+                          href={`/projects/${project.id}`}
+                          aria-label={`Open project: ${project.title}`}
+                          className="rounded hover:underline focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                        >
+                          {project.title}
+                        </Link>
+                      </CardTitle>
                       <CardDescription>
                         {project.description || "No description"}
                       </CardDescription>
                     </div>
-                    <div className="flex gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex gap-1 shrink-0">
                       <Button
                         variant="ghost"
                         size="sm"

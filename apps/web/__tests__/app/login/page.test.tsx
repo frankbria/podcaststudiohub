@@ -23,6 +23,22 @@ async function fillAndSubmit() {
 describe('LoginPage', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    window.history.replaceState({}, '', '/login')
+  })
+
+  it('shows the registered confirmation and clears the query param', () => {
+    window.history.replaceState({}, '', '/login?registered=true')
+
+    render(<LoginPage />)
+
+    expect(screen.getByRole('status')).toHaveTextContent(/account created/i)
+    // param cleared so a refresh doesn't re-show the banner
+    expect(window.location.search).toBe('')
+  })
+
+  it('does not show the confirmation without ?registered=true', () => {
+    render(<LoginPage />)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   it('redirects to /dashboard on successful sign-in', async () => {
@@ -48,6 +64,21 @@ describe('LoginPage', () => {
     expect(await screen.findByText('Invalid email or password')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /sign in/i })).toBeEnabled()
     expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it('announces the error via role=alert and marks the inputs invalid', async () => {
+    mockSignIn.mockResolvedValue({ error: 'CredentialsSignin' })
+
+    render(<LoginPage />)
+    await fillAndSubmit()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Invalid email or password')
+
+    const email = screen.getByLabelText(/email/i)
+    expect(email).toHaveAttribute('aria-invalid', 'true')
+    expect(email).toHaveAttribute('aria-describedby', 'login-error')
+    expect(alert).toHaveAttribute('id', 'login-error')
   })
 
   it('shows a generic error when signIn throws', async () => {

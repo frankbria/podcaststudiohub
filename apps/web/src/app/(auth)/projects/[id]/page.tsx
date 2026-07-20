@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import Link from "next/link"
 import { useRouter, useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { useForm } from "react-hook-form"
@@ -285,20 +286,20 @@ export default function ProjectPage() {
         </Button>
 
         <nav className="flex gap-4 mb-4">
-          <a
+          <Link
             href={`/projects/${params.id}/analytics`}
             className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
           >
             <HugeiconsIcon icon={Analytics01Icon} size={16} />
             Analytics
-          </a>
-          <a
+          </Link>
+          <Link
             href={`/projects/${params.id}/distribution`}
             className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground"
           >
             <HugeiconsIcon icon={RssIcon} size={16} />
             Distribution
-          </a>
+          </Link>
         </nav>
 
         <div className="flex justify-between items-center mb-8">
@@ -338,25 +339,29 @@ export default function ProjectPage() {
             {episodes.map((episode) => (
               <Card
                 key={episode.id}
-                className="cursor-pointer hover:shadow-lg transition-shadow focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
-                role="button"
-                tabIndex={0}
-                aria-label={`Open episode: ${episode.title}`}
-                onClick={() => router.push(`/episodes/${episode.id}`)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault()
-                    router.push(`/episodes/${episode.id}`)
-                  }
-                }}
+                className="hover:shadow-lg transition-shadow"
               >
                 <CardHeader>
                   <div className="flex justify-between items-start">
                     <div>
-                      <CardTitle>{episode.title}</CardTitle>
+                      {/*
+                        Only the title links to the episode — the card used to be
+                        role=button while wrapping the status badge and Edit/Delete
+                        buttons, which is invalid ARIA (a control nesting controls).
+                        A next/link on the title alone fixes the nesting (#323).
+                      */}
+                      <CardTitle>
+                        <Link
+                          href={`/episodes/${episode.id}`}
+                          aria-label={`Open episode: ${episode.title}`}
+                          className="rounded hover:underline focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                        >
+                          {episode.title}
+                        </Link>
+                      </CardTitle>
                       <CardDescription>{episode.description || "No description"}</CardDescription>
                     </div>
-                    <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center gap-1">
                       {getStatusBadge(episode.generation_status)}
                       <Button
                         variant="ghost"

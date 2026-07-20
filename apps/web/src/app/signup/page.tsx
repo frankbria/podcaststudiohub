@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -45,7 +46,7 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
+    <main id="main-content" className="min-h-screen flex items-center justify-center bg-background">
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle>Create Account</CardTitle>
@@ -76,6 +77,8 @@ export default function SignupPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 disabled={loading}
+                aria-invalid={error ? "true" : undefined}
+                aria-describedby={error ? "signup-error" : undefined}
               />
             </div>
             <div>
@@ -90,23 +93,27 @@ export default function SignupPage() {
                 required
                 minLength={8}
                 disabled={loading}
+                aria-invalid={error ? "true" : undefined}
+                aria-describedby={error ? "signup-error" : undefined}
               />
             </div>
             {error && (
-              <div className="text-destructive text-sm">{error}</div>
+              <div id="signup-error" role="alert" aria-live="assertive" className="text-destructive text-sm">
+                {error}
+              </div>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Creating account..." : "Sign Up"}
             </Button>
             <div className="text-center text-sm text-muted-foreground">
               Already have an account?{" "}
-              <a href="/login" className="text-primary hover:underline">
+              <Link href="/login" className="text-primary hover:underline">
                 Sign in
-              </a>
+              </Link>
             </div>
           </form>
         </CardContent>
       </Card>
-    </div>
+    </main>
   )
 }

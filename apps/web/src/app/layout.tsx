@@ -41,7 +41,14 @@ export default async function RootLayout({
         <ThemeProvider>
           <AuthProvider>
             <ToastProvider />
-            <main id="main-content">{children}</main>
+            {/*
+              The skip-link target (<main id="main-content">) is owned by each
+              route, not this root layout — otherwise it would wrap the (auth)
+              group's <MainNav>, so "skip to main content" would land the user
+              *before* the nav, and the (auth) layout's own <main> nested a
+              second landmark inside this one (issue #323).
+            */}
+            {children}
           </AuthProvider>
         </ThemeProvider>
       </body>

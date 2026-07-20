@@ -4,7 +4,10 @@ Integration tests for analytics endpoints (GAP-049).
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from uuid import uuid4
+from unittest.mock import patch
+from uuid import UUID, uuid4
+
+from src.models.analytics_event import AnalyticsEvent
 
 
 # ---------------------------------------------------------------------------
@@ -24,6 +27,44 @@ async def register_and_login(client, email=None):
 	assert response.status_code == 201, response.text
 	token = response.json()["access_token"]
 	return {"Authorization": f"Bearer {token}"}
+
+
+async def register_and_login_with_tenant(client, email=None):
+	"""Register a new user and return (auth headers, tenant_id)."""
+	if email is None:
+		email = f"test_{uuid4()}@example.com"
+	response = await client.post("/auth/register", json={
+		"email": email,
+		"password": "SecurePass123!",
+		"full_name": "Test User",
+	})
+	assert response.status_code == 201, response.text
+	body = response.json()
+	headers = {"Authorization": f"Bearer {body['access_token']}"}
+	return headers, UUID(body["user"]["tenant_id"])
+
+
+async def _seed_event(test_db, tenant_id, event_type, *, episode_id=None,
+                      project_id=None, created_at=None, metadata=None):
+	"""Insert an AnalyticsEvent directly on the shared test session.
+
+	The track endpoint now queues the insert to Celery (issue #322), so
+	round-trip aggregation tests seed events directly instead of POSTing.
+	Relies on RLS tenant context already armed on `test_db` by a preceding API
+	request (register/create project/episode) — same pattern as
+	test_analytics_aggregation.py.
+	"""
+	from src.utils.datetime_utils import utcnow
+	event = AnalyticsEvent(
+		tenant_id=UUID(str(tenant_id)),
+		episode_id=UUID(str(episode_id)) if episode_id else None,
+		project_id=UUID(str(project_id)) if project_id else None,
+		event_type=event_type,
+		event_metadata=metadata,
+		created_at=created_at or utcnow(),
+	)
+	test_db.add(event)
+	await test_db.commit()
 
 
 async def create_project(client, headers):
@@ -181,6 +222,49 @@ async def test_track_event_without_episode_or_project(client):
 	assert response.status_code == 201, response.text
 
 
+@pytest.mark.asyncio
+async def test_track_event_queues_task_with_payload(client):
+	"""Track queues the insert (off the request path) with the full payload (#322).
+
+	The 201 response is built from the in-process payload — the same id/
+	created_at the task will persist — so no DB write/refresh happens inline.
+	"""
+	headers, tenant_id = await register_and_login_with_tenant(client)
+	project_id = await create_project(client, headers)
+	episode_id = await create_episode(client, headers, project_id)
+
+	with patch("src.tasks.analytics.track_analytics_event_task") as mock_task:
+		response = await client.post("/analytics/events", json={
+			"event_type": "play",
+			"episode_id": episode_id,
+			"project_id": project_id,
+			"metadata": {"completed": True},
+		}, headers=headers)
+
+	assert response.status_code == 201, response.text
+	data = response.json()
+	mock_task.delay.assert_called_once()
+	payload = mock_task.delay.call_args.kwargs["payload"]
+	assert payload["id"] == data["id"]
+	assert payload["tenant_id"] == str(tenant_id)
+	assert payload["event_type"] == "play"
+	assert payload["episode_id"] == episode_id
+	assert payload["project_id"] == project_id
+	assert payload["event_metadata"] == {"completed": True}
+
+
+@pytest.mark.asyncio
+async def test_track_event_broker_down_still_returns_201(client):
+	"""A broker outage must never fail the request — analytics are best-effort."""
+	headers = await register_and_login(client)
+	with patch("src.tasks.analytics.track_analytics_event_task") as mock_task:
+		mock_task.delay.side_effect = RuntimeError("broker unavailable")
+		response = await client.post("/analytics/events", json={
+			"event_type": "share",
+		}, headers=headers)
+	assert response.status_code == 201, response.text
+
+
 # ---------------------------------------------------------------------------
 # GET /analytics/episodes/{episode_id}
 # ---------------------------------------------------------------------------
@@ -202,22 +286,16 @@ async def test_get_episode_analytics_zero_counts(client):
 
 
 @pytest.mark.asyncio
-async def test_get_episode_analytics_counts_correctly(client):
+async def test_get_episode_analytics_counts_correctly(client, test_db):
 	"""Episode analytics should count events correctly."""
-	headers = await register_and_login(client)
+	headers, tenant_id = await register_and_login_with_tenant(client)
 	project_id = await create_project(client, headers)
 	episode_id = await create_episode(client, headers, project_id)
 
-	# Track 2 downloads, 1 play
+	# Seed 2 downloads, 1 play (track insert is now async off the request path).
 	for _ in range(2):
-		await client.post("/analytics/events", json={
-			"event_type": "download",
-			"episode_id": episode_id,
-		}, headers=headers)
-	await client.post("/analytics/events", json={
-		"event_type": "play",
-		"episode_id": episode_id,
-	}, headers=headers)
+		await _seed_event(test_db, tenant_id, "download", episode_id=episode_id)
+	await _seed_event(test_db, tenant_id, "play", episode_id=episode_id)
 
 	response = await client.get(f"/analytics/episodes/{episode_id}", headers=headers)
 	assert response.status_code == 200, response.text
@@ -227,16 +305,13 @@ async def test_get_episode_analytics_counts_correctly(client):
 
 
 @pytest.mark.asyncio
-async def test_get_episode_analytics_tz_aware_date_range(client):
+async def test_get_episode_analytics_tz_aware_date_range(client, test_db):
 	"""Z-suffixed (TZ-aware) date params must not raise against naive created_at (#310)."""
-	headers = await register_and_login(client)
+	headers, tenant_id = await register_and_login_with_tenant(client)
 	project_id = await create_project(client, headers)
 	episode_id = await create_episode(client, headers, project_id)
 
-	await client.post("/analytics/events", json={
-		"event_type": "download",
-		"episode_id": episode_id,
-	}, headers=headers)
+	await _seed_event(test_db, tenant_id, "download", episode_id=episode_id)
 
 	date_from = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 	date_to = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -249,16 +324,13 @@ async def test_get_episode_analytics_tz_aware_date_range(client):
 
 
 @pytest.mark.asyncio
-async def test_get_episode_analytics_non_utc_offset_converted(client):
+async def test_get_episode_analytics_non_utc_offset_converted(client, test_db):
 	"""Non-UTC offsets must be converted to UTC, not just tz-stripped (#310)."""
-	headers = await register_and_login(client)
+	headers, tenant_id = await register_and_login_with_tenant(client)
 	project_id = await create_project(client, headers)
 	episode_id = await create_episode(client, headers, project_id)
 
-	await client.post("/analytics/events", json={
-		"event_type": "download",
-		"episode_id": episode_id,
-	}, headers=headers)
+	await _seed_event(test_db, tenant_id, "download", episode_id=episode_id)
 
 	# 30 min ago UTC, expressed in +03:00 — naive stripping would yield a
 	# wall time ~2.5h in the future and wrongly exclude the event just tracked.
@@ -316,19 +388,16 @@ async def test_get_project_analytics_zero_counts(client):
 
 
 @pytest.mark.asyncio
-async def test_get_project_analytics_aggregates_correctly(client):
+async def test_get_project_analytics_aggregates_correctly(client, test_db):
 	"""Project analytics should aggregate events from all episodes."""
-	headers = await register_and_login(client)
+	headers, tenant_id = await register_and_login_with_tenant(client)
 	project_id = await create_project(client, headers)
 	episode_id = await create_episode(client, headers, project_id)
 
-	# Track 3 downloads for project
+	# Seed 3 downloads for the project (track insert is now async off-request).
 	for _ in range(3):
-		await client.post("/analytics/events", json={
-			"event_type": "download",
-			"episode_id": episode_id,
-			"project_id": project_id,
-		}, headers=headers)
+		await _seed_event(test_db, tenant_id, "download",
+		                  episode_id=episode_id, project_id=project_id)
 
 	response = await client.get(f"/projects/{project_id}/analytics", headers=headers)
 	assert response.status_code == 200, response.text

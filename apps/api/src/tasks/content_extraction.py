@@ -69,6 +69,91 @@ async def _extract_content_async(
 		}
 
 
+async def _validate_url_reachability_async(content_source_id: str) -> Dict[str, Any]:
+	"""
+	Verify a URL content source is reachable, off the request path (issue #322).
+
+	Replaces the create-time HEAD that used to block the request for up to
+	~40s: on an unreachable / non-2xx / timeout / redirect-loop target the
+	source is marked ``extraction_status='failed'`` with the error message; a
+	reachable target is left ``pending``. Only meaningful for the
+	``auto_extract=False`` case — the default extraction path already re-fetches
+	the URL and reports failure itself.
+
+	Runs under ``celery_async_session`` (the sync Celery role bypasses RLS,
+	same as ``extract_content_task``).
+	"""
+	from src.database import celery_async_session
+	from src.services.content_service import get_content_source_by_id
+	from src.services.source_validator_service import (
+		SourceValidatorService,
+		URLValidationError,
+	)
+
+	content_uuid = uuid_module.UUID(content_source_id)
+	async with celery_async_session() as db:
+		content_source = await get_content_source_by_id(db, content_uuid)
+		if content_source is None:
+			raise ValueError(f"Content source {content_source_id} not found")
+		if content_source.source_type != "url":
+			return {"status": "skipped", "reason": "not a url source"}
+
+		url = content_source.source_data.get("url")
+		if not url:
+			return {"status": "skipped", "reason": "missing url"}
+
+		try:
+			await SourceValidatorService()._check_url_accessibility(url)
+		except URLValidationError as exc:
+			content_source.extraction_status = "failed"
+			content_source.error_message = str(exc)
+			await db.commit()
+			return {"status": "failed", "error_message": str(exc)}
+
+		return {"status": "reachable"}
+
+
+@celery_app.task(bind=True, name="validate_url_reachability", max_retries=3, time_limit=120)
+def validate_url_reachability_task(
+	self: Task,
+	content_source_id: str,
+) -> Dict[str, Any]:
+	"""
+	Check a URL content source's reachability via Celery (issue #322).
+
+	Dispatched by the create endpoint when ``auto_extract`` is False so the
+	network HEAD never blocks the create request. An unreachable target is a
+	permanent result (the source is marked failed) — only unexpected errors
+	(e.g. transient DB failures) retry.
+
+	Returns a dict with ``status`` ('reachable', 'failed', or 'skipped') and,
+	on failure, ``error_message``.
+	"""
+	logger.info(f"Checking URL reachability for content source {content_source_id}")
+	try:
+		result = asyncio.run(_validate_url_reachability_async(content_source_id))
+		logger.info(
+			f"Reachability check for {content_source_id}: {result['status']}"
+		)
+		return result
+
+	except ValueError as e:
+		# Missing source — permanent, do not retry.
+		logger.error(f"Reachability check error for {content_source_id}: {str(e)}")
+		return {"status": "failed", "error_message": str(e)}
+
+	except Exception as e:
+		logger.error(f"Reachability check error for {content_source_id}: {str(e)}")
+		retry_countdown = 60 * (2 ** self.request.retries)
+		try:
+			raise self.retry(exc=e, countdown=retry_countdown)
+		except self.MaxRetriesExceededError:
+			return {
+				"status": "failed",
+				"error_message": f"Max retries exceeded: {str(e)}",
+			}
+
+
 @celery_app.task(bind=True, name="extract_content", max_retries=3, time_limit=120)
 def extract_content_task(
 	self: Task,

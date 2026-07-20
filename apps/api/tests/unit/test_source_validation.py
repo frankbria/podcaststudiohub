@@ -390,21 +390,17 @@ def test_validate_text_length_exactly_10_words():
 
 
 @pytest.mark.asyncio
-async def test_validate_url_source_valid():
-	"""Valid URL returning 200 should return (True, None)."""
+async def test_validate_url_source_no_network_head():
+	"""A well-formed public URL validates WITHOUT any network HEAD (issue #322).
+
+	Reachability moved off the request path: create-time validation is format +
+	SSRF only, so httpx.AsyncClient must never be constructed here.
+	"""
 	validator = make_validator()
-	mock_response = MagicMock()
-	mock_response.status_code = 200
-
 	with patch("src.services.source_validator_service.httpx.AsyncClient") as mock_client_cls:
-		mock_client = AsyncMock()
-		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-		mock_client.__aexit__ = AsyncMock(return_value=None)
-		mock_client.head = AsyncMock(return_value=mock_response)
-		mock_client_cls.return_value = mock_client
-
 		result = await validator.validate_url_source("https://example.com", "Title")
 	assert result == (True, None)
+	mock_client_cls.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -465,23 +461,15 @@ async def test_validate_pdf_source_empty_key():
 
 @pytest.mark.asyncio
 async def test_validate_by_type_url_valid():
-	"""validate_by_type dispatches to URL validation for 'url' type."""
+	"""validate_by_type dispatches URL validation with no network HEAD (#322)."""
 	validator = make_validator()
-	mock_response = MagicMock()
-	mock_response.status_code = 200
-
 	with patch("src.services.source_validator_service.httpx.AsyncClient") as mock_client_cls:
-		mock_client = AsyncMock()
-		mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-		mock_client.__aexit__ = AsyncMock(return_value=None)
-		mock_client.head = AsyncMock(return_value=mock_response)
-		mock_client_cls.return_value = mock_client
-
-		# Should not raise
+		# Should not raise and should not touch the network.
 		await validator.validate_by_type(
 			source_type='url',
 			source_data={'url': 'https://example.com', 'title': 'Test'},
 		)
+	mock_client_cls.assert_not_called()
 
 
 @pytest.mark.asyncio

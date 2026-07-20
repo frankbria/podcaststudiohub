@@ -848,7 +848,12 @@ async def test_content_source_tenant_isolation(client, url_content_source):
 # ============================================================================
 
 def _mock_http_200():
-    """Return a context-manager mock that yields a 200 HEAD response."""
+    """Return a context-manager mock that yields a 200 HEAD response.
+
+    Retained for tests that create URL sources while stubbing the network. Since
+    issue #322 create no longer issues an inline HEAD, so this stub is a
+    harmless no-op for those tests — they assert on creation, not reachability.
+    """
     mock_response = MagicMock()
     mock_response.status_code = 200
 
@@ -908,103 +913,93 @@ async def test_create_url_content_source_no_scheme(client, episode_and_auth):
 
 
 @pytest.mark.asyncio
-async def test_create_url_content_source_unreachable(client, episode_and_auth):
-    """URL that returns 404 should return 422 with descriptive error."""
+async def test_create_url_content_source_unreachable_still_creates(client, episode_and_auth):
+    """An unreachable/non-2xx URL now creates the source (201) — issue #322.
+
+    Create does format + SSRF validation only; reachability moved off the
+    request path, so no inline HEAD is issued and a dead target no longer
+    blocks creation. httpx.AsyncClient must never be constructed during create.
+    """
     episode_id, headers = episode_and_auth
-
-    mock_response = MagicMock()
-    mock_response.status_code = 404
-
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.head = AsyncMock(return_value=mock_response)
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "url",
+        "source_data": {"url": "https://example.com/missing", "title": "Missing Page"},
+    }
 
     with patch(
-        "src.services.source_validator_service.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        content_data = {
-            "episode_id": episode_id,
-            "source_type": "url",
-            "source_data": {
-                "url": "https://example.com/missing",
-                "title": "Missing Page"
-            }
-        }
-
+        "src.services.source_validator_service.httpx.AsyncClient"
+    ) as mock_client_cls:
         response = await client.post(
-            f"/episodes/{episode_id}/content",
-            headers=headers,
-            json=content_data
+            f"/episodes/{episode_id}/content", headers=headers, json=content_data
         )
 
-    assert response.status_code == 422
-    assert "404" in response.json()["detail"]
+    assert response.status_code == 201
+    assert response.json()["extraction_status"] == "pending"
+    mock_client_cls.assert_not_called()  # no inline reachability fetch
 
 
 @pytest.mark.asyncio
-async def test_create_url_content_source_timeout(client, episode_and_auth):
-    """URL that times out should return 422 with timeout message."""
-    import httpx as _httpx
-    episode_id, headers = episode_and_auth
+async def test_create_url_auto_extract_false_dispatches_reachability(client, episode_and_auth):
+    """With auto_extract disabled, a URL source queues the reachability task (#322).
 
-    mock_client = AsyncMock()
-    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_client.__aexit__ = AsyncMock(return_value=None)
-    mock_client.head = AsyncMock(side_effect=_httpx.TimeoutException("timeout"))
+    The default auto_extract path is covered by extraction's own re-fetch, so
+    reachability is only separately verified off the request path when
+    auto_extract is False.
+    """
+    episode_id, headers = episode_and_auth
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "url",
+        "source_data": {"url": "https://example.com/article", "title": "Article"},
+    }
 
     with patch(
-        "src.services.source_validator_service.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        content_data = {
-            "episode_id": episode_id,
-            "source_type": "url",
-            "source_data": {
-                "url": "https://slow.example.com",
-                "title": "Slow Site"
-            }
-        }
-
+        "src.tasks.content_extraction.validate_url_reachability_task"
+    ) as mock_reach, patch(
+        "src.tasks.content_extraction.extract_content_task"
+    ) as mock_extract:
         response = await client.post(
-            f"/episodes/{episode_id}/content",
+            f"/episodes/{episode_id}/content?auto_extract=false",
             headers=headers,
-            json=content_data
+            json=content_data,
         )
 
-    assert response.status_code == 422
-    assert "timed out" in response.json()["detail"].lower()
+    assert response.status_code == 201
+    mock_reach.delay.assert_called_once()
+    assert mock_reach.delay.call_args.kwargs["content_source_id"] == response.json()["id"]
+    # auto_extract disabled — extraction is NOT dispatched
+    mock_extract.delay.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_create_url_content_source_valid_passes(client, episode_and_auth):
-    """Valid URL returning 200 should create content source successfully."""
-    episode_id, headers = episode_and_auth
+    """A valid URL creates the source (201) and, by default, queues extraction.
 
-    mock_client = _mock_http_200()
+    auto_extract defaults True, so the extraction task (which re-fetches the URL)
+    is dispatched and the separate reachability task is NOT — extraction covers
+    reachability for the default path (issue #322).
+    """
+    episode_id, headers = episode_and_auth
+    content_data = {
+        "episode_id": episode_id,
+        "source_type": "url",
+        "source_data": {"url": "https://example.com/article", "title": "Valid Article"},
+    }
 
     with patch(
-        "src.services.source_validator_service.httpx.AsyncClient",
-        return_value=mock_client,
-    ):
-        content_data = {
-            "episode_id": episode_id,
-            "source_type": "url",
-            "source_data": {
-                "url": "https://example.com/article",
-                "title": "Valid Article"
-            }
-        }
-
+        "src.tasks.content_extraction.extract_content_task"
+    ) as mock_extract, patch(
+        "src.tasks.content_extraction.validate_url_reachability_task"
+    ) as mock_reach:
         response = await client.post(
-            f"/episodes/{episode_id}/content",
-            headers=headers,
-            json=content_data
+            f"/episodes/{episode_id}/content", headers=headers, json=content_data
         )
 
     assert response.status_code == 201
     assert response.json()["source_type"] == "url"
+    mock_extract.delay.assert_called_once()
+    mock_reach.delay.assert_not_called()
 
 
 @pytest.mark.asyncio

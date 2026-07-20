@@ -106,6 +106,56 @@ async def test_list_teams_shows_created_teams(client):
 
 
 @pytest.mark.asyncio
+async def test_list_teams_member_count_without_n_plus_one(client, monkeypatch):
+	"""Listing must batch member counts — never one COUNT per team.
+
+	The list path is proven free of the per-team counter by patching the
+	singular `get_member_count` to raise: if the request still returns 200 with
+	correct counts, the grouped query served them.
+	"""
+	headers = await register_and_login(client)
+	await client.post("/teams", headers=headers, json={"name": "N1 Team A"})
+	await client.post("/teams", headers=headers, json={"name": "N1 Team B"})
+
+	from src.services import team_service as ts
+
+	async def _boom(*args, **kwargs):
+		raise AssertionError("per-team get_member_count called during list")
+
+	monkeypatch.setattr(ts, "get_member_count", _boom)
+
+	response = await client.get("/teams", headers=headers)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 2
+	assert all(t["member_count"] == 1 for t in data["teams"])
+
+
+@pytest.mark.asyncio
+async def test_list_teams_limit_and_offset(client):
+	headers = await register_and_login(client)
+	for i in range(3):
+		await client.post("/teams", headers=headers, json={"name": f"Cap Team {i}"})
+
+	page1 = await client.get("/teams?limit=2&offset=0", headers=headers)
+	assert page1.status_code == 200
+	data1 = page1.json()
+	assert len(data1["teams"]) == 2
+	# total reflects the full count beyond the page, so a UI can paginate.
+	assert data1["total"] == 3
+
+	page2 = await client.get("/teams?limit=2&offset=2", headers=headers)
+	assert len(page2.json()["teams"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_teams_limit_out_of_range_rejected(client):
+	headers = await register_and_login(client)
+	assert (await client.get("/teams?limit=0", headers=headers)).status_code == 422
+	assert (await client.get("/teams?limit=501", headers=headers)).status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_get_team(client):
 	headers = await register_and_login(client)
 	create_resp = await client.post("/teams", headers=headers, json={"name": "Get Me"})

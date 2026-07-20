@@ -72,15 +72,41 @@ async def get_team(db: AsyncSession, team_id: UUID) -> Team:
 	return team
 
 
-async def get_teams_for_user(db: AsyncSession, user_id: UUID) -> list[Team]:
-	"""Return all teams the user is an active member of."""
-	result = await db.execute(
+async def get_teams_for_user(
+	db: AsyncSession,
+	user_id: UUID,
+	limit: int | None = None,
+	offset: int = 0,
+) -> list[Team]:
+	"""Return teams the user is an active member of, ordered by creation.
+
+	When ``limit`` is given the result is a single page (with ``offset``); the
+	list endpoint uses this to cap response size. ``count_teams_for_user`` gives
+	the unpaginated total.
+	"""
+	query = (
 		select(Team)
 		.join(TeamMember, TeamMember.team_id == Team.id)
 		.where(TeamMember.user_id == user_id, TeamMember.status == "active")
 		.order_by(Team.created_at)
 	)
+	if offset:
+		query = query.offset(offset)
+	if limit is not None:
+		query = query.limit(limit)
+	result = await db.execute(query)
 	return list(result.scalars().all())
+
+
+async def count_teams_for_user(db: AsyncSession, user_id: UUID) -> int:
+	"""Count all teams the user is an active member of (pagination total)."""
+	result = await db.execute(
+		select(func.count())
+		.select_from(Team)
+		.join(TeamMember, TeamMember.team_id == Team.id)
+		.where(TeamMember.user_id == user_id, TeamMember.status == "active")
+	)
+	return result.scalar_one() or 0
 
 
 async def update_team(
@@ -107,7 +133,7 @@ async def delete_team(db: AsyncSession, team_id: UUID) -> None:
 
 
 async def get_member_count(db: AsyncSession, team_id: UUID) -> int:
-	"""Return count of active members in team."""
+	"""Return count of active members in team (single team)."""
 	result = await db.execute(
 		select(func.count(TeamMember.id)).where(
 			TeamMember.team_id == team_id,
@@ -115,6 +141,28 @@ async def get_member_count(db: AsyncSession, team_id: UUID) -> int:
 		)
 	)
 	return result.scalar_one() or 0
+
+
+async def get_member_counts(
+	db: AsyncSession, team_ids: list[UUID]
+) -> dict[UUID, int]:
+	"""Return active-member counts for many teams in one grouped query.
+
+	Replaces the N+1 loop of per-team ``get_member_count`` calls in list
+	endpoints. Teams with zero active members are absent from the dict
+	(callers default to 0).
+	"""
+	if not team_ids:
+		return {}
+	result = await db.execute(
+		select(TeamMember.team_id, func.count(TeamMember.id))
+		.where(
+			TeamMember.team_id.in_(team_ids),
+			TeamMember.status == "active",
+		)
+		.group_by(TeamMember.team_id)
+	)
+	return {team_id: count for team_id, count in result.all()}
 
 
 # ---------------------------------------------------------------------------

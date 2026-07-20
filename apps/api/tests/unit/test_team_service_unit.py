@@ -190,6 +190,70 @@ class TestAcceptInvitationAlreadyMember:
 		assert "already a member" in exc.value.detail.lower()
 
 
+class TestGetMemberCounts:
+	@pytest.mark.asyncio
+	async def test_grouped_counts_active_only(self, test_db, client):
+		owner_id = await _register_user(client, email_prefix="team_unit_", full_name="Team Unit Test User")
+		team_a = await team_service.create_team(test_db, owner_id, TeamCreate(name="Counts A"))
+		team_b = await team_service.create_team(test_db, owner_id, TeamCreate(name="Counts B"))
+
+		# team_a: one extra active member plus a suspended one (suspended excluded).
+		active_id = await _register_user(client, email_prefix="team_unit_", full_name="Team Unit Test User")
+		suspended_id = await _register_user(client, email_prefix="team_unit_", full_name="Team Unit Test User")
+		test_db.add(TeamMember(team_id=team_a.id, user_id=active_id, role="viewer", status="active"))
+		test_db.add(TeamMember(team_id=team_a.id, user_id=suspended_id, role="viewer", status="suspended"))
+		await test_db.commit()
+
+		counts = await team_service.get_member_counts(test_db, [team_a.id, team_b.id])
+		assert counts[team_a.id] == 2  # owner + one active member
+		assert counts[team_b.id] == 1  # owner only
+
+	@pytest.mark.asyncio
+	async def test_empty_team_ids_returns_empty_dict(self, test_db):
+		assert await team_service.get_member_counts(test_db, []) == {}
+
+	@pytest.mark.asyncio
+	async def test_team_with_no_active_members_absent_from_dict(self, test_db, client):
+		owner_id = await _register_user(client, email_prefix="team_unit_", full_name="Team Unit Test User")
+		team = await team_service.create_team(test_db, owner_id, TeamCreate(name="All Suspended"))
+		for m in await team_service.get_members(test_db, team.id):
+			m.status = "suspended"
+		await test_db.commit()
+
+		counts = await team_service.get_member_counts(test_db, [team.id])
+		assert team.id not in counts
+
+
+class TestCountTeamsForUser:
+	@pytest.mark.asyncio
+	async def test_counts_active_memberships(self, test_db, client):
+		owner_id = await _register_user(client, email_prefix="team_unit_", full_name="Team Unit Test User")
+		await team_service.create_team(test_db, owner_id, TeamCreate(name="CT 1"))
+		await team_service.create_team(test_db, owner_id, TeamCreate(name="CT 2"))
+		assert await team_service.count_teams_for_user(test_db, owner_id) == 2
+
+
+class TestGetTeamsForUserPagination:
+	@pytest.mark.asyncio
+	async def test_limit_and_offset_slice_ordered_by_created_at(self, test_db, client):
+		owner_id = await _register_user(client, email_prefix="team_unit_", full_name="Team Unit Test User")
+		names = [f"Page Team {i}" for i in range(3)]
+		for n in names:
+			await team_service.create_team(test_db, owner_id, TeamCreate(name=n))
+
+		page1 = await team_service.get_teams_for_user(test_db, owner_id, limit=2, offset=0)
+		page2 = await team_service.get_teams_for_user(test_db, owner_id, limit=2, offset=2)
+		assert [t.name for t in page1] == names[:2]
+		assert [t.name for t in page2] == names[2:]
+
+	@pytest.mark.asyncio
+	async def test_no_limit_returns_all(self, test_db, client):
+		owner_id = await _register_user(client, email_prefix="team_unit_", full_name="Team Unit Test User")
+		for i in range(3):
+			await team_service.create_team(test_db, owner_id, TeamCreate(name=f"All Team {i}"))
+		assert len(await team_service.get_teams_for_user(test_db, owner_id)) == 3
+
+
 class TestAcceptInvitationSuccess:
 	@pytest.mark.asyncio
 	async def test_accept_creates_active_membership(self, test_db, client):

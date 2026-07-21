@@ -145,8 +145,7 @@ async def get_current_user(
                 detail="Inactive user account"
             )
 
-        # Store tenant_id from token for RLS context (Task 2.4 will use this)
-        # This allows middleware to enforce row-level security
+        # Store tenant_id from token so downstream RLS enforcement can read it
         user._tenant_id_from_token = tenant_id
 
         return user
@@ -174,10 +173,7 @@ async def get_active_user(
     current_user: User = Depends(get_current_user)
 ) -> User:
     """
-    Ensure user is active and verified.
-
-    Optional additional layer of validation for endpoints that require
-    verified accounts.
+    Ensure the authenticated user's account is active.
 
     Args:
         current_user: User from get_current_user dependency
@@ -186,19 +182,12 @@ async def get_active_user(
         Active User model instance
 
     Raises:
-        HTTPException 403: If user is inactive or unverified
+        HTTPException 403: If the user account is inactive
     """
     if not current_user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user"
         )
-
-    # Optional: Enforce email verification
-    # if not current_user.is_verified:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Email not verified"
-    #     )
 
     return current_user

@@ -254,6 +254,33 @@ async def test_track_event_queues_task_with_payload(client):
 
 
 @pytest.mark.asyncio
+async def test_track_event_threads_country_header_into_payload(client):
+	"""CF-IPCountry header is read at the boundary and queued on the payload (#325)."""
+	headers = await register_and_login(client)
+	headers["CF-IPCountry"] = "gb"
+	with patch("src.tasks.analytics.track_analytics_event_task") as mock_task:
+		response = await client.post("/analytics/events", json={
+			"event_type": "download",
+		}, headers=headers)
+	assert response.status_code == 201, response.text
+	payload = mock_task.delay.call_args.kwargs["payload"]
+	assert payload["country"] == "GB"  # normalized
+
+
+@pytest.mark.asyncio
+async def test_track_event_x_country_fallback(client):
+	"""X-Country is the fallback when CF-IPCountry is absent (#325)."""
+	headers = await register_and_login(client)
+	headers["X-Country"] = "US"
+	with patch("src.tasks.analytics.track_analytics_event_task") as mock_task:
+		response = await client.post("/analytics/events", json={
+			"event_type": "download",
+		}, headers=headers)
+	assert response.status_code == 201, response.text
+	assert mock_task.delay.call_args.kwargs["payload"]["country"] == "US"
+
+
+@pytest.mark.asyncio
 async def test_track_event_broker_down_still_returns_201(client):
 	"""A broker outage must never fail the request — analytics are best-effort."""
 	headers = await register_and_login(client)

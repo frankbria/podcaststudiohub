@@ -37,6 +37,7 @@ def _payload(**over):
 		"ip_address": "hashed-ip",
 		"device_type": "mobile",
 		"app_name": "spotify",
+		"country": "US",
 		"event_metadata": {"completed": True},
 		"created_at": "2026-07-19T12:00:00",
 	}
@@ -74,6 +75,7 @@ async def test_track_async_arms_tenant_context_then_inserts_and_commits():
 	assert str(added.episode_id) == payload["episode_id"]
 	assert added.project_id is None
 	assert added.event_type == "play"
+	assert added.country == payload["country"]  # #325: country persisted
 	assert added.created_at == datetime.fromisoformat(payload["created_at"])
 	mock_db.commit.assert_awaited_once()
 

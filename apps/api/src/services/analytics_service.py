@@ -16,6 +16,7 @@ from ..models.analytics_event import (
 	detect_app_name,
 	detect_device_type,
 	hash_ip,
+	normalize_country,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ def build_event_payload(
 	user_agent: Optional[str] = None,
 	referer: Optional[str] = None,
 	ip_address: Optional[str] = None,
+	country: Optional[str] = None,
 	event_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
 	"""Build a JSON-safe engagement-event payload WITHOUT touching the DB.
@@ -52,6 +54,7 @@ def build_event_payload(
 		"user_agent": user_agent,
 		"referer": referer,
 		"ip_address": hash_ip(ip_address) if ip_address else None,
+		"country": normalize_country(country),
 		"device_type": detect_device_type(user_agent or ""),
 		"app_name": detect_app_name(user_agent or ""),
 		"event_metadata": event_metadata,

@@ -48,6 +48,7 @@ async def _track_event_async(payload: Dict[str, Any]) -> None:
 			user_agent=payload.get("user_agent"),
 			referer=payload.get("referer"),
 			ip_address=payload.get("ip_address"),
+			country=payload.get("country"),
 			device_type=payload.get("device_type"),
 			app_name=payload.get("app_name"),
 			event_metadata=payload.get("event_metadata"),

@@ -1,6 +1,8 @@
 """Analytics event model for tracking user engagement"""
 
 import hashlib
+import re
+from typing import Optional
 from sqlalchemy import Column, Text, DateTime, ForeignKey, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -63,6 +65,34 @@ class AnalyticsEvent(Base):
 def hash_ip(ip: str) -> str:
 	"""SHA-256 hash an IP address for privacy compliance."""
 	return hashlib.sha256(ip.encode()).hexdigest()
+
+
+# ISO 3166-1 alpha-2 shape: exactly two ASCII letters.
+_COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
+# Cloudflare sentinels that are alpha-2 shaped but mean "no country"
+# (XX = unknown, T1 = Tor exit).
+_COUNTRY_SENTINELS = {"XX", "T1"}
+
+
+def normalize_country(country: Optional[str]) -> Optional[str]:
+	"""Normalize an edge-provided country code for consistent GROUP BY bucketing.
+
+	Trims + uppercases so identical countries aggregate together, then keeps only
+	ISO 3166-1 alpha-2-shaped codes, dropping empties, Cloudflare sentinels
+	(``XX``/``T1``), and anything else to ``None``. The country header
+	(``CF-IPCountry``/``X-Country``) is client-settable — spoofable even behind
+	Cloudflare via ``X-Country`` — so this shape check keeps free-form junk
+	(``FAKE``, ``ZZZZ``) out of ``top_countries``.
+
+	# ponytail: alpha-2 *shape* only, not the full 249-code table — a P3 metric
+	# doesn't warrant a bundled ISO code set; add one if bucket accuracy matters.
+	"""
+	if not country:
+		return None
+	code = country.strip().upper()
+	if not _COUNTRY_CODE_RE.match(code) or code in _COUNTRY_SENTINELS:
+		return None
+	return code
 
 
 def detect_device_type(user_agent: str) -> str:

@@ -110,6 +110,60 @@ class TestAppNameDetection:
 
 
 # ---------------------------------------------------------------------------
+# Country normalization (issue #325)
+# ---------------------------------------------------------------------------
+
+
+class TestCountryNormalization:
+	def test_uppercases_and_trims(self):
+		from src.models.analytics_event import normalize_country
+		assert normalize_country("  gb ") == "GB"
+		assert normalize_country("us") == "US"
+
+	def test_none_and_empty_return_none(self):
+		from src.models.analytics_event import normalize_country
+		assert normalize_country(None) is None
+		assert normalize_country("") is None
+		assert normalize_country("   ") is None
+
+	def test_cloudflare_sentinels_return_none(self):
+		from src.models.analytics_event import normalize_country
+		# XX = unknown, T1 = Tor exit — must not pollute top_countries
+		assert normalize_country("XX") is None
+		assert normalize_country("xx") is None
+		assert normalize_country("T1") is None
+		assert normalize_country(" t1 ") is None
+
+	def test_non_alpha2_shapes_rejected(self):
+		from src.models.analytics_event import normalize_country
+		# Header is client-settable (X-Country spoofable) — free-form junk and
+		# wrong-length codes must not create bogus top_countries buckets.
+		for junk in ("FAKE", "ZZZZ", "U", "USA", "U1", "1S", "U.S"):
+			assert normalize_country(junk) is None, junk
+
+
+# ---------------------------------------------------------------------------
+# build_event_payload threads a normalized country (issue #325)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildEventPayloadCountry:
+	def _payload(self, **over):
+		from uuid import uuid4
+		from src.services.analytics_service import build_event_payload
+		return build_event_payload(tenant_id=uuid4(), event_type="download", **over)
+
+	def test_normalizes_country_into_payload(self):
+		assert self._payload(country=" gb ")["country"] == "GB"
+
+	def test_absent_country_defaults_to_none(self):
+		assert self._payload()["country"] is None
+
+	def test_sentinel_country_stored_as_none(self):
+		assert self._payload(country="XX")["country"] is None
+
+
+# ---------------------------------------------------------------------------
 # Event type validation
 # ---------------------------------------------------------------------------
 

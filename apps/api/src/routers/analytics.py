@@ -67,6 +67,9 @@ async def track_event(
 	client_ip = request.headers.get("X-Forwarded-For") or request.client.host if request.client else None
 	user_agent = request.headers.get("User-Agent")
 	referer = request.headers.get("Referer")
+	# Country from the edge/CDN (Cloudflare CF-IPCountry, generic X-Country
+	# fallback); normalized + sentinel-filtered in build_event_payload (#325).
+	country = request.headers.get("CF-IPCountry") or request.headers.get("X-Country")
 
 	# Build the event payload in-process (id + created_at minted here) and queue
 	# the insert so the per-event commit is off the request path (issue #322).
@@ -81,6 +84,7 @@ async def track_event(
 			user_agent=user_agent,
 			referer=referer,
 			ip_address=client_ip,
+			country=country,
 			event_metadata=body.metadata,
 		)
 	except ValueError as exc:

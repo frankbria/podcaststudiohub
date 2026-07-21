@@ -2,7 +2,7 @@
 Content extraction service for processing episode content sources.
 
 This service wraps Podcastfy content_parser modules to extract text from URL, PDF,
-and text sources. It integrates with the ContentSource model from Task 2.7 to:
+and text sources. It integrates with the ContentSource model to:
 - Update extraction_status (pending → extracting → complete/failed)
 - Store extracted text in extracted_content column
 - Store error details in error_message column

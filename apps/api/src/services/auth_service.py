@@ -84,7 +84,7 @@ def create_jwt_token(
 
     payload = {
         "sub": str(user_id),  # Subject (user ID)
-        "tenant_id": str(tenant_id),  # For RLS enforcement in Task 2.4
+        "tenant_id": str(tenant_id),  # For RLS enforcement
         "email": email,
         "exp": expire,  # Expiration time
         "iat": datetime.now(timezone.utc),  # Issued at

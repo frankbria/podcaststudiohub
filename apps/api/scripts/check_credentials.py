@@ -324,7 +324,7 @@ def test_transistor_api():
             results.append({
                 "service": service,
                 "status": "❌ Invalid",
-                "message": f"Authentication failed: 401 Unauthorized - Invalid API key",
+                "message": "Authentication failed: 401 Unauthorized - Invalid API key",
                 "working": False
             })
         else:

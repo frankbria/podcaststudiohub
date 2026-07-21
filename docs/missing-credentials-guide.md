@@ -287,7 +287,7 @@ After adding credentials, re-run the validation script:
 
 ```bash
 cd apps/api
-uv run python scripts/test_credentials.py
+uv run python scripts/check_credentials.py
 ```
 
 Expected output after adding missing credentials:

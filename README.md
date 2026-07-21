@@ -54,7 +54,7 @@ podcaststudiohub/
 - PostgreSQL 15 for database
 - Redis for caching and task queue
 - Nginx as reverse proxy
-- Systemd for service management
+- PM2 for process management
 - VPS deployment (Ubuntu/Debian)
 
 ## Features
@@ -274,12 +274,12 @@ podcaststudiohub/
 ├── tests/                            # Test suite
 │   └── e2e/                          # Playwright end-to-end tests
 │
-├── data/                             # Runtime data (gitignored)
+├── data/                             # New runtime output gitignored; committed sample audio stays tracked
 │   ├── audio/                        # Generated podcasts
 │   └── transcripts/                  # Generated transcripts
 │
 ├── .github/workflows/                # CI/CD workflows
-│   └── deploy.yml                    # Deployment workflow
+│   └── deploy-dev.yml                # Deployment workflow
 │
 ├── package.json                      # Root npm scripts (orchestrates both apps)
 ├── CLAUDE.md                         # Claude Code instructions

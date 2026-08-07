@@ -48,7 +48,7 @@ override-dependencies = [
 
 [dependency-groups]
 dev = [
-    "ruff>=0.15.22",
+    "ruff>=0.16.1",
 ]
 
 [tool.ruff.lint]

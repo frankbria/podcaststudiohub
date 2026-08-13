@@ -311,8 +311,11 @@ jobs:
           cache-dependency-path: package-lock.json
 
       # npm workspace monorepo: root lockfile covers apps/web (#306).
+      # Allowlisted advisories live in the script alongside their justification,
+      # mirroring apps/api/scripts/security-audit.sh. The script fails closed if
+      # the audit itself cannot run.
       - name: npm audit (high+) over the workspace lockfile
-        run: npm audit --audit-level=high
+        run: bash scripts/npm-security-audit.sh
 
   test-deployment:
     name: Deployment Config Tests (nginx/TLS)

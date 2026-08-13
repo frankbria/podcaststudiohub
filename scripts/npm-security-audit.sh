@@ -9,18 +9,19 @@ cd "$(dirname "$0")/.."
 # Allowlisted advisories. npm has no native per-advisory ignore, so we filter the
 # JSON ourselves rather than pulling in audit-ci/better-npm-audit for this.
 #
-# All four are next-auth v4 and its uuid dependency. EVERY v4 release is affected
-# (`next-auth <=4.24.14`, and 4.24.14 is the last v4), so no bump clears them —
-# the fix is the Auth.js v5 / BetterAuth migration tracked in #442, not an
-# override. We use CredentialsProvider only, with no OAuth providers configured,
-# which bounds exposure on the provider-binding advisory. Re-check this list on
-# every next-auth bump, and drop it entirely once #442 lands.
-ALLOWED_ADVISORIES=(
-  GHSA-x445-f3h2-j279  # next-auth: OAuth state/nonce/PKCE cookies not bound to provider
-  GHSA-xmf8-cvqr-rfgj  # next-auth: getToken() uncaught exception on malformed Bearer header
-  GHSA-7rqj-j65f-68wh  # next-auth: email normalizer homoglyph @ bypass
-  GHSA-w5hq-g745-h8pq  # uuid <11.1.1: missing buffer bounds check (transitive via next-auth)
-)
+# CURRENTLY EMPTY — every known high+ advisory is fixed in the lockfile, so this
+# gate is equivalent to a plain `npm audit --audit-level=high` today. The
+# mechanism is kept because unfixable advisories recur (see the 22-entry
+# structural ignore list in apps/api/scripts/security-audit.sh for the Python
+# side); an empty list means nothing is being hidden right now.
+#
+# Only add an entry when NO release fixes it. Verify that claim against the
+# registry (`npm view <pkg> versions`) rather than the advisory's affected range:
+# a range of `<=X` means X+1 is the fix, not that every release is affected. That
+# misreading is what previously masked next-auth 4.24.15.
+#
+# Each entry must carry: why no bump fixes it, an issue link, and a re-check trigger.
+ALLOWED_ADVISORIES=()
 
 audit_json="$(mktemp)"
 trap 'rm -f "$audit_json"' EXIT
@@ -33,7 +34,9 @@ npm audit --audit-level=high --json > "$audit_json" || true
 
 ALLOWED="${ALLOWED_ADVISORIES[*]}" node -e '
 const fs = require("fs");
-const allowed = new Set(process.env.ALLOWED.trim().split(/\s+/));
+// filter(Boolean): an empty ALLOWED yields [""] from split, which would put an
+// empty string in the set and match any advisory with a blank id.
+const allowed = new Set(process.env.ALLOWED.trim().split(/\s+/).filter(Boolean));
 
 let report;
 try {

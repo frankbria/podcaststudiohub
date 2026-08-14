@@ -18,6 +18,15 @@ uv export --format requirements-txt --no-hashes --no-emit-project -o "$reqs" -q
 # 0.4.2/0.4.3 do NOT (evaluated & deferred in #363, see
 # docs/podcastfy-0.4.3-evaluation.md) — not an override. Re-check this list on
 # every podcastfy bump.
+#
+# Reachability was assessed on 2026-08-13 (#446) — being capped is why we CAN'T fix
+# these; being unreachable is why it's acceptable not to. 21 of 22 open alerts are
+# unreachable (the 11 litellm ones are proxy-server issues and we never run a proxy;
+# the rest are unused features). The exception is GHSA-3644-q5cj-c5c7 (langsmith),
+# which IS on the generation hot path via podcastfy's hub.pull() — accepted because
+# every pull is commit-pinned. Full classification and re-check triggers:
+#   docs/podcastfy-advisory-reachability.md
+# The import-graph claims are enforced by tests/test_dependency_reachability.py.
 uvx pip-audit -r "$reqs" --no-deps --disable-pip --strict \
   --ignore-vuln CVE-2026-35029 \
   --ignore-vuln CVE-2026-42271 \

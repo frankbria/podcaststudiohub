@@ -60,7 +60,17 @@ bump the version in `apps/api/pyproject.toml`, run `uv sync`, and re-check the c
 **0.4.2/0.4.3 were evaluated 2026-07-13 and deferred** (#363): 0.4.2+ imports `playwright` at module
 top without declaring it (breaks app startup), offers no benefit to our call paths, and does not clear
 the langchain CVEs on the pip-audit ignore list. See `apps/api/docs/podcastfy-0.4.3-evaluation.md` for
-the full evaluation and re-evaluation triggers (chiefly: upstream langchain 1.x support).
+the full evaluation and re-evaluation triggers (chiefly: upstream langchain 1.x support). Upstream is
+dormant — 0.4.3 shipped 2025-12-09 and nothing since — so that trigger has not fired.
+
+**The pin's advisory load was assessed 2026-08-13** (#446): 21 of 22 capped advisories are
+unreachable (the litellm ones, including both criticals, are proxy-server issues and we never run a
+proxy). The exception is GHSA-3644 — podcastfy's `hub.pull()` fetches prompts from LangChain Hub on
+the generation path, so **every episode makes an outbound call to a third-party Hub account**.
+Accepted (pulls are commit-pinned). See `apps/api/docs/podcastfy-advisory-reachability.md`; the claims
+are enforced by `apps/api/tests/test_dependency_reachability.py`, so adding an image source type or
+importing litellm directly will fail CI by design. Fork costing lives in
+`apps/api/docs/podcastfy-fork-effort-review.md` (langchain is confined to one file; Stage 2 ≈ 3–5 days).
 
 Engine capabilities (provided by the dependency): multi-modal input (websites, YouTube, PDFs, images,
 text, topics); 100+ LLMs via LiteLLM + Gemini; TTS via OpenAI, ElevenLabs, Gemini multi-speaker, and

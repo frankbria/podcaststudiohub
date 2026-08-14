@@ -133,16 +133,36 @@ jobs:
           NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
         run: npm run build
 
+      # The VPS firewalls port 22 off the public internet (#441), so the runner
+      # reaches it over Tailscale instead. vars.SERVER_HOST must therefore be
+      # the box's tailnet MagicDNS name (or 100.x address), not the public IP.
+      # Box side: join the tailnet and `ufw allow in on tailscale0 to any port 22`.
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
       - name: Configure SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ vars.SERVER_HOST }}
           SSH_USER: ${{ secrets.SERVER_USER }}
+          # Pinned host key rather than a live ssh-keyscan: keyscan is TOFU (it
+          # trusts whatever answers), and its repeated bursts tripped this box's
+          # fail2ban and banned the runner. SSH_KNOWN_HOSTS must be labelled
+          # with the same host string as SERVER_HOST or it will not verify.
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
+          if [ -z "${SSH_KNOWN_HOSTS}" ]; then
+            echo "❌ SSH_KNOWN_HOSTS secret is not set — the deploy cannot verify the server host key."
+            exit 1
+          fi
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+          printf '%s\n' "${SSH_KNOWN_HOSTS}" >> ~/.ssh/known_hosts
 
       - name: Configure PM2 log rotation
         env:

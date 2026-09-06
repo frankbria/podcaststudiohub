@@ -92,9 +92,17 @@ npm run test:api          # cd apps/api && pytest
 npm run test:web          # cd apps/web && npm run test
 npm run test:e2e          # playwright test
 
-# Lint
-npm run lint              # ruff (api) + next lint (web)
+# Lint  (also gated in CI by the "Lint (ruff + eslint)" job)
+npm run lint              # lint:api + lint:web
+npm run lint:api          # cd apps/api && uv run ruff check .
+npm run lint:web          # cd apps/web && eslint . --ext .js,.jsx,.ts,.tsx
 ```
+
+Ruff's rule set is pinned in `apps/api/pyproject.toml` (`[tool.ruff.lint] select`) rather than
+inherited: ruff's defaults widen between releases, so an unpinned set lets a routine version bump
+redefine what "lint passes" means. Adopting further rules is a deliberate edit there.
+
+`next lint` is gone — it was removed in Next 16, so `apps/web` invokes eslint directly.
 
 Backend-only workflow uses `uv` (`cd apps/api && uv sync && uv run pytest`). Audio processing needs
 `ffmpeg` installed on the host.

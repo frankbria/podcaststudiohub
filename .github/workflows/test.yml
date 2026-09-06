@@ -13,6 +13,9 @@ on:
       - 'apps/api/pyproject.toml'
       - 'apps/api/uv.lock'
       - 'package-lock.json'
+      - 'package.json'
+      - 'apps/web/package.json'
+      - 'apps/web/.eslintrc.json'
       - '.github/workflows/test.yml'
   pull_request:
     branches:
@@ -24,6 +27,49 @@ permissions:
   actions: read
 
 jobs:
+  lint:
+    name: Lint (ruff + eslint)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: pip install uv
+
+      # Only the lint dependency group: ruff needs no database, no Redis and
+      # none of the runtime extras, so this stays a fast job.
+      - name: Install backend lint dependencies
+        working-directory: apps/api
+        run: uv sync --only-group dev
+
+      - name: Run ruff
+        working-directory: apps/api
+        run: uv run ruff check .
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # `next lint` was removed in Next 16 -- it read "lint" as a directory
+      # name and exited 1, so `npm run lint:web` had been silently broken
+      # since that upgrade. eslint is now invoked directly.
+      - name: Run eslint
+        working-directory: apps/web
+        run: npm run lint
+
   test-backend:
     name: Backend Tests (Python/FastAPI)
     runs-on: ubuntu-latest
@@ -381,7 +427,7 @@ jobs:
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
-    needs: [test-backend, test-frontend, test-deployment, security-audit]
+    needs: [lint, test-backend, test-frontend, test-deployment, security-audit]
     if: always()
 
     steps:
@@ -389,6 +435,13 @@ jobs:
         run: |
           echo "### 🎯 Quality Gate Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "❌ Lint failed (ruff / eslint)" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          else
+            echo "✅ Lint passed (ruff / eslint)" >> $GITHUB_STEP_SUMMARY
+          fi
 
           if [ "${{ needs.test-backend.result }}" != "success" ]; then
             echo "❌ Backend tests failed" >> $GITHUB_STEP_SUMMARY

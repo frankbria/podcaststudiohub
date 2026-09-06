@@ -17,13 +17,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.database import Base
 import src.models  # noqa: F401
 
+# Imported here with the other src imports rather than further down: it only
+# needs sys.path above, and importing it after `config` is assigned is what
+# tripped E402 once lint started running in CI.
+from src.config import settings
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-# Override sqlalchemy.url from environment variable
-from src.config import settings
-
+# Override sqlalchemy.url from environment variable.
 # Convert async database URL to sync for Alembic migrations.
 # Prefer the dedicated privileged migration URL when set so RLS-affected backfills
 # apply to all rows; fall back to DATABASE_URL otherwise (issue #301).

@@ -52,6 +52,12 @@ dev = [
 ]
 
 [tool.ruff.lint]
+# Pinned explicitly rather than inherited. Ruff's *default* selection widens
+# between releases -- 0.16 added I, UP, B, SIM, RUF, DTZ, RET and BLE, which
+# took this tree from 1 finding to 1387 (#472). With CI running ruff, an
+# unpinned default set means a routine Dependabot bump can redefine what
+# "lint passes" means. Adopting further rules is now a deliberate edit here.
+select = ["E4", "E7", "E9", "F"]
 # W605 (invalid escape sequence) backstops the module-agnostic SyntaxWarning
 # ignore in pytest.ini: first-party invalid escapes fail lint, so the pytest
 # filter only ever masks pydub's compile-time warning (#346).

@@ -22,7 +22,7 @@
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:report": "playwright show-report",
     "lint": "npm run lint:api && npm run lint:web",
-    "lint:api": "cd apps/api && ruff check .",
+    "lint:api": "cd apps/api && uv run ruff check .",
     "lint:web": "cd apps/web && npm run lint",
     "docker:up": "cd .docker && docker-compose up",
     "docker:down": "cd .docker && docker-compose down",

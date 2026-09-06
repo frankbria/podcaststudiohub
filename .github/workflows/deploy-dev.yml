@@ -189,7 +189,16 @@ jobs:
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
+          # Both tags, deliberately. The OAuth client is approved for tag:ci and
+          # tag:staging-server, and a scoped client with two or more approved tags
+          # rejects a *subset* request with "requested tags [tag:ci] are invalid or
+          # not permitted" -- the minted token carries all of the client's tags, and
+          # the auth key must then match it exactly (tailscale/tailscale#15456,
+          # tailscale/terraform-provider-tailscale#437). So this list must be kept in
+          # step with the client's approved tags; narrowing it here re-breaks the
+          # deploy. Scoping a dedicated client to tag:ci alone would let this go back
+          # to one tag.
+          tags: tag:ci,tag:staging-server
 
       # The key is held by the agent for the life of the job and never written
       # to the runner's filesystem, so no on-disk copy can outlive a failed

@@ -62,6 +62,53 @@ jobs:
           --health-retries 5
 
     steps:
+      # Fail fast and itemised when the environment is not configured, rather
+      # than dying several steps later on whichever secret happens to be read
+      # first. Values are read from env, never interpolated into the script —
+      # an expression inside a run block executes on the runner.
+      - name: Preflight — development must actually be configured
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
+          SERVER_HOST: ${{ vars.SERVER_HOST }}
+          SERVER_PATH: ${{ vars.SERVER_PATH }}
+          API_URL: ${{ vars.API_URL }}
+          FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+          NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
+        run: |
+          set -euo pipefail
+          REQUIRED="SSH_PRIVATE_KEY SSH_KNOWN_HOSTS TS_OAUTH_CLIENT_ID TS_OAUTH_SECRET
+                    SERVER_USER NEXTAUTH_SECRET SERVER_HOST SERVER_PATH
+                    API_URL FRONTEND_URL NEXTAUTH_URL"
+
+          missing=""
+          for name in $REQUIRED; do
+            # Whitespace-only counts as missing: a secret set to " " is not set.
+            value="${!name:-}"
+            if [ -z "$(printf '%s' "$value" | tr -d '[:space:]')" ]; then
+              missing="${missing} ${name}"
+            fi
+          done
+
+          if [ -n "$missing" ]; then
+            echo "::error::The development environment is not configured."
+            echo ""
+            echo "Missing (or blank) secrets/variables:"
+            for name in $missing; do echo "  - ${name}"; done
+            echo ""
+            echo "GitHub exposes environment secrets only to jobs declaring that"
+            echo "environment. Set them with:"
+            echo "  gh secret set <NAME> --env development"
+            echo "  gh variable set <NAME> --env development"
+            exit 1
+          fi
+
+          echo "✅ Development environment is configured."
+
       - name: Checkout code
         uses: actions/checkout@v7
 
@@ -133,16 +180,51 @@ jobs:
           NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
         run: npm run build
 
-      - name: Configure SSH
+      # The VPS firewalls port 22 off the public internet (#441), so the runner
+      # reaches it over Tailscale instead. vars.SERVER_HOST must therefore be
+      # the box's tailnet MagicDNS name (or 100.x address), not the public IP.
+      # Box side: join the tailnet and `ufw allow in on tailscale0 to any port 22`.
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          # Both tags, deliberately. The OAuth client is approved for tag:ci and
+          # tag:staging-server, and a scoped client with two or more approved tags
+          # rejects a *subset* request with "requested tags [tag:ci] are invalid or
+          # not permitted" -- the minted token carries all of the client's tags, and
+          # the auth key must then match it exactly (tailscale/tailscale#15456,
+          # tailscale/terraform-provider-tailscale#437). So this list must be kept in
+          # step with the client's approved tags; narrowing it here re-breaks the
+          # deploy. Scoping a dedicated client to tag:ci alone would let this go back
+          # to one tag.
+          tags: tag:ci,tag:staging-server
+
+      # The key is held by the agent for the life of the job and never written
+      # to the runner's filesystem, so no on-disk copy can outlive a failed
+      # cleanup step.
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: Add server to known hosts
+        # Pinned host key rather than a live ssh-keyscan: keyscan is TOFU (it
+        # trusts whatever answers), and its repeated bursts tripped this box's
+        # fail2ban and banned the runner. Populate the SSH_KNOWN_HOSTS secret
+        # from a trusted session, having verified the fingerprint out-of-band:
+        #   ssh-keyscan <host> | gh secret set SSH_KNOWN_HOSTS --env development
+        # It must be labelled with the same host string as SERVER_HOST or it
+        # will not verify.
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ vars.SERVER_HOST }}
-          SSH_USER: ${{ secrets.SERVER_USER }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
+          if [ -z "${SSH_KNOWN_HOSTS}" ]; then
+            echo "❌ SSH_KNOWN_HOSTS secret is not set — the deploy cannot verify the server host key."
+            exit 1
+          fi
           mkdir -p ~/.ssh
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H $SSH_HOST >> ~/.ssh/known_hosts
+          printf '%s\n' "${SSH_KNOWN_HOSTS}" >> ~/.ssh/known_hosts
 
       - name: Configure PM2 log rotation
         env:
@@ -158,7 +240,7 @@ jobs:
           # NOTE: no backticks anywhere below — this is an unquoted heredoc, so
           # the runner's shell command-substitutes backticks (even inside #
           # comments) before the text is ever sent to the server.
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+          ssh $SSH_USER@$SSH_HOST << EOF
             set -e
 
             # Idempotent: pm2 install on an already-installed module updates it
@@ -184,7 +266,7 @@ jobs:
           API_PORT: ${{ vars.API_PORT }}
         run: |
           # Sync API source files to server
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+          rsync -avz -e ssh \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
             --exclude='.pytest_cache' \
@@ -196,7 +278,7 @@ jobs:
           # README.md is required: pyproject sets readme = "README.md" and the
           # hatchling build validates it exists, so `uv sync` on the server fails
           # with OSError on a from-scratch box if it isn't synced.
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+          rsync -avz -e ssh \
             apps/api/pyproject.toml \
             apps/api/uv.lock \
             apps/api/alembic.ini \
@@ -204,7 +286,7 @@ jobs:
             $SSH_USER@$SSH_HOST:$SERVER_PATH/api/
 
           # Sync migrations
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+          rsync -avz -e ssh \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
             apps/api/alembic/ \
@@ -229,14 +311,14 @@ jobs:
           #
           # mkdir -p first: rsync does not create intermediate remote dirs, and a
           # host deployed only by this workflow has no deployment/ tree yet.
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST \
+          ssh $SSH_USER@$SSH_HOST \
             "mkdir -p $SERVER_PATH/deployment/scripts"
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+          rsync -avz -e ssh \
             deployment/scripts/backup-db.sh \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/deployment/scripts/
 
           # Install dependencies and restart on server
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+          ssh $SSH_USER@$SSH_HOST << EOF
             # Fail fast: a failed migration or sync must abort the deploy before
             # the running API is torn down, rather than silently continuing.
             set -e
@@ -319,17 +401,17 @@ jobs:
           FRONTEND_PORT: ${{ vars.FRONTEND_PORT }}
         run: |
           # Sync public files to server
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+          rsync -avz -e ssh \
             apps/web/public/ \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/public/
 
           # Sync source files (needed for Next.js server-side rendering)
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+          rsync -avz -e ssh \
             apps/web/src/ \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/src/
 
           # Sync package files and config
-          rsync -avz -e "ssh -i ~/.ssh/deploy_key" \
+          rsync -avz -e ssh \
             apps/web/package.json \
             apps/web/next.config.mjs \
             apps/web/tsconfig.json \
@@ -341,25 +423,25 @@ jobs:
           # Uses npm install (not npm ci) because the VPS has only the frontend
           # directory, not the full monorepo. The workspace-scoped lockfile at
           # the repo root can't be used in isolation.
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && npm install"
+          ssh $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && npm install"
 
           # Create .env.production with runtime environment variables (needed for build)
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXT_PUBLIC_API_URL=$API_URL' > $SERVER_PATH/frontend/.env.production"
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXTAUTH_SECRET=$NEXTAUTH_SECRET' >> $SERVER_PATH/frontend/.env.production"
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'NEXTAUTH_URL=$NEXTAUTH_URL' >> $SERVER_PATH/frontend/.env.production"
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo 'PORT=${FRONTEND_PORT:-3000}' >> $SERVER_PATH/frontend/.env.production"
+          ssh $SSH_USER@$SSH_HOST "echo 'NEXT_PUBLIC_API_URL=$API_URL' > $SERVER_PATH/frontend/.env.production"
+          ssh $SSH_USER@$SSH_HOST "echo 'NEXTAUTH_SECRET=$NEXTAUTH_SECRET' >> $SERVER_PATH/frontend/.env.production"
+          ssh $SSH_USER@$SSH_HOST "echo 'NEXTAUTH_URL=$NEXTAUTH_URL' >> $SERVER_PATH/frontend/.env.production"
+          ssh $SSH_USER@$SSH_HOST "echo 'PORT=${FRONTEND_PORT:-3000}' >> $SERVER_PATH/frontend/.env.production"
           # Restrict the secrets file so only the deploy user can read it.
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "chmod 600 $SERVER_PATH/frontend/.env.production"
+          ssh $SSH_USER@$SSH_HOST "chmod 600 $SERVER_PATH/frontend/.env.production"
           echo "Runtime environment variables configured"
 
           # Rebuild Next.js on server with server's node_modules
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && npm run build"
+          ssh $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && npm run build"
 
           # Update runtime config on server
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST "echo \"window.__ENV__ = { API_URL: '$API_URL' };\" > $SERVER_PATH/frontend/public/config.js"
+          ssh $SSH_USER@$SSH_HOST "echo \"window.__ENV__ = { API_URL: '$API_URL' };\" > $SERVER_PATH/frontend/public/config.js"
 
           # Restart frontend service (delete and recreate to ensure fresh start)
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+          ssh $SSH_USER@$SSH_HOST << EOF
             cd $SERVER_PATH/frontend
 
             if pm2 describe podcaststudiohub-frontend > /dev/null 2>&1; then
@@ -389,7 +471,7 @@ jobs:
           SSH_USER: ${{ secrets.SERVER_USER }}
           SERVER_PATH: ${{ vars.SERVER_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key $SSH_USER@$SSH_HOST << EOF
+          ssh $SSH_USER@$SSH_HOST << EOF
             cd $SERVER_PATH/api
 
             if pm2 describe podcaststudiohub-celery > /dev/null 2>&1; then
@@ -448,8 +530,3 @@ jobs:
           wait_for "Frontend" "$FRONTEND_URL" "200" || exit 1
 
           echo "🚀 Deployment successful!"
-
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -f ~/.ssh/deploy_key

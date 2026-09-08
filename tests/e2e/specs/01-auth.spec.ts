@@ -40,7 +40,7 @@ test.describe('Authentication', () => {
     });
 
     test('should show error for existing email', async ({ page }) => {
-      // Use the pre-seeded E2E user — avoids a second registration API call.
+      // Use the pre-seeded E2E user — avoids creating another account.
       //
       // full_name must be filled: it is required (min_length=1), so omitting it
       // made the API answer 422 for request shape and this test asserted on a
@@ -103,8 +103,9 @@ test.describe('Authentication', () => {
       await page.fill('input[type="password"]', 'WrongPassword123');
       await page.click('button[type="submit"]');
 
-      // Should show error message
-      await expect(page.locator('text=/error|invalid|incorrect/i')).toBeVisible({ timeout: 5000 });
+      // Assert the form's own error element, not a page-wide regex: the broad form
+      // also matches Next's crash page, which is what hid #481 on /signup.
+      await expect(page.locator('#login-error')).toHaveText(/invalid email or password/i);
     });
 
     test('should show error for non-existent user', async ({ page }) => {
@@ -114,8 +115,8 @@ test.describe('Authentication', () => {
       await page.fill('input[type="password"]', 'SomePassword123');
       await page.click('button[type="submit"]');
 
-      // Should show error
-      await expect(page.locator('text=/error|not found|invalid/i')).toBeVisible({ timeout: 5000 });
+      // Same reasoning as above — assert the specific element (#481).
+      await expect(page.locator('#login-error')).toHaveText(/invalid email or password/i);
     });
   });
 

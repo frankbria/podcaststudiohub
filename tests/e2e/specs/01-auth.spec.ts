@@ -40,14 +40,28 @@ test.describe('Authentication', () => {
     });
 
     test('should show error for existing email', async ({ page }) => {
-      // Use the pre-seeded E2E user — avoids a second registration API call
+      // Use the pre-seeded E2E user — avoids a second registration API call.
+      //
+      // full_name must be filled: it is required (min_length=1), so omitting it
+      // made the API answer 422 for request shape and this test asserted on a
+      // validation rejection rather than the duplicate-email conflict it is named
+      // for. With it, the API returns 400 "Email already registered" (#481).
       await page.goto('/signup');
+      await page.fill('input[id="fullName"]', 'E2E Duplicate');
       await page.fill('input[type="email"]', E2E_EMAIL);
       await page.fill('input[type="password"]', E2E_PASSWORD);
       await page.click('button[type="submit"]');
 
-      // Should show error
-      await expect(page.locator('text=/error|already|exist/i')).toBeVisible({ timeout: 5000 });
+      // Assert the form's own error element, not a page-wide text regex. The old
+      // regex `text=/error|already|exist/i` also matched Next's crash page, so a
+      // dead route and a real validation message were indistinguishable — which is
+      // why the #481 crash read as "no error shown" until the artifact was opened.
+      const signupError = page.locator('#signup-error');
+      await expect(signupError).toBeVisible({ timeout: 5000 });
+      await expect(signupError).toHaveText(/already registered/i);
+
+      // Still on /signup: a duplicate must not redirect, and the page must survive.
+      await expect(page).toHaveURL(/\/signup/);
     });
 
     test('should enforce password minimum length', async ({ page }) => {

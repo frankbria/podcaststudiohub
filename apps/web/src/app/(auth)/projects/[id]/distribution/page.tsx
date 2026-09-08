@@ -11,6 +11,7 @@ import {
   EditPodcastMetadataDialog,
 } from "@/components/dialogs/EditPodcastMetadataDialog"
 import { showSuccessToast, showErrorToast } from "@/lib/toast"
+import { extractApiErrorDetail } from "@/lib/api-error"
 import type { PodcastMetadataFormData } from "@/lib/validation"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
@@ -140,8 +141,10 @@ export default function DistributionPage() {
         setFeed(data)
         showSuccessToast("RSS feed generated")
       } else if (response.status === 422) {
-        const body = (await response.json()) as { detail: string }
-        showErrorToast(`Failed to generate RSS feed: ${body.detail}`)
+        const body = await response.json()
+        showErrorToast(
+          `Failed to generate RSS feed: ${extractApiErrorDetail(body, "invalid podcast metadata")}`
+        )
         setShowEditMetadata(true)
       } else if (response.status === 404) {
         showErrorToast("Project not found")
@@ -183,8 +186,10 @@ export default function DistributionPage() {
         showSuccessToast("Podcast metadata updated")
         setShowEditMetadata(false)
       } else if (response.status === 422) {
-        const body = (await response.json()) as { detail: string }
-        showErrorToast(`Failed to update podcast metadata: ${body.detail}`)
+        const body = await response.json()
+        showErrorToast(
+          `Failed to update podcast metadata: ${extractApiErrorDetail(body, "invalid podcast metadata")}`
+        )
       } else if (response.status === 404) {
         showErrorToast("Project not found")
       } else {

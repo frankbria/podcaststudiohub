@@ -226,6 +226,38 @@ describe('DistributionPage', () => {
     expect(await screen.findByText('Edit Podcast Metadata')).toBeInTheDocument()
   })
 
+  // A real FastAPI 422 carries an ARRAY of {msg, loc, type}, not a string — so the
+  // 422 branch is exactly where interpolating body.detail yields "[object Object]".
+  it('surfaces the msg fields when a 422 returns a Pydantic detail array', async () => {
+    const fetchMock = withOverride(
+      mockFetchRouter({ feedStatus: 404 }),
+      (url, init) => url === '/api/proxy/projects/p1/rss-feed/generate' && (init?.method ?? 'GET') === 'POST',
+      () =>
+        Promise.resolve({
+          ok: false,
+          status: 422,
+          json: async () => ({
+            detail: [
+              { type: 'missing', loc: ['body', 'show_title'], msg: 'Field required' },
+              { type: 'missing', loc: ['body', 'author'], msg: 'Field required' },
+            ],
+          }),
+        })
+    )
+    global.fetch = fetchMock
+
+    render(<DistributionPage />)
+    await screen.findByText('No RSS feed yet')
+
+    await userEvent.click(screen.getByRole('button', { name: 'Generate RSS feed' }))
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'Failed to generate RSS feed: Field required; Field required'
+      )
+    )
+  })
+
   it('shows a generic error toast for a non-404/422 generation failure', async () => {
     const fetchMock = withOverride(
       mockFetchRouter({ feedStatus: 404 }),
@@ -391,6 +423,34 @@ describe('DistributionPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
     await waitFor(() => expect(showErrorToast).toHaveBeenCalledWith('Project not found'))
+  })
+
+  it('surfaces the msg fields when a metadata-update 422 returns a detail array', async () => {
+    const fetchMock = withOverride(
+      mockFetchRouter(),
+      (url, init) => url === '/api/proxy/projects/p1/rss-feed' && (init?.method ?? 'GET') === 'PUT',
+      () =>
+        Promise.resolve({
+          ok: false,
+          status: 422,
+          json: async () => ({
+            detail: [{ type: 'missing', loc: ['body', 'author'], msg: 'Field required' }],
+          }),
+        })
+    )
+    global.fetch = fetchMock
+
+    render(<DistributionPage />)
+    await screen.findByText('Podcast RSS Feed')
+
+    await userEvent.click(screen.getByRole('button', { name: /edit podcast metadata/i }))
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() =>
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'Failed to update podcast metadata: Field required'
+      )
+    )
   })
 
   it('shows a generic error toast for a non-404/422 metadata update failure', async () => {

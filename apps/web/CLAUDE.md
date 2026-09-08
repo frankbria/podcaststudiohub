@@ -7,6 +7,29 @@ This Next.js app uses the **shadcn Nova template** with a gray theme.
 - **Never import from `lucide-react`** — it is banned. ESLint will error.
 - **Always use `@hugeicons/react` + `@hugeicons/core-free-icons`** for icons.
 
+## Backend Error Bodies — Always Use `extractApiErrorDetail`
+
+FastAPI returns `detail` in **two** shapes:
+
+| Source | Shape |
+|---|---|
+| `HTTPException` | `{"detail": "Email already registered"}` — a string |
+| Pydantic validation (**every 422**) | `{"detail": [{"msg", "loc", "type"}, …]}` — an **array** |
+
+Never read `body.detail` directly. `response.json()` is `any`, so TypeScript will not catch it,
+and putting the array into string state and rendering it throws *"Objects are not valid as a React
+child"* — which killed the whole signup route in #481.
+
+```ts
+import { extractApiErrorDetail } from "@/lib/api-error"
+
+const body = await response.json()
+setError(extractApiErrorDetail(body, "Registration failed"))
+```
+
+A route-level error boundary (`src/app/error.tsx`) bounds the damage from any render throw, but it
+is a backstop, not a licence to skip the helper.
+
 ## Icon Usage
 
 ```tsx

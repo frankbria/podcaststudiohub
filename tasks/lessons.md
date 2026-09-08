@@ -367,3 +367,29 @@ re-applying the exact inverse edit — never a whole-file checkout.
   diff and again at 7m20s on a 536-line one. `codex review --base <branch>` worked both times
   and is the reliable fallback — but disclose which reviewer actually ran, since the repo rule
   names opencode as primary.
+- **FastAPI's `detail` has two shapes, and `response.json()` is `any`, so TypeScript cannot see
+  the difference.** `HTTPException` gives a string; *every* Pydantic 422 gives an array of
+  `{msg, loc, type}`. Assigning that array to `string` state and rendering it throws React error
+  **#31** ("Objects are not valid as a React child"), and with no error boundary the whole route
+  dies as the browser's *"This page couldn't load"* — which reads like a missing error message,
+  not a crash (#481). Always go through `extractApiErrorDetail`. Note the two call sites that
+  interpolated `${body.detail}` were both on `status === 422` branches and typed
+  `{ detail: string }` — the type annotation asserted the one thing that is never true there.
+- **A page-wide text regex in an E2E assertion can match the crash page.**
+  `text=/error|already|exist/i` matched Next's own error screen, so the test passed when the app
+  *crashed* and failed only when the crash surfaced differently — a false green that survived ~10
+  runs and looked like flake. Assert a specific element (`#signup-error`), never page-wide prose.
+  Measured directly: the old regex passed on the dead page and did not match the correct
+  validation message.
+- **Local E2E needs two things CI sets and `.env.example` does not.** `CORS_ORIGINS` must include
+  the Playwright web origin (`["http://localhost:3200"]`, per `playwright-tests.yml`) or every
+  browser `fetch` fails and the UI shows the generic catch-block message; and **port 5432 on this
+  machine is squatted by a non-project Postgres** that answers with an auth failure rather than
+  connection-refused — bind the demo container to 5433 and point both DB URLs at it.
+- **`next build` rewrites `apps/web/tsconfig.json`** (`jsx: preserve` → `react-jsx`, plus a
+  `.next/dev/types` include). Check `git status` after any local build so the churn does not ride
+  into a PR. Related: deleting a component whose test imports it fails the build at the
+  *type-check* step, not the compile step.
+- **`coderabbit --prompt-only` no longer exists** — the flag is now `--agent` (with
+  `--base <branch>` / `--committed`). The old invocation exits 0 after printing usage, so a review
+  step wired to it silently does nothing while looking like it succeeded.

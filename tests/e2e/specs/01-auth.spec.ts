@@ -40,14 +40,47 @@ test.describe('Authentication', () => {
     });
 
     test('should show error for existing email', async ({ page }) => {
-      // Use the pre-seeded E2E user — avoids a second registration API call
+      // Use the pre-seeded E2E user — avoids creating another account.
+      //
+      // full_name must be filled: it is required (min_length=1), so omitting it
+      // made the API answer 422 for request shape and this test asserted on a
+      // validation rejection rather than the duplicate-email conflict it is named
+      // for. With it, the API returns 400 "Email already registered" (#481).
       await page.goto('/signup');
+      await page.fill('input[id="fullName"]', 'E2E Duplicate');
       await page.fill('input[type="email"]', E2E_EMAIL);
       await page.fill('input[type="password"]', E2E_PASSWORD);
       await page.click('button[type="submit"]');
 
-      // Should show error
-      await expect(page.locator('text=/error|already|exist/i')).toBeVisible({ timeout: 5000 });
+      // Assert the form's own error element, not a page-wide text regex. The old
+      // regex `text=/error|already|exist/i` also matched Next's crash page, so a
+      // dead route and a real validation message were indistinguishable — which is
+      // why the #481 crash read as "no error shown" until the artifact was opened.
+      const signupError = page.locator('#signup-error');
+      await expect(signupError).toBeVisible({ timeout: 5000 });
+      await expect(signupError).toHaveText(/already registered/i);
+
+      // Still on /signup: a duplicate must not redirect, and the page must survive.
+      await expect(page).toHaveURL(/\/signup$/);
+    });
+
+    // Direct regression test for #481 at the level it actually broke. Submitting an
+    // empty full name posts `full_name: ""`, which the API rejects with a 422 whose
+    // `detail` is an ARRAY — the shape that used to be rendered as a React child,
+    // killing the route. The unit tests cover the same path, but only a browser can
+    // prove the page survives, and it was a browser-level failure that was reported.
+    test('shows the message when the API returns a 422 detail array', async ({ page }) => {
+      await page.goto('/signup');
+      await page.fill('input[type="email"]', `e2e-422-${Date.now()}@example.com`);
+      await page.fill('input[type="password"]', E2E_PASSWORD);
+      // Full name deliberately left blank — it is required server-side (min_length=1)
+      // but carries no `required` attribute, so the browser submits it.
+      await page.click('button[type="submit"]');
+
+      const signupError = page.locator('#signup-error');
+      await expect(signupError).toBeVisible({ timeout: 5000 });
+      await expect(signupError).toHaveText(/at least 1 character/i);
+      await expect(page).toHaveURL(/\/signup$/);
     });
 
     test('should enforce password minimum length', async ({ page }) => {
@@ -89,8 +122,9 @@ test.describe('Authentication', () => {
       await page.fill('input[type="password"]', 'WrongPassword123');
       await page.click('button[type="submit"]');
 
-      // Should show error message
-      await expect(page.locator('text=/error|invalid|incorrect/i')).toBeVisible({ timeout: 5000 });
+      // Assert the form's own error element, not a page-wide regex: the broad form
+      // also matches Next's crash page, which is what hid #481 on /signup.
+      await expect(page.locator('#login-error')).toHaveText(/invalid email or password/i);
     });
 
     test('should show error for non-existent user', async ({ page }) => {
@@ -100,8 +134,8 @@ test.describe('Authentication', () => {
       await page.fill('input[type="password"]', 'SomePassword123');
       await page.click('button[type="submit"]');
 
-      // Should show error
-      await expect(page.locator('text=/error|not found|invalid/i')).toBeVisible({ timeout: 5000 });
+      // Same reasoning as above — assert the specific element (#481).
+      await expect(page.locator('#login-error')).toHaveText(/invalid email or password/i);
     });
   });
 
@@ -148,7 +182,7 @@ test.describe('Authentication', () => {
       // Click signup link
       await page.click('a:has-text("Sign up"), a:has-text("Sign Up")');
 
-      await expect(page).toHaveURL(/\/signup/);
+      await expect(page).toHaveURL(/\/signup$/);
     });
 
     test('should navigate from signup to login', async ({ page }) => {

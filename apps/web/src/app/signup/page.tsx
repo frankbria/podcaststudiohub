@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { extractApiErrorDetail } from "@/lib/api-error"
 
 export default function SignupPage() {
   const router = useRouter()
@@ -30,7 +31,7 @@ export default function SignupPage() {
 
       if (!response.ok) {
         const data = await response.json()
-        setError(data.detail || "Registration failed")
+        setError(extractApiErrorDetail(data, "Registration failed"))
         setLoading(false)
         return
       }

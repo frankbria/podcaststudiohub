@@ -58,6 +58,45 @@ describe('SignupPage', () => {
     expect(mockPush).not.toHaveBeenCalled()
   })
 
+  // A 422 from FastAPI puts an array of {msg, loc, type} in `detail`, not a string.
+  // Rendering that array as a React child throws "Objects are not valid as a React
+  // child" and, with no error boundary on the route, takes the whole page down —
+  // which is how #481 presented (a browser-level "This page couldn't load").
+  it('renders a Pydantic 422 detail array instead of crashing', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({
+        detail: [
+          {
+            type: 'string_too_short',
+            loc: ['body', 'full_name'],
+            msg: 'String should have at least 1 character',
+            input: '',
+          },
+        ],
+      }),
+    }) as jest.Mock
+
+    render(<SignupPage />)
+    await fillAndSubmit()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('String should have at least 1 character')
+    expect(screen.getByRole('button', { name: /sign up/i })).toBeEnabled()
+    expect(mockPush).not.toHaveBeenCalled()
+  })
+
+  it('falls back to a generic message when detail carries no usable text', async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue({ ok: false, json: async () => ({ detail: [{}] }) }) as jest.Mock
+
+    render(<SignupPage />)
+    await fillAndSubmit()
+
+    expect(await screen.findByText('Registration failed')).toBeInTheDocument()
+  })
+
   it('announces the error via role=alert and marks the inputs invalid', async () => {
     global.fetch = jest
       .fn()

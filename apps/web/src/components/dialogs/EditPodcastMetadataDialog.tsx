@@ -61,7 +61,6 @@ export function EditPodcastMetadataDialog({
     if (open) {
       reset({ ...emptyDefaults, ...initialMetadata })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialMetadata, reset])
 
   const onSubmit = async (data: PodcastMetadataFormData) => {

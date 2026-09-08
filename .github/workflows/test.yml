@@ -15,7 +15,7 @@ on:
       - 'package-lock.json'
       - 'package.json'
       - 'apps/web/package.json'
-      - 'apps/web/.eslintrc.json'
+      - 'apps/web/eslint.config.mjs'
       - '.github/workflows/test.yml'
   pull_request:
     branches:

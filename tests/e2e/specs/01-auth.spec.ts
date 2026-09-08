@@ -61,7 +61,26 @@ test.describe('Authentication', () => {
       await expect(signupError).toHaveText(/already registered/i);
 
       // Still on /signup: a duplicate must not redirect, and the page must survive.
-      await expect(page).toHaveURL(/\/signup/);
+      await expect(page).toHaveURL(/\/signup$/);
+    });
+
+    // Direct regression test for #481 at the level it actually broke. Submitting an
+    // empty full name posts `full_name: ""`, which the API rejects with a 422 whose
+    // `detail` is an ARRAY — the shape that used to be rendered as a React child,
+    // killing the route. The unit tests cover the same path, but only a browser can
+    // prove the page survives, and it was a browser-level failure that was reported.
+    test('shows the message when the API returns a 422 detail array', async ({ page }) => {
+      await page.goto('/signup');
+      await page.fill('input[type="email"]', `e2e-422-${Date.now()}@example.com`);
+      await page.fill('input[type="password"]', E2E_PASSWORD);
+      // Full name deliberately left blank — it is required server-side (min_length=1)
+      // but carries no `required` attribute, so the browser submits it.
+      await page.click('button[type="submit"]');
+
+      const signupError = page.locator('#signup-error');
+      await expect(signupError).toBeVisible({ timeout: 5000 });
+      await expect(signupError).toHaveText(/at least 1 character/i);
+      await expect(page).toHaveURL(/\/signup$/);
     });
 
     test('should enforce password minimum length', async ({ page }) => {
@@ -163,7 +182,7 @@ test.describe('Authentication', () => {
       // Click signup link
       await page.click('a:has-text("Sign up"), a:has-text("Sign Up")');
 
-      await expect(page).toHaveURL(/\/signup/);
+      await expect(page).toHaveURL(/\/signup$/);
     });
 
     test('should navigate from signup to login', async ({ page }) => {

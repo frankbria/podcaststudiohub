@@ -46,4 +46,15 @@ describe('RouteError boundary', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('Unknown error')
   })
+
+  it('hides the raw error message in production and keeps the digest', () => {
+    jest.replaceProperty(process.env, 'NODE_ENV', 'production')
+    const error = Object.assign(new Error('Minified React error #31'), { digest: 'xyz789' })
+
+    render(<RouteError error={error} reset={jest.fn()} />)
+
+    expect(screen.getByRole('alert')).toHaveTextContent('The page could not be displayed.')
+    expect(screen.queryByText(/Minified React error/)).not.toBeInTheDocument()
+    expect(screen.getByText('xyz789')).toBeInTheDocument()
+  })
 })

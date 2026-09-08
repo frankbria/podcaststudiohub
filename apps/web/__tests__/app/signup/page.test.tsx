@@ -65,6 +65,7 @@ describe('SignupPage', () => {
   it('renders a Pydantic 422 detail array instead of crashing', async () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
+      status: 422,
       json: async () => ({
         detail: [
           {

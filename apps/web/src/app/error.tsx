@@ -36,8 +36,15 @@ export default function RouteError({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/*
+            The message is framework/library chatter ("Objects are not valid as a
+            React child…"), useful while developing and noise to an end user, so
+            production sees the digest instead — that is what a bug report needs.
+          */}
           <div role="alert" aria-live="assertive" className="text-destructive text-sm">
-            {error.message || "Unknown error"}
+            {process.env.NODE_ENV === "production"
+              ? "The page could not be displayed."
+              : error.message || "Unknown error"}
           </div>
           {error.digest && (
             <p className="text-muted-foreground text-xs">

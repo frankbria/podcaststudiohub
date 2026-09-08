@@ -21,8 +21,11 @@ export default function RouteError({
   reset: () => void
 }) {
   useEffect(() => {
-    // Sentry's Next integration reports unhandled render errors on its own; this
-    // keeps the message and digest in the browser console for local debugging.
+    // apps/web has NO client error telemetry: Sentry is wired for the API and the
+    // Celery worker only (deployment/README.md, "Error tracking — issue #320"),
+    // and there is no client instrumentation file here. So this lands in the
+    // user's own browser console and nowhere else — until reporting is wired up,
+    // a digest quoted in a bug report cannot be correlated with anything.
     console.error("Route render error:", error)
   }, [error])
 

@@ -20,8 +20,8 @@ uv export --format requirements-txt --no-hashes --no-emit-project -o "$reqs" -q
 # every podcastfy bump.
 #
 # Reachability was assessed on 2026-08-13 (#446) — being capped is why we CAN'T fix
-# these; being unreachable is why it's acceptable not to. 21 of 22 open alerts are
-# unreachable (the 11 litellm ones are proxy-server issues and we never run a proxy;
+# these; being unreachable is why it's acceptable not to. 22 of 23 open alerts are
+# unreachable (the 12 litellm ones are proxy-server issues and we never run a proxy;
 # the rest are unused features). The exception is GHSA-3644-q5cj-c5c7 (langsmith),
 # which IS on the generation hot path via podcastfy's hub.pull() — accepted because
 # every pull is commit-pinned. Full classification and re-check triggers:
@@ -46,9 +46,12 @@ uvx pip-audit -r "$reqs" --no-deps --disable-pip --strict \
   --ignore-vuln PYSEC-2026-1845 \
   --ignore-vuln PYSEC-2026-2193 \
   --ignore-vuln PYSEC-2026-2562 \
-  `# litellm 1.80.0, all four capped by openai<2 as described above:` \
-  `# 3478 fixed in 1.82.0, 3477 in 1.83.7, 3476 in 1.83.10, 3479 in 1.84.0` \
+  `# litellm 1.80.0, all five capped by openai<2 as described above:` \
+  `# 3478 fixed in 1.82.0, 3477 in 1.83.7, 3476 in 1.83.10, 3479 in 1.84.0,` \
+  `# CVE-2026-37004 in 1.83.7 -- SSTI in the proxy's /prompts/test endpoint,` \
+  `# unreachable for the same reason as the other 11 proxy advisories (#446).` \
   --ignore-vuln PYSEC-2026-3476 \
   --ignore-vuln PYSEC-2026-3477 \
   --ignore-vuln PYSEC-2026-3478 \
-  --ignore-vuln PYSEC-2026-3479
+  --ignore-vuln PYSEC-2026-3479 \
+  --ignore-vuln CVE-2026-37004

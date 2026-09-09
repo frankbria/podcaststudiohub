@@ -1,13 +1,13 @@
 # Reachability of the podcastfy-capped advisories
 
-**Date:** 2026-08-13 · **Issue:** #446 · **Companion:** [podcastfy-fork-effort-review.md](./podcastfy-fork-effort-review.md)
+**Date:** 2026-08-13 (updated 2026-09-09) · **Issue:** #446 · **Companion:** [podcastfy-fork-effort-review.md](./podcastfy-fork-effort-review.md)
 
-`scripts/security-audit.sh` ignores 24 advisory IDs because `podcastfy==0.4.1` caps the
+`scripts/security-audit.sh` ignores 25 advisory IDs because `podcastfy==0.4.1` caps the
 whole langchain/litellm tree (see [podcastfy-0.4.3-evaluation.md](./podcastfy-0.4.3-evaluation.md)
 and #363). Ignoring an advisory is only defensible if the vulnerable code is genuinely
 unreachable from our call paths. This document records that assessment.
 
-**Headline: 21 of 22 open Dependabot alerts are unreachable. One is reachable.**
+**Headline: 22 of 23 open Dependabot alerts are unreachable. One is reachable.**
 
 The "2 critical" figure in #446's original title is misleading — both criticals are inert.
 The one advisory that matters is a *high* that the blanket "structurally capped" framing
@@ -31,9 +31,9 @@ uv lock --upgrade-package 'langchain-core>=1.2.11'      # -> unsatisfiable
 The import-graph claims are enforced by `tests/test_dependency_reachability.py`, so they
 cannot silently rot.
 
-## Unreachable (21)
+## Unreachable (22)
 
-### LiteLLM proxy server — 11 advisories, including both criticals
+### LiteLLM proxy server — 12 advisories, including both criticals
 
 | ID | Sev | Summary |
 |---|---|---|
@@ -48,6 +48,7 @@ cannot silently rot.
 | GHSA-5jmr-gcrj-2c9q | medium | Path traversal in Skills archive extraction |
 | GHSA-4g5m-c9r5-49xf | low | Local file read via request-supplied OIDC file references |
 | GHSA-72m8-9m7m-h278 | low | Custom Code Guardrails endpoint bypass |
+| CVE-2026-37004 | high | SSTI -> RCE via `dotprompt_content` in `/prompts/test` (unsandboxed jinja2) |
 
 Every one requires running **litellm as a proxy server** with its management API exposed.
 We never do: no litellm import in our source, no proxy config file, no proxy process in
@@ -138,7 +139,7 @@ Re-run this assessment when any of these change:
 
 - podcastfy is bumped or forked → the whole cap disappears; redo from scratch
 - an **image** source type is added → GHSA-2g6r goes live (tests will fail)
-- litellm is imported directly, or a litellm proxy is deployed → 11 advisories go live
+- litellm is imported directly, or a litellm proxy is deployed → 12 advisories go live
   (test will fail)
 - LangSmith tracing is enabled (`LANGCHAIN_TRACING_V2`, `LANGSMITH_API_KEY`) → 2 langsmith
   advisories go live

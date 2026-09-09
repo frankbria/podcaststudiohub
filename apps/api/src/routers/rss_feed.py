@@ -6,6 +6,7 @@ feeds. The public feed endpoint requires no authentication, while management
 endpoints require a valid JWT token.
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -352,10 +353,16 @@ async def _fetch_rss_from_s3(rss_service: RSSGenerationService, s3_key: str) -> 
 	with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as tmp:
 		tmp_path = tmp.name
 
-	try:
-		await rss_service.storage.download_file(s3_key, tmp_path)
+	def _read_bytes() -> bytes:
 		with open(tmp_path, "rb") as f:
 			return f.read()
+
+	try:
+		await rss_service.storage.download_file(s3_key, tmp_path)
+		# Read off the event loop. This runs in the request path and a feed can be
+		# multi-MB, so a blocking read stalls every other request the worker is
+		# serving -- the same reason the boto3 calls were offloaded in #321.
+		return await asyncio.to_thread(_read_bytes)
 	finally:
 		if os.path.exists(tmp_path):
 			os.unlink(tmp_path)

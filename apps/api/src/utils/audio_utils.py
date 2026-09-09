@@ -117,7 +117,11 @@ def get_audio_duration(file_path: str) -> Optional[float]:
 				"ffprobe", "-v", "quiet", "-print_format", "json",
 				"-show_streams", file_path
 			],
-			capture_output=True, text=True, timeout=30
+			capture_output=True, text=True, timeout=30,
+			# Explicit: a non-zero ffprobe exit is handled by the returncode check
+			# below, which falls through to `return None`. check=True would raise
+			# into the bare `except` instead and lose that distinction.
+			check=False,
 		)
 		if result.returncode == 0:
 			import json

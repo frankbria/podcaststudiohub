@@ -29,6 +29,9 @@ def _run_probe(source: str) -> str:
         capture_output=True,
         text=True,
         timeout=600,
+        # The assert below checks returncode and reports stdout/stderr, which is
+        # a far better failure message than CalledProcessError would give.
+        check=False,
     )
     assert result.returncode == 0, (
         f"probe failed (exit {result.returncode})\nstdout:\n{result.stdout}\n"

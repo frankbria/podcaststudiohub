@@ -59,7 +59,16 @@ dev = [
 # "lint passes" means. Adopting further rules is now a deliberate edit here;
 # the substantive ones 0.16 surfaced (BLE001, DTZ001, ASYNC230, PLW1510) are
 # tracked in #482.
-select = ["E4", "E7", "E9", "F"]
+select = [
+    "E4", "E7", "E9", "F",
+    # Adopted from ruff 0.16's widened default set (#482). Both are correctness
+    # rules with a concrete failure mode, not style:
+    #   ASYNC230 - a blocking open() inside `async def` stalls the whole event
+    #              loop, i.e. every other in-flight request (same class as #321).
+    #   PLW1510  - subprocess.run without an explicit `check` silently ignores a
+    #              non-zero exit unless the caller remembers to inspect it.
+    "ASYNC230", "PLW1510",
+]
 # W605 (invalid escape sequence) backstops the module-agnostic SyntaxWarning
 # ignore in pytest.ini: first-party invalid escapes fail lint, so the pytest
 # filter only ever masks pydub's compile-time warning (#346).

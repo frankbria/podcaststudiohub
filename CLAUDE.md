@@ -47,6 +47,14 @@ podcaststudiohub/
 - Auth: the backend issues JWTs; authenticated browser calls and SSE go through a server-side
   `/api/proxy` Route Handler so the JWT is never exposed to the client.
 
+**The auth library question was settled 2026-09-08 (#442): stay on `next-auth` v4.** next-auth is a
+thin shim here — FastAPI owns identity entirely, and next-auth only holds the backend JWT in an
+httpOnly cookie, backs `useSession()`, and backs `getToken()` for route-gating and the proxy. v4
+formally supports Next 16 / React 19 and is still patched; Auth.js v5 never left `beta` and is in
+security-patch mode; Better Auth requires a database it owns, which FastAPI already owns. See
+`apps/web/docs/auth-direction-evaluation.md` for the full evaluation and the two re-evaluation
+triggers (chiefly: wanting social login / SSO / 2FA / passkeys).
+
 ### Upstream Podcastfy Engine
 
 The podcast generation engine is the upstream `podcastfy` package, pinned as a **dependency** in

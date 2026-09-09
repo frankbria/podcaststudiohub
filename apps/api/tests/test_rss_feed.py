@@ -629,7 +629,9 @@ async def test_fetch_rss_from_s3_downloads_and_reads_file():
 	xml_bytes = b'<?xml version="1.0"?><rss version="2.0"><channel><title>T</title></channel></rss>'
 
 	async def fake_download_file(s3_key, local_path):
-		with open(local_path, "wb") as f:
+		# noqa justified: this is a test double writing ~80 bytes, not a request
+		# handler -- there is no production event loop here to stall.
+		with open(local_path, "wb") as f:  # noqa: ASYNC230
 			f.write(xml_bytes)
 		return local_path
 

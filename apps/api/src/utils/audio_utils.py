@@ -117,7 +117,12 @@ def get_audio_duration(file_path: str) -> Optional[float]:
 				"ffprobe", "-v", "quiet", "-print_format", "json",
 				"-show_streams", file_path
 			],
-			capture_output=True, text=True, timeout=30
+			capture_output=True, text=True, timeout=30,
+			# Explicit rather than implicit: False is already the default, and the
+			# returncode is inspected below. check=True would raise instead, which
+			# the bare `except` would swallow to the same `return None` -- so this
+			# is a no-op chosen for legibility, not a behaviour change.
+			check=False,
 		)
 		if result.returncode == 0:
 			import json

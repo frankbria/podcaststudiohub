@@ -46,9 +46,12 @@ uvx pip-audit -r "$reqs" --no-deps --disable-pip --strict \
   --ignore-vuln PYSEC-2026-1845 \
   --ignore-vuln PYSEC-2026-2193 \
   --ignore-vuln PYSEC-2026-2562 \
-  `# litellm 1.80.0, all four capped by openai<2 as described above:` \
-  `# 3478 fixed in 1.82.0, 3477 in 1.83.7, 3476 in 1.83.10, 3479 in 1.84.0` \
+  `# litellm 1.80.0, all five capped by openai<2 as described above:` \
+  `# 3478 fixed in 1.82.0, 3477 in 1.83.7, 3476 in 1.83.10, 3479 in 1.84.0,` \
+  `# CVE-2026-37004 in 1.83.7 -- SSTI in the proxy's /prompts/test endpoint,` \
+  `# unreachable for the same reason as the other 11 proxy advisories (#446).` \
   --ignore-vuln PYSEC-2026-3476 \
   --ignore-vuln PYSEC-2026-3477 \
   --ignore-vuln PYSEC-2026-3478 \
-  --ignore-vuln PYSEC-2026-3479
+  --ignore-vuln PYSEC-2026-3479 \
+  --ignore-vuln CVE-2026-37004

@@ -393,3 +393,36 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **`coderabbit --prompt-only` no longer exists** — the flag is now `--agent` (with
   `--base <branch>` / `--committed`). The old invocation exits 0 after printing usage, so a review
   step wired to it silently does nothing while looking like it succeeded.
+- **Local pytest silently targets the wrong Postgres on a machine where :5432 is taken.**
+  `tests/conftest.py` defaults `TEST_DATABASE_URL` to
+  `postgresql+asyncpg://podcastfy_app:podcastfy_app_password@localhost:5432/podcastfy`. If anything
+  else owns 5432 the whole suite dies with `asyncpg.exceptions.InvalidPasswordError: password
+  authentication failed for user "podcastfy_app"` -- 725 errors that look like a catastrophic code
+  break and are purely environmental. Note the failure mode is an *auth* error, not
+  connection-refused, so it reads like a credentials bug rather than "wrong server". Provision the
+  container on another port and pass `TEST_DATABASE_URL=...@localhost:<port>/podcastfy` explicitly;
+  the `podcastfy_app` role itself is created by migration `003_force_rls.py`, so no manual
+  `CREATE ROLE` is needed.
+- **A PR's green CI is computed on *its own base*, and goes stale when main moves.** #483 (ESLint
+  flat config + eslint 8→10) sat green for two days on a base predating #484, whose new files had
+  therefore never been linted under the config #483 introduces. Merging on that green is how a PR
+  lands clean and turns `main` red on the next commit. For any repo-wide change — lint/format
+  config, tsconfig, a shared type — merge the base branch in and re-run the *new* tooling over the
+  *combined* tree before merging out. GitHub's "mergeable / no conflict" says nothing about this:
+  the conflict is semantic, not textual.
+- **`npm install` can rewrite `package-lock.json` without any dependency changing.** A local
+  install stripped `libc` fields from optional platform packages (an npm-version difference), which
+  would have ridden into a PR as unrelated churn. Check `git status` after any local install and
+  revert a lockfile diff you did not intend.
+- **ruff's `DTZ` family fights this codebase on purpose, so do not adopt it.** Model columns are
+  `DateTime` *without* time zone and `src/utils/datetime_utils.py` deliberately returns naive UTC —
+  "asyncpg rejects aware values for those columns" (#346). Of 24 DTZ findings, 21 are in `tests/`.
+  "Fixing" a naive datetime to be aware in code that writes to those columns breaks the insert at
+  runtime, so adopting DTZ would mean ~24 `# noqa`s for zero safety gain. The helper itself passes
+  DTZ cleanly, because `datetime.now(timezone.utc).replace(tzinfo=None)` is the right way to spell
+  "deliberately naive UTC".
+- **`BLE001` is 55 individual judgment calls, not a sweep.** Several blind excepts are correct
+  defensive code at a trust boundary — e.g. `src/middleware/auth.py:80` returns `None` on *any*
+  token-verification failure, and narrowing it risks a 500 on an unanticipated malformed token.
+  Adopting it needs a per-site review, which is why it was split out of #482 rather than bundled
+  with the two unambiguous rules.

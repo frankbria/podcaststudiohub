@@ -118,9 +118,10 @@ def get_audio_duration(file_path: str) -> Optional[float]:
 				"-show_streams", file_path
 			],
 			capture_output=True, text=True, timeout=30,
-			# Explicit: a non-zero ffprobe exit is handled by the returncode check
-			# below, which falls through to `return None`. check=True would raise
-			# into the bare `except` instead and lose that distinction.
+			# Explicit rather than implicit: False is already the default, and the
+			# returncode is inspected below. check=True would raise instead, which
+			# the bare `except` would swallow to the same `return None` -- so this
+			# is a no-op chosen for legibility, not a behaviour change.
 			check=False,
 		)
 		if result.returncode == 0:

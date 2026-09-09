@@ -416,12 +416,14 @@ re-applying the exact inverse edit — never a whole-file checkout.
   revert a lockfile diff you did not intend.
 - **ruff's `DTZ` family fights this codebase on purpose, so do not adopt it.** Model columns are
   `DateTime` *without* time zone and `src/utils/datetime_utils.py` deliberately returns naive UTC —
-  "asyncpg rejects aware values for those columns" (#346). Of 24 DTZ findings, 21 are in `tests/`.
+  "asyncpg rejects aware values for those columns" (#346). Of 25 DTZ findings tree-wide, 21 are in `tests/`; the rest are
+  `services/rss_generation_service.py` (x2), `services/usage_service.py` and
+  `scripts/check_credentials.py`.
   "Fixing" a naive datetime to be aware in code that writes to those columns breaks the insert at
   runtime, so adopting DTZ would mean ~24 `# noqa`s for zero safety gain. The helper itself passes
   DTZ cleanly, because `datetime.now(timezone.utc).replace(tzinfo=None)` is the right way to spell
   "deliberately naive UTC".
-- **`BLE001` is 55 individual judgment calls, not a sweep.** Several blind excepts are correct
+- **`BLE001` is 62 individual judgment calls (55 in `src/`, 7 in `scripts/`), not a sweep.** Several blind excepts are correct
   defensive code at a trust boundary — e.g. `src/middleware/auth.py:80` returns `None` on *any*
   token-verification failure, and narrowing it risks a 500 on an unanticipated malformed token.
   Adopting it needs a per-site review, which is why it was split out of #482 rather than bundled

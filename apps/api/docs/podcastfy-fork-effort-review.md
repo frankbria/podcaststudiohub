@@ -1,10 +1,10 @@
 # Effort review: forking / vendoring podcastfy
 
-**Date:** 2026-08-13 · **Issue:** #446 · **Companion:** [podcastfy-advisory-reachability.md](./podcastfy-advisory-reachability.md)
+**Date:** 2026-08-13 (counts updated 2026-09-09) · **Issue:** #446 · **Companion:** [podcastfy-advisory-reachability.md](./podcastfy-advisory-reachability.md)
 
 Requested so the fork decision can be made on its own merits rather than being forced by
-security pressure. Per the reachability analysis, the security pressure is **low**: 21 of
-22 advisories are inert and the one reachable item is commit-pinned. Nothing here is
+security pressure. Per the reachability analysis, the security pressure is **low**: 22 of
+23 advisories are inert and the one reachable item is commit-pinned. Nothing here is
 urgent. This is a planning document.
 
 ## The finding that should drive the decision
@@ -26,7 +26,7 @@ langchain at all. What those 25 references do:
 | Output handling | `StrOutputParser`, LCEL `\|` chaining |
 | Prompt fetching | `hub.pull` ×3 |
 
-That is: *pick a model, format a prompt, call it, get a string back.* All 22 alerts —
+That is: *pick a model, format a prompt, call it, get a string back.* All 23 alerts —
 langchain, langchain-community, langchain-core, langchain-text-splitters, langsmith,
 litellm, google-cloud-aiplatform — are the transitive cost of that thin slice.
 
@@ -62,7 +62,7 @@ deleting code, they come from **replacing the langchain layer**.
 
 ## What forking buys
 
-1. **All 22 advisories become fixable.** The cap is `podcastfy==0.4.1`'s
+1. **All 23 advisories become fixable.** The cap is `podcastfy==0.4.1`'s
    `openai<2.0.0` + `langchain-community<0.4`. Remove the pin and litellm/langchain/
    langsmith can all move to patched versions. Note this is true even if we keep using
    litellm — the cap is podcastfy's, not litellm's.
@@ -105,7 +105,7 @@ Capture the four pinned prompts to local files and override
 `content_generator_config` (or wrap `ContentGenerator`) so no runtime hub call occurs.
 Removes GHSA-3644 exposure, the egress dependency, and the unwrapped `:790` failure mode.
 **Estimate: 0.5–1 day**, most of it verifying generated output is unchanged.
-**Does not** unpin anything — the other 21 advisories stay ignored (but stay inert).
+**Does not** unpin anything — the other 22 advisories stay ignored (but stay inert).
 
 ### Stage 2 — Vendor podcastfy, replace the langchain layer
 Copy the 19 modules into `apps/api/src/vendor/podcastfy/` (or a sibling package), then
@@ -114,7 +114,7 @@ provider SDKs) directly. Drop `langchain*`, `langsmith`, and the docs/test deps 
 closure; upgrade litellm freely.
 **Estimate: 3–5 days** — 1 day vendoring and wiring, 1–2 days on the LLM layer, 1–2 days
 on output-equivalence testing across the source types (url/pdf/text, short and longform).
-**Clears all 22 advisories permanently.**
+**Clears all 23 advisories permanently.**
 
 ### Stage 3 — Full rewrite of the pieces we use
 Keep only the behaviours we expose and write them fresh. Highest control, highest cost,

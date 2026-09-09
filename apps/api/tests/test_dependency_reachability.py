@@ -1,6 +1,6 @@
 """Reachability guards for advisories in the podcastfy dependency closure (#446).
 
-`scripts/security-audit.sh` ignores 24 advisory IDs that no bump can clear, because
+`scripts/security-audit.sh` ignores 25 advisory IDs that no bump can clear, because
 `podcastfy==0.4.1` caps the whole langchain/litellm tree. Ignoring them is only
 defensible while the vulnerable code is genuinely unreachable from our call paths.
 
@@ -41,7 +41,7 @@ def _run_probe(source: str) -> str:
 
 
 def test_litellm_proxy_is_not_reachable_from_the_generation_stack():
-    """11 of the ignored advisories — including both criticals — are LiteLLM *proxy*
+    """12 of the ignored advisories — including both criticals — are LiteLLM *proxy*
     issues (auth bypass, proxy config endpoints, /user/update, MCP test endpoints).
 
     They require running litellm as a proxy server. We import podcastfy's engine and

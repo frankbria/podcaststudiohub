@@ -71,7 +71,7 @@ the langchain CVEs on the pip-audit ignore list. See `apps/api/docs/podcastfy-0.
 the full evaluation and re-evaluation triggers (chiefly: upstream langchain 1.x support). Upstream is
 dormant — 0.4.3 shipped 2025-12-09 and nothing since — so that trigger has not fired.
 
-**The pin's advisory load was assessed 2026-08-13** (#446): 21 of 22 capped advisories are
+**The pin's advisory load was assessed 2026-08-13** (#446, updated 2026-09-09): 22 of 23 capped advisories are
 unreachable (the litellm ones, including both criticals, are proxy-server issues and we never run a
 proxy). The exception is GHSA-3644 — podcastfy's `hub.pull()` fetches prompts from LangChain Hub on
 the generation path, so **every episode makes an outbound call to a third-party Hub account**.

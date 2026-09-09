@@ -20,8 +20,8 @@ uv export --format requirements-txt --no-hashes --no-emit-project -o "$reqs" -q
 # every podcastfy bump.
 #
 # Reachability was assessed on 2026-08-13 (#446) — being capped is why we CAN'T fix
-# these; being unreachable is why it's acceptable not to. 21 of 22 open alerts are
-# unreachable (the 11 litellm ones are proxy-server issues and we never run a proxy;
+# these; being unreachable is why it's acceptable not to. 22 of 23 open alerts are
+# unreachable (the 12 litellm ones are proxy-server issues and we never run a proxy;
 # the rest are unused features). The exception is GHSA-3644-q5cj-c5c7 (langsmith),
 # which IS on the generation hot path via podcastfy's hub.pull() — accepted because
 # every pull is commit-pinned. Full classification and re-check triggers:

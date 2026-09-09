@@ -11,7 +11,7 @@ cd "$(dirname "$0")/.."
 #
 # CURRENTLY EMPTY — every known high+ advisory is fixed in the lockfile, so this
 # gate is equivalent to a plain `npm audit --audit-level=high` today. The
-# mechanism is kept because unfixable advisories recur (see the 22-entry
+# mechanism is kept because unfixable advisories recur (see the 25-entry
 # structural ignore list in apps/api/scripts/security-audit.sh for the Python
 # side); an empty list means nothing is being hidden right now.
 #

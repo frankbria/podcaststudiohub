@@ -31,7 +31,7 @@ uv lock --upgrade-package 'langchain-core>=1.2.11'      # -> unsatisfiable
 The import-graph claims are enforced by `tests/test_dependency_reachability.py`, so they
 cannot silently rot.
 
-## Unreachable (21)
+## Unreachable (22)
 
 ### LiteLLM proxy server — 12 advisories, including both criticals
 
@@ -139,7 +139,7 @@ Re-run this assessment when any of these change:
 
 - podcastfy is bumped or forked → the whole cap disappears; redo from scratch
 - an **image** source type is added → GHSA-2g6r goes live (tests will fail)
-- litellm is imported directly, or a litellm proxy is deployed → 11 advisories go live
+- litellm is imported directly, or a litellm proxy is deployed → 12 advisories go live
   (test will fail)
 - LangSmith tracing is enabled (`LANGCHAIN_TRACING_V2`, `LANGSMITH_API_KEY`) → 2 langsmith
   advisories go live

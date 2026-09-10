@@ -7,7 +7,7 @@ whole langchain/litellm tree (see [podcastfy-0.4.3-evaluation.md](./podcastfy-0.
 and #363). Ignoring an advisory is only defensible if the vulnerable code is genuinely
 unreachable from our call paths. This document records that assessment.
 
-**Headline: 22 of 23 open Dependabot alerts are unreachable. One is reachable.**
+**Headline: 24 of 25 open Dependabot alerts are unreachable. One is reachable.**
 
 The "2 critical" figure in #446's original title is misleading — both criticals are inert.
 The one advisory that matters is a *high* that the blanket "structurally capped" framing
@@ -49,6 +49,8 @@ cannot silently rot.
 | GHSA-4g5m-c9r5-49xf | low | Local file read via request-supplied OIDC file references |
 | GHSA-72m8-9m7m-h278 | low | Custom Code Guardrails endpoint bypass |
 | CVE-2026-37004 | high | SSTI -> RCE via `dotprompt_content` in `/prompts/test` (unsandboxed jinja2) |
+| CVE-2026-12771 | — | M2M JWT improper authorization in `proxy/auth/user_api_key_auth.py` (added 2026-09-10) |
+| CVE-2026-12772 | — | Session expiration flaw in `proxy/auth/login_utils.py` `authenticate_user` (added 2026-09-10) |
 
 Every one requires running **litellm as a proxy server** with its management API exposed.
 We never do: no litellm import in our source, no proxy config file, no proxy process in

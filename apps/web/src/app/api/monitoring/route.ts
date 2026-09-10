@@ -27,6 +27,12 @@ const MAX_MESSAGE = 1024
 const MAX_STACK = 8192
 const MAX_TAG = 200
 
+// Identifies this relay to Sentry in place of a real SDK. Without it every event
+// shows up as an unknown client, which is misleading when the whole point is
+// that these come from a hand-rolled path with no source maps.
+const RELAY_NAME = "podcaststudiohub.web.relay"
+const RELAY_VERSION = "1.0.0"
+
 /** `https://<key>@<host>/<path…>/<projectId>` -> the envelope ingest URL. */
 function envelopeUrl(dsn: string): string | null {
   try {
@@ -41,7 +47,8 @@ function envelopeUrl(dsn: string): string | null {
     // string. (Throws on malformed input, which the catch below turns into a
     // logged no-op rather than a corrupt ingest URL.)
     const key = encodeURIComponent(decodeURIComponent(username))
-    return `${protocol}//${host}${prefix}/api/${projectId}/envelope/?sentry_key=${key}&sentry_version=7`
+    const client = encodeURIComponent(`${RELAY_NAME}/${RELAY_VERSION}`)
+    return `${protocol}//${host}${prefix}/api/${projectId}/envelope/?sentry_key=${key}&sentry_version=7&sentry_client=${client}`
   } catch {
     return null
   }
@@ -113,6 +120,7 @@ export async function POST(request: Request): Promise<Response> {
     timestamp: sentAt,
     platform: "javascript",
     level: "error",
+    sdk: { name: RELAY_NAME, version: RELAY_VERSION },
     logger: "apps/web",
     environment: process.env.SENTRY_ENVIRONMENT ?? process.env.NODE_ENV ?? "development",
     tags,
@@ -147,7 +155,13 @@ export async function POST(request: Request): Promise<Response> {
     // looking healthy while reporting nothing — the exact invisibility this
     // whole route exists to end.
     if (!ingest.ok) {
-      console.error(`[monitoring] Sentry rejected the client error: HTTP ${ingest.status}`)
+      // X-Sentry-Error carries the actual reason (bad key, unknown project,
+      // rate limit); the status alone is rarely enough to act on. Not retried —
+      // Sentry's transport guidance is explicit that clients should not.
+      const reason = ingest.headers.get("x-sentry-error") ?? ""
+      console.error(
+        `[monitoring] Sentry rejected the client error: HTTP ${ingest.status}${reason ? ` — ${reason}` : ""}`
+      )
     }
   } catch (error) {
     // Ingest being down must not turn into a second error in the browser, which

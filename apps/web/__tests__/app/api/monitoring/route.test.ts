@@ -86,7 +86,8 @@ describe('POST /api/monitoring', () => {
     expect(response.status).toBe(202)
     const { url, itemHeader } = sentEnvelope()
     expect(url).toBe(
-      'https://o42.ingest.sentry.io/api/4507/envelope/?sentry_key=abc123&sentry_version=7'
+      'https://o42.ingest.sentry.io/api/4507/envelope/' +
+        '?sentry_key=abc123&sentry_version=7&sentry_client=podcaststudiohub.web.relay%2F1.0.0'
     )
     expect(itemHeader).toEqual({ type: 'event' })
   })
@@ -192,14 +193,27 @@ describe('POST /api/monitoring', () => {
   it('logs a non-2xx from Sentry instead of reporting success', async () => {
     // A typo'd DSN is a 401 and an exhausted quota is a 429; both resolve
     // normally, so without this the relay looks healthy while relaying nothing.
-    fetchMock.mockResolvedValue({ ok: false, status: 401 })
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      headers: new Headers({ 'x-sentry-error': 'invalid api key' }),
+    })
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {})
 
     await POST(makeRequest({ message: 'boom' }))
 
-    expect(consoleError).toHaveBeenCalledWith(
-      expect.stringContaining('401')
-    )
+    // The status alone rarely says what to change; X-Sentry-Error names it.
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('401'))
+    expect(consoleError).toHaveBeenCalledWith(expect.stringContaining('invalid api key'))
+  })
+
+  it('identifies the relay to Sentry rather than reporting as an unknown client', async () => {
+    await POST(makeRequest({ message: 'boom' }))
+
+    expect(sentEnvelope().event.sdk).toEqual({
+      name: 'podcaststudiohub.web.relay',
+      version: '1.0.0',
+    })
   })
 
   it('rejects a cross-site POST, which CORS would not stop', async () => {
@@ -259,6 +273,6 @@ describe('POST /api/monitoring', () => {
 
     await POST(makeRequest({ message: 'boom' }))
 
-    expect(sentEnvelope().url).toContain('sentry_key=a%2Bb%26c&')
+    expect(sentEnvelope().url).toContain('sentry_key=a%2Bb%26c&sentry_version=7')
   })
 })

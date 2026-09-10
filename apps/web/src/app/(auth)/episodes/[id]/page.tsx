@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Progress } from "@/components/ui/progress"
 import { contentSourceSchema, type ContentSourceFormData } from "@/lib/validation"
 import { showSuccessToast, showErrorToast, showWarningToast } from "@/lib/toast"
+import { extractApiErrorDetail } from "@/lib/api-error"
 import { RobustEventSource, startPolling, ConnectionStatus } from "@/lib/event-source-manager"
 import { AudioPlayerSkeleton } from "@/components/skeletons/AudioPlayerSkeleton"
 import { EmptyState } from "@/components/empty-state/EmptyState"
@@ -421,17 +422,17 @@ export default function EpisodePage() {
         reset()
         loadContentSources()
       } else {
-        // Backend puts the actionable message (size/format limits) in JSON detail
-        let detail: unknown
+        // Backend puts the actionable message (size/format limits) in JSON detail.
+        // FastAPI has two shapes for it — HTTPException's string and a 422's
+        // array of {msg,loc,type} — and the size/format limits arrive as the
+        // array, so extractApiErrorDetail handles both (issue #485, item 1).
+        let body: unknown
         try {
-          detail = (await response.json())?.detail
+          body = await response.json()
         } catch {
           // no JSON body
         }
-        // FastAPI 422s return detail as an array; only surface string details
-        const message = typeof detail === "string" && detail
-          ? detail
-          : response.statusText || "Request failed"
+        const message = extractApiErrorDetail(body, response.statusText || "Request failed")
         showErrorToast("Failed to add content source: " + message)
       }
     } catch (error) {

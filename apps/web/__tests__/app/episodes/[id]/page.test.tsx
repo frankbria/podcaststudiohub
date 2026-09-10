@@ -654,7 +654,7 @@ describe('EpisodePage content sources', () => {
     )
   })
 
-  it('falls back to statusText when the error detail is not a string (FastAPI 422 array)', async () => {
+  it('surfaces the joined msg fields of a FastAPI 422 detail array', async () => {
     const fetchMock = withOverride(
       mockEpisodeFetchRouter({ contentSources: [] }),
       (url, init) => /\/api\/proxy\/episodes\/[^/]+\/content\/upload$/.test(url) && init?.method === 'POST',
@@ -662,7 +662,12 @@ describe('EpisodePage content sources', () => {
         Promise.resolve({
           ok: false,
           statusText: 'Unprocessable Entity',
-          json: async () => ({ detail: [{ loc: ['body', 'file'], msg: 'bad', type: 'x' }] }),
+          json: async () => ({
+            detail: [
+              { loc: ['body', 'file'], msg: 'File exceeds the 10 MB limit', type: 'value_error' },
+              { loc: ['body', 'file'], msg: 'Unsupported content type', type: 'value_error' },
+            ],
+          }),
         })
     )
     global.fetch = fetchMock
@@ -677,7 +682,9 @@ describe('EpisodePage content sources', () => {
     await userEvent.click(submitButtons[submitButtons.length - 1])
 
     await waitFor(() =>
-      expect(showErrorToast).toHaveBeenCalledWith('Failed to add content source: Unprocessable Entity')
+      expect(showErrorToast).toHaveBeenCalledWith(
+        'Failed to add content source: File exceeds the 10 MB limit; Unsupported content type'
+      )
     )
   })
 

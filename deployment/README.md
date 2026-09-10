@@ -292,10 +292,10 @@ ssh root@<SERVER_IP> "pm2 restart podcaststudiohub-celery"
 ssh root@<SERVER_IP> "pm2 restart all"
 ```
 
-## Error tracking (Sentry) — issue #320
+## Error tracking (Sentry) — issues #320, #485
 
-Both the API and the Celery worker report unhandled exceptions to Sentry, but
-**only when `SENTRY_DSN` is set** — with no DSN, `init_sentry()` is a no-op, so
+The API, the Celery worker **and the frontend** report unhandled exceptions to
+Sentry, but **only when `SENTRY_DSN` is set** — with no DSN, `init_sentry()` is a no-op, so
 local dev and CI never phone home. Nothing in the deploy sets it for you.
 
 To enable it on a host, add the DSN to the API's env file (the same file the
@@ -318,6 +318,38 @@ Verify it took effect — this logs an exception the worker will also report:
 pm2 logs podcaststudiohub-api --lines 50 | grep -i sentry
 ```
 
+### Frontend errors (issue #485)
+
+The browser never holds a DSN. `app/error.tsx` and `app/global-error.tsx` POST
+the message, stack and `digest` to the same-origin `/api/monitoring` Route
+Handler, which forwards a Sentry envelope using the frontend process's own
+`SENTRY_DSN`. Point it at the same project as the API so a page crash and the
+request that caused it land side by side:
+
+Unlike the API's `.env`, the frontend's env file is **not** hand-edited:
+`deploy-dev.yml` rewrites `$SERVER_PATH/frontend/.env.production` from scratch on
+every deploy, so anything added by hand is wiped on the next run. Set it as a
+repo secret instead — the same DSN as the API's `.env`:
+
+```bash
+gh secret set SENTRY_DSN --body 'https://<key>@<org>.ingest.sentry.io/<project>'
+gh variable set SENTRY_ENVIRONMENT --body 'development'   # optional; defaults to NODE_ENV
+```
+
+The next deploy writes it and restarts the process. With the secret unset the
+lines are omitted entirely, which is the documented no-op.
+
+Verify by triggering a render throw and searching Sentry for the `Reference:`
+digest the error page shows — it is sent as a `digest` tag, alongside
+`context` (`route-error` or `global-error`).
+
+Why a relay rather than `@sentry/nextjs`: it keeps the DSN out of the client
+bundle, needs no `connect-src` exception in the nonce/`strict-dynamic` CSP
+(issue #307), and adds no dependency. The trade-off is **no source maps,
+breadcrumbs or performance data** — client events group by message, so a
+production stack trace is minified. Adopt the official SDK if that stops being
+enough.
+
 Notes:
 - `send_default_pii=False` and a `before_send` scrub strip the request body,
   cookies and `Authorization` before an event leaves the process. This is a
@@ -325,6 +357,20 @@ Notes:
   not relax those without a deliberate decision.
 - `SENTRY_TRACES_SAMPLE_RATE` defaults to `0.0` (errors only). Raise it only
   deliberately — performance tracing is billed per transaction.
+- The frontend relay sends the **pathname only**, never the query string, and
+  caps the body it will forward. It is unauthenticated by necessity (a crashed
+  page may have no session); it rejects a request whose `Sec-Fetch-Site` says
+  cross-site, which closes the browser-driven quota-burn vector that CORS does
+  not, but a direct non-browser flood is only backstopped by Sentry's own
+  quota/spike protection.
+- Unlike the backend, the relay does **not** run a `before_send` scrub. It
+  forwards only the error message, stack, digest and pathname — never headers,
+  cookies or a request body — but a message or stack that itself embeds
+  something sensitive is relayed as-is. Widen the field list only with that in
+  mind.
+- React StrictMode double-invokes effects in development, so a crash reported
+  from a dev server with a DSN set arrives twice. Harmless with the DSN unset,
+  which is the default.
 - `ENVIRONMENT` (already set per host) becomes the Sentry environment, so dev
   and production events stay separated.
 

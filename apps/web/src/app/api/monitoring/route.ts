@@ -57,6 +57,15 @@ export async function POST(request: Request): Promise<Response> {
     return new Response(null, { status: 204 })
   }
 
+  // Content-Length first: `request.text()` buffers the whole body into memory,
+  // so checking the cap only after reading would let an unauthenticated caller
+  // pick the allocation size. A chunked request without the header still gets
+  // read, hence the second check.
+  const declared = Number(request.headers.get("content-length"))
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    return new Response(null, { status: 413 })
+  }
+
   const raw = await request.text()
   if (raw.length > MAX_BODY_BYTES) return new Response(null, { status: 413 })
 

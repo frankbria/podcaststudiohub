@@ -16,9 +16,15 @@ import { POST } from '@/app/api/monitoring/route'
 
 const DSN = 'https://abc123@o42.ingest.sentry.io/4507'
 
-function makeRequest(body: unknown, { raw }: { raw?: string } = {}) {
+function makeRequest(
+  body: unknown,
+  { raw, contentLength }: { raw?: string; contentLength?: string } = {}
+) {
   const text = raw ?? JSON.stringify(body)
+  const headers = new Headers()
+  if (contentLength !== undefined) headers.set('content-length', contentLength)
   return {
+    headers,
     text: async () => text,
   } as unknown as Request
 }
@@ -125,7 +131,21 @@ describe('POST /api/monitoring', () => {
     expect(event.extra.stack.length).toBeLessThanOrEqual(8192)
   })
 
-  it('rejects a body larger than the cap without calling Sentry', async () => {
+  it('rejects an oversized Content-Length before reading the body', async () => {
+    // The cap has to bite before request.text() buffers, or an unauthenticated
+    // caller chooses the allocation size.
+    const text = jest.fn()
+    const response = await POST({
+      headers: new Headers({ 'content-length': String(10 * 1024 * 1024) }),
+      text,
+    } as unknown as Request)
+
+    expect(response.status).toBe(413)
+    expect(text).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects an oversized body that declared no Content-Length', async () => {
     const response = await POST(makeRequest(null, { raw: 'z'.repeat(70_000) }))
 
     expect(response.status).toBe(413)

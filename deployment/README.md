@@ -326,15 +326,18 @@ Handler, which forwards a Sentry envelope using the frontend process's own
 `SENTRY_DSN`. Point it at the same project as the API so a page crash and the
 request that caused it land side by side:
 
-```bash
-# /opt/podcaststudiohub/web/.env.local  — the SAME DSN as the API's .env
-SENTRY_DSN=https://<key>@<org>.ingest.sentry.io/<project>
-SENTRY_ENVIRONMENT=production   # optional; defaults to NODE_ENV
-```
+Unlike the API's `.env`, the frontend's env file is **not** hand-edited:
+`deploy-dev.yml` rewrites `$SERVER_PATH/frontend/.env.production` from scratch on
+every deploy, so anything added by hand is wiped on the next run. Set it as a
+repo secret instead — the same DSN as the API's `.env`:
 
 ```bash
-pm2 restart podcaststudiohub-frontend
+gh secret set SENTRY_DSN --body 'https://<key>@<org>.ingest.sentry.io/<project>'
+gh variable set SENTRY_ENVIRONMENT --body 'development'   # optional; defaults to NODE_ENV
 ```
+
+The next deploy writes it and restarts the process. With the secret unset the
+lines are omitted entirely, which is the documented no-op.
 
 Verify by triggering a render throw and searching Sentry for the `Reference:`
 digest the error page shows — it is sent as a `digest` tag, alongside

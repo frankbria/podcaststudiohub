@@ -136,7 +136,7 @@ async def send_email(
         logger.info("Email sent successfully to %s", to_email)
         return True
 
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — email is best-effort here and the caller only branches on the bool; an SMTP, DNS or TLS failure must not fail the operation that triggered the mail
         logger.warning("Failed to send email to %s: %s", to_email, exc)
         return False
 

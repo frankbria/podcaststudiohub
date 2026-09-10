@@ -387,7 +387,7 @@ async def delete_episode(
 	if s3_keys or local_paths:
 		try:
 			drain_storage_deletion_outbox.delay()
-		except Exception:
+		except Exception:  # noqa: BLE001 — the outbox rows are already committed, so a broker failure only delays collection — beat drains the same rows on its next tick (#366)
 			logger.warning(f"Failed to trigger storage deletion drain for episode {episode.id}")
 
 

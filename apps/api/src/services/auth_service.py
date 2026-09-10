@@ -1,5 +1,6 @@
 """Authentication service for password hashing, JWT tokens, and user management"""
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID, uuid4
@@ -17,6 +18,8 @@ from ..database import set_tenant_context
 from ..models.user import User
 from ..config import settings
 from ..utils.encryption import encrypt_credential, decrypt_credential
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -321,11 +324,16 @@ async def create_user(
             status_code=400,
             detail="Email already registered"
         )
-    except Exception as e:
+    except Exception:  # noqa: BLE001 — registration is unauthenticated, so any failure past the IntegrityError case must become an opaque 500 — the exception text is logged, never returned
         await session.rollback()
+        # The detail deliberately does NOT echo str(e). This is the signup
+        # endpoint: it is unauthenticated, and the frontend renders `detail`
+        # verbatim (#481), so an RLS/DB error message would put policy names
+        # and bound values in front of an anonymous caller.
+        logger.exception("User creation failed for %s", email)
         raise HTTPException(
             status_code=500,
-            detail=f"User creation failed: {str(e)}"
+            detail="User creation failed"
         )
 
 

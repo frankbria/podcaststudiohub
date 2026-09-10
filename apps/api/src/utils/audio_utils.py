@@ -5,8 +5,11 @@ Provides helpers for validating audio file formats, sizes, and extracting
 metadata such as duration, file format, and generating S3 keys.
 """
 
+import logging
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # Allowed audio MIME types and their file extensions
 ALLOWED_AUDIO_FORMATS = {
@@ -106,8 +109,11 @@ def get_audio_duration(file_path: str) -> Optional[float]:
 		from pydub import AudioSegment
 		audio = AudioSegment.from_file(file_path)
 		return len(audio) / 1000.0
-	except Exception:
-		pass
+	except Exception as exc:  # noqa: BLE001 — any pydub or ffmpeg failure must fall through to the ffprobe path below rather than decide the duration is unknown
+		# Logged, not silent: ffmpeg is a host requirement, and when it is absent
+		# BOTH paths here fail and every snippet silently gets a null duration
+		# with no diagnostic anywhere in the system (#488).
+		logger.debug("pydub duration extraction failed for %s: %s", file_path, exc)
 
 	# Fallback: try ffprobe directly
 	try:
@@ -132,9 +138,12 @@ def get_audio_duration(file_path: str) -> Optional[float]:
 					duration = stream.get("duration")
 					if duration:
 						return float(duration)
-	except Exception:
-		pass
+	except Exception as exc:  # noqa: BLE001 — ffprobe is the last resort, so any failure here means the duration is genuinely unavailable and the caller stores None
+		logger.warning("ffprobe duration extraction failed for %s: %s", file_path, exc)
 
+	# Both paths failed. The caller stores None; without the logs above that was
+	# indistinguishable from a genuinely duration-less file.
+	logger.warning("Could not determine audio duration for %s", file_path)
 	return None
 
 

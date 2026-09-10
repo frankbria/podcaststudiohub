@@ -81,7 +81,7 @@ class RateLimiter:
 					retry_after = window_seconds
 				return False, {"remaining": 0, "retry_after": retry_after}
 
-		except Exception as exc:
+		except Exception as exc:  # noqa: BLE001 — a rate limiter that fails closed turns a Redis outage into a total outage, so this one fails open by design (deliberately unlike the OAuth state check, which fails closed)
 			# Fail open: log the error but allow the request
 			logger.warning("Rate limiter Redis error (failing open): %s", exc)
 			return True, {"remaining": -1}

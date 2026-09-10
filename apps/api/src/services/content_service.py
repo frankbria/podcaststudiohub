@@ -195,7 +195,7 @@ async def upload_pdf_content(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — the temp file is cleaned up in finally regardless, and any storage failure means the same thing to the caller: this PDF could not be stored
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"Failed to store PDF: {str(e)}",

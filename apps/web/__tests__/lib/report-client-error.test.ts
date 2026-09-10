@@ -2,10 +2,16 @@ import { reportClientError } from '@/lib/report-client-error'
 
 describe('reportClientError', () => {
   let fetchMock: jest.Mock
+  const originalUrl = window.location.href
 
   beforeEach(() => {
     fetchMock = jest.fn().mockResolvedValue({ ok: true })
     global.fetch = fetchMock
+  })
+
+  afterEach(() => {
+    // Otherwise `?token=secret` below leaks into every later test in the file.
+    window.history.replaceState({}, '', originalUrl)
   })
 
   it('posts the message, stack and digest to the same-origin relay', () => {
@@ -40,11 +46,32 @@ describe('reportClientError', () => {
     expect(JSON.stringify(body)).not.toContain('secret')
   })
 
-  it('swallows a rejected relay call so the boundary still renders', async () => {
-    fetchMock.mockRejectedValue(new Error('offline'))
+  it('attaches a rejection handler so a failed relay never surfaces unhandled', async () => {
+    // Asserted on the promise itself, not via not.toThrow(): a fire-and-forget
+    // rejection escapes as an *unhandled* rejection a tick later, and whether
+    // Jest fails on that is config-dependent — so not.toThrow() would pass with
+    // the .catch() deleted, which is the bug this names.
+    const pending = Promise.reject(new Error('offline'))
+    const catchSpy = jest.spyOn(pending, 'catch')
+    fetchMock.mockReturnValue(pending)
 
-    expect(() => reportClientError(new Error('boom'), 'route-error')).not.toThrow()
-    await Promise.resolve()
+    reportClientError(new Error('boom'), 'route-error')
+
+    expect(catchSpy).toHaveBeenCalled()
+    await expect(pending).rejects.toThrow('offline')
+  })
+
+  it('truncates message and stack, which Chrome would otherwise reject wholesale', () => {
+    // A keepalive fetch over 64 KiB is dropped by the browser, so the biggest
+    // stacks would be the ones that never arrive.
+    const error = Object.assign(new Error('x'.repeat(5000)), { stack: 'y'.repeat(50_000) })
+
+    reportClientError(error, 'route-error')
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body.message.length).toBe(1024)
+    expect(body.stack.length).toBe(8192)
+    expect(fetchMock.mock.calls[0][1].body.length).toBeLessThan(64 * 1024)
   })
 
   it('does not throw when fetch is unavailable', () => {

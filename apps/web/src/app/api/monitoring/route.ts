@@ -35,7 +35,13 @@ function envelopeUrl(dsn: string): string | null {
     const projectId = segments.pop()
     if (!username || !projectId) return null
     const prefix = segments.length > 0 ? `/${segments.join("/")}` : ""
-    return `${protocol}//${host}${prefix}/api/${projectId}/envelope/?sentry_key=${username}&sentry_version=7`
+    // `URL.username` hands back the userinfo still percent-encoded, and `+` and
+    // `&` are legal there but unescaped — so neither the raw value nor a plain
+    // re-encode is right. Decode to the true key, then encode it for a query
+    // string. (Throws on malformed input, which the catch below turns into a
+    // logged no-op rather than a corrupt ingest URL.)
+    const key = encodeURIComponent(decodeURIComponent(username))
+    return `${protocol}//${host}${prefix}/api/${projectId}/envelope/?sentry_key=${key}&sentry_version=7`
   } catch {
     return null
   }
@@ -48,6 +54,16 @@ function str(value: unknown, max: number): string | undefined {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  // CORS protects nothing here: a cross-site <form enctype="text/plain"> can
+  // POST a body that parses as JSON with no preflight, letting any page a user
+  // visits burn this project's Sentry quota. Sec-Fetch-Site closes that.
+  // Only reject when the header is PRESENT and wrong — a client that omits it
+  // (curl, a pre-2023 Safari) is not the browser vector this blocks.
+  const fetchSite = request.headers.get("sec-fetch-site")
+  if (fetchSite && fetchSite !== "same-origin") {
+    return new Response(null, { status: 403 })
+  }
+
   const dsn = process.env.SENTRY_DSN
   if (!dsn) return new Response(null, { status: 204 })
 
@@ -91,7 +107,10 @@ export async function POST(request: Request): Promise<Response> {
 
   const event = {
     event_id: eventId,
-    timestamp: Date.now() / 1000,
+    // ISO 8601 UTC, the shape every official SDK sends. Sentry also accepts a
+    // numeric epoch today, but there is no signal if that ever tightens: this
+    // handler cannot tell a dropped event from a delivered one.
+    timestamp: sentAt,
     platform: "javascript",
     level: "error",
     logger: "apps/web",
@@ -101,6 +120,11 @@ export async function POST(request: Request): Promise<Response> {
     // minified noise, so the stack rides along as context rather than as a
     // parsed stacktrace that Sentry would try (and fail) to symbolicate.
     exception: { values: [{ type: "Error", value: message }] },
+    // …except that a production Server Component throw — the #481 case — reaches
+    // the boundary with its message already replaced by Next's generic string.
+    // Grouping on message alone would collapse every such crash into one issue.
+    // The digest is what distinguishes them, so it joins the fingerprint.
+    ...(digest ? { fingerprint: ["{{ default }}", digest] } : {}),
     extra: {
       stack: str(report.stack, MAX_STACK),
       pathname: str(report.pathname, MAX_TAG),
@@ -113,11 +137,18 @@ export async function POST(request: Request): Promise<Response> {
     `${JSON.stringify(event)}\n`
 
   try {
-    await fetch(url, {
+    const ingest = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/x-sentry-envelope" },
       body: envelope,
     })
+    // A rejected envelope resolves normally: a typo'd DSN is 401, an exhausted
+    // quota is 429. Silently treating those as success would leave the relay
+    // looking healthy while reporting nothing — the exact invisibility this
+    // whole route exists to end.
+    if (!ingest.ok) {
+      console.error(`[monitoring] Sentry rejected the client error: HTTP ${ingest.status}`)
+    }
   } catch (error) {
     // Ingest being down must not turn into a second error in the browser, which
     // is already rendering a crash screen.

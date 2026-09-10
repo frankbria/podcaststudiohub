@@ -11,6 +11,13 @@
  *   - the DSN stays out of the client bundle, unlike a browser SDK's
  *     NEXT_PUBLIC_ DSN.
  */
+// Chrome rejects a keepalive fetch whose body exceeds 64 KiB outright, so an
+// uncapped payload means the *largest* stacks — the ones most worth having —
+// are the ones the browser silently drops. Truncate here, well inside that,
+// and let the server truncate again for non-browser callers.
+const MAX_MESSAGE = 1024
+const MAX_STACK = 8192
+
 export function reportClientError(
   error: Error & { digest?: string },
   context: "route-error" | "global-error"
@@ -25,8 +32,8 @@ export function reportClientError(
       // plain fetch would be cancelled along with the document.
       keepalive: true,
       body: JSON.stringify({
-        message: error.message,
-        stack: error.stack,
+        message: error.message?.slice(0, MAX_MESSAGE),
+        stack: error.stack?.slice(0, MAX_STACK),
         digest: error.digest,
         context,
         // pathname only, never search: query strings here carry callbackUrl and

@@ -359,8 +359,18 @@ Notes:
   deliberately — performance tracing is billed per transaction.
 - The frontend relay sends the **pathname only**, never the query string, and
   caps the body it will forward. It is unauthenticated by necessity (a crashed
-  page may have no session), so Sentry's own quota/spike protection is the
-  backstop against a client looping on an error.
+  page may have no session); it rejects a request whose `Sec-Fetch-Site` says
+  cross-site, which closes the browser-driven quota-burn vector that CORS does
+  not, but a direct non-browser flood is only backstopped by Sentry's own
+  quota/spike protection.
+- Unlike the backend, the relay does **not** run a `before_send` scrub. It
+  forwards only the error message, stack, digest and pathname — never headers,
+  cookies or a request body — but a message or stack that itself embeds
+  something sensitive is relayed as-is. Widen the field list only with that in
+  mind.
+- React StrictMode double-invokes effects in development, so a crash reported
+  from a dev server with a DSN set arrives twice. Harmless with the DSN unset,
+  which is the default.
 - `ENVIRONMENT` (already set per host) becomes the Sentry environment, so dev
   and production events stay separated.
 

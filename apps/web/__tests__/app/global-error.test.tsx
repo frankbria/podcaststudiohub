@@ -40,7 +40,7 @@ describe('GlobalError boundary', () => {
       <GlobalError error={new Error('layout blew up')} reset={jest.fn()} />
     )
 
-    expect(markup).toMatch(/^<html[^>]*>(<head><\/head>)?<body[^>]*>/)
+    expect(markup).toMatch(/^<html lang="en"[^>]*>(<head><\/head>)?<body[^>]*>/)
     expect(markup).toContain('Something went wrong')
   })
 

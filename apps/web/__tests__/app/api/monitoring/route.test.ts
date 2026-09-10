@@ -18,11 +18,16 @@ const DSN = 'https://abc123@o42.ingest.sentry.io/4507'
 
 function makeRequest(
   body: unknown,
-  { raw, contentLength }: { raw?: string; contentLength?: string } = {}
+  {
+    raw,
+    contentLength,
+    fetchSite,
+  }: { raw?: string; contentLength?: string; fetchSite?: string } = {}
 ) {
   const text = raw ?? JSON.stringify(body)
   const headers = new Headers()
   if (contentLength !== undefined) headers.set('content-length', contentLength)
+  if (fetchSite !== undefined) headers.set('sec-fetch-site', fetchSite)
   return {
     headers,
     text: async () => text,
@@ -182,5 +187,78 @@ describe('POST /api/monitoring', () => {
 
     expect(response.status).toBe(202)
     expect(consoleError).toHaveBeenCalled()
+  })
+
+  it('logs a non-2xx from Sentry instead of reporting success', async () => {
+    // A typo'd DSN is a 401 and an exhausted quota is a 429; both resolve
+    // normally, so without this the relay looks healthy while relaying nothing.
+    fetchMock.mockResolvedValue({ ok: false, status: 401 })
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {})
+
+    await POST(makeRequest({ message: 'boom' }))
+
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('401')
+    )
+  })
+
+  it('rejects a cross-site POST, which CORS would not stop', async () => {
+    // A cross-site <form enctype="text/plain"> can post a body that parses as
+    // JSON with no preflight — free quota burn from any page a user visits.
+    const response = await POST(makeRequest({ message: 'boom' }, { fetchSite: 'cross-site' }))
+
+    expect(response.status).toBe(403)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('accepts a same-origin POST', async () => {
+    const response = await POST(makeRequest({ message: 'boom' }, { fetchSite: 'same-origin' }))
+
+    expect(response.status).toBe(202)
+    expect(fetchMock).toHaveBeenCalled()
+  })
+
+  it('accepts a client that sends no Sec-Fetch-Site at all', async () => {
+    // curl and pre-2023 Safari omit it; they are not the browser vector above,
+    // and rejecting them would drop real reports.
+    const response = await POST(makeRequest({ message: 'boom' }))
+
+    expect(response.status).toBe(202)
+  })
+
+  it('fingerprints by digest so redacted production errors do not collapse', async () => {
+    // A production Server Component throw reaches the boundary with its message
+    // replaced by Next's generic string, so message-only grouping would fold
+    // every such crash into a single Sentry issue.
+    await POST(makeRequest({ message: 'An error occurred', digest: 'digest-a' }))
+    await POST(makeRequest({ message: 'An error occurred', digest: 'digest-b' }))
+
+    const fingerprints = fetchMock.mock.calls.map(
+      ([, init]) => JSON.parse((init.body as string).trim().split('\n')[2]).fingerprint
+    )
+    expect(fingerprints[0]).toEqual(['{{ default }}', 'digest-a'])
+    expect(fingerprints[1]).toEqual(['{{ default }}', 'digest-b'])
+  })
+
+  it('omits the fingerprint when there is no digest to split on', async () => {
+    await POST(makeRequest({ message: 'boom' }))
+
+    expect(sentEnvelope().event.fingerprint).toBeUndefined()
+  })
+
+  it('sends an ISO 8601 timestamp matching the envelope header', async () => {
+    await POST(makeRequest({ message: 'boom' }))
+
+    const { event, header } = sentEnvelope()
+    expect(event.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/)
+    expect(event.timestamp).toBe(header.sent_at)
+  })
+
+  it('percent-encodes a DSN key that would otherwise corrupt the query string', async () => {
+    process.env.SENTRY_DSN = 'https://a+b%26c@o42.ingest.sentry.io/4507'
+
+    await POST(makeRequest({ message: 'boom' }))
+
+    expect(sentEnvelope().url).toContain('sentry_key=a%2Bb%26c&')
   })
 })

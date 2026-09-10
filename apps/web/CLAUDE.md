@@ -27,8 +27,14 @@ const body = await response.json()
 setError(extractApiErrorDetail(body, "Registration failed"))
 ```
 
-A route-level error boundary (`src/app/error.tsx`) bounds the damage from any render throw, but it
-is a backstop, not a licence to skip the helper.
+A route-level error boundary (`src/app/error.tsx`) bounds the damage from any render throw, and
+`src/app/global-error.tsx` catches throws in the root layout that `error.tsx` sits below — but both
+are backstops, not a licence to skip the helper.
+
+Both boundaries report to Sentry through `reportClientError` → the same-origin `/api/monitoring`
+route (issue #485). No `SENTRY_DSN` on the server means a hard no-op, so tests and local dev never
+phone home. There is no browser SDK and no `NEXT_PUBLIC_` DSN: keep it that way, or the
+nonce/`strict-dynamic` CSP in `middleware.ts` needs a `connect-src` exception.
 
 ## Icon Usage
 

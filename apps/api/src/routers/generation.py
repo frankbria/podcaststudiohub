@@ -312,7 +312,7 @@ async def generate_podcast(
                     # savepoint; release it only if it is still open.
                     if preflight_sp.is_active:
                         await preflight_sp.commit()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — the savepoint must be rolled back and the RSS platforms dropped whatever failed, and only ValueError's message is user-safe — anything else stays internal so infrastructure details never leak
                     if preflight_sp.is_active:
                         await preflight_sp.rollback()
                     for p in rss_platforms:
@@ -392,7 +392,7 @@ async def generate_podcast(
                 episode_id=str(episode_id), task_name="generate_podcast"
             ),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — the episode was already committed as 'queued', so any enqueue failure must restore the prior restartable status; leaving it queued would strand it until the reaper (#295)
         # Enqueue failed (broker down/rejected) AFTER we committed 'queued'. Restore
         # the prior restartable status so the episode is immediately retryable and a
         # still-valid 'complete' episode stays downloadable — not stuck 'queued'

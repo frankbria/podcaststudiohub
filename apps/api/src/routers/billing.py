@@ -184,7 +184,7 @@ async def stripe_webhook(
 	try:
 		from ..config import settings  # type: ignore[import]
 		webhook_secret = getattr(settings, "STRIPE_WEBHOOK_SECRET", None)
-	except Exception:
+	except Exception:  # noqa: BLE001 — a settings-import failure must leave the secret unset, which process_webhook then rejects outright rather than processing the webhook unverified (#216)
 		webhook_secret = None
 
 	result = await billing_service.process_webhook(db, payload, sig_header, webhook_secret)

@@ -163,7 +163,7 @@ async def spotify_callback(
 			redirect_uri=redirect_uri,
 			code=code,
 		)
-	except Exception as e:
+	except Exception as e:  # noqa: BLE001 — this is a browser redirect from Spotify, so every failure must land on the same generic error redirect; the exception type alone is logged because the body can carry the client secret
 		logger.warning("Spotify token exchange failed: %s", type(e).__name__)
 		return _spotify_callback_redirect(
 			"error=" + urllib.parse.quote("Failed to exchange Spotify authorization code")
@@ -181,7 +181,11 @@ async def spotify_callback(
 	# Fetch show info to get show_id and name
 	try:
 		show_info = await get_spotify_show_info(access_token)
-	except Exception:
+	except Exception as exc:  # noqa: BLE001 — show info is optional enrichment on an OAuth callback that must still complete; any lookup failure degrades to empty display fields rather than losing the connected target
+		# Logged because the degraded result is not obviously wrong downstream:
+		# the target is created with an empty show id and name, which reads as a
+		# Spotify-side problem rather than a failed lookup here (#488).
+		logger.warning("Spotify show info lookup failed: %s", type(exc).__name__)
 		show_info = {"id": "", "name": ""}
 
 	# Look up the user's tenant via the SECURITY DEFINER bootstrap (#304):
@@ -553,7 +557,7 @@ async def refresh_token_endpoint(
 			status_code=status.HTTP_400_BAD_REQUEST,
 			detail=str(e)
 		)
-	except Exception:
+	except Exception:  # noqa: BLE001 — ValueError carries the user-actionable message and is handled above; every other failure is Spotify or the network, which is a 502 and not the caller's fault
 		logger.warning("Spotify token refresh failed for target %s", target_id)
 		raise HTTPException(
 			status_code=status.HTTP_502_BAD_GATEWAY,

@@ -402,9 +402,13 @@ def on_workflow_complete(self: Task, result: Dict[str, Any], episode_id: str) ->
 			# platforms (Spotify/Apple) pick the episode up (issue #382).
 			# Best-effort, and guarded locally: the outer except would log a
 			# misleading "Failed to finalize" for an episode that committed.
+			# refresh_project_rss_feed currently promises "Never raises", so this
+			# is redundant today -- kept because that promise is a docstring, not
+			# a guarantee, and the misleading-log bug returns silently if it ever
+			# narrows its own catch (#488).
 			try:
 				refresh_project_rss_feed(project_id, owner_id)
-			except Exception as rss_exc:
+			except Exception as rss_exc:  # noqa: BLE001 — the episode is already committed, so any refresh failure must be logged and dropped rather than reach the outer handler and be reported as a finalization failure
 				logger.error(
 					"RSS refresh after completing episode %s failed: %s",
 					episode_id,
@@ -459,7 +463,7 @@ def on_workflow_failure(
 			ar = AsyncResult(str(task_id), app=self.app)
 			exc = ar.result
 			traceback = traceback or ar.traceback
-		except Exception:  # pragma: no cover - backend best-effort
+		except Exception:  # pragma: no cover - backend best-effort  # noqa: BLE001 — best-effort enrichment of the error text only; the episode is marked failed below regardless, so no result-backend failure may divert that path
 			logger.debug("Could not fetch failure detail for task %s", task_id)
 
 	error_message = f"Task '{task_name}' failed: {exc}"

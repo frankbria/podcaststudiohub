@@ -11,6 +11,7 @@ and ``services/rate_limiter.py`` (``Redis.from_url(..., decode_responses=True)``
 import logging
 
 from redis import Redis
+from redis.exceptions import RedisError
 
 from src.config import settings
 
@@ -49,6 +50,12 @@ def acquire_generation_lock(episode_id: str, task_id: str) -> bool:
     same ``task_id``, so re-acquiring our own lock returns True rather than
     deadlocking the retry. Fail-open on Redis errors so a Redis outage cannot
     permanently block generation.
+
+    Fail-open covers *outages*, which are transient and self-heal. It must not
+    cover a malformed ``REDIS_URL`` -- ``Redis.from_url`` raises ``ValueError``
+    for that, and swallowing it would silently disable the only guard against
+    re-running the paid, non-idempotent LLM/TTS pipeline, permanently and for
+    every episode, behind nothing louder than a warning (#488).
     """
     key = _lock_key(episode_id)
     ttl = settings.CELERY_TASK_TIME_LIMIT + _LOCK_TTL_BUFFER_SECONDS
@@ -58,7 +65,7 @@ def acquire_generation_lock(episode_id: str, task_id: str) -> bool:
             return True
         # Key already held — only this task's own retry may proceed.
         return client.get(key) == task_id
-    except Exception as exc:
+    except (RedisError, OSError) as exc:
         logger.warning(
             "Redis lock acquire failed for episode %s; proceeding without lock "
             "(fail-open): %s",
@@ -71,7 +78,7 @@ def release_generation_lock(episode_id: str, task_id: str) -> None:
     """Release the lock iff this task still owns it. Fail-open on Redis errors."""
     try:
         _redis().eval(_RELEASE_SCRIPT, 1, _lock_key(episode_id), task_id)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — release is best-effort cleanup: the lock's TTL expires it anyway, so a Redis error must never surface from a task that has already done its work
         logger.warning(
             "Redis lock release failed for episode %s: %s", episode_id, exc
         )

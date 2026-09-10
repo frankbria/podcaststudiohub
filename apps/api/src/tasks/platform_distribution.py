@@ -248,7 +248,7 @@ def distribute_to_platform_task(
         # Decrypt any encrypted credentials in the config
         try:
             platform_config = _decrypt_platform_config(platform_config, platform)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — every exception from this path is a DBAPIError whose str() embeds the bound parameters (the ciphertext and settings.ENCRYPTION_KEY), so all of them must be reduced to type(e).__name__ before reaching the stored error message
             logger.error(f"Failed to decrypt credentials for {platform}: {e}")
             return {
                 "status": "failed",
@@ -301,7 +301,7 @@ def distribute_to_platform_task(
 
         return result
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — this is the task's single classification point: should_retry_exception decides transient-retry vs permanent-failed, and an unclassified escape would leave the distribution entry with no recorded outcome
         if not should_retry_exception(e):
             # Permanent error (validation, unsupported platform, etc.) — don't retry
             logger.error(
@@ -398,7 +398,7 @@ def _distribute_to_spotify(episode_id: str, config: Dict, metadata: Dict, task: 
         except (ValueError, KeyError, TypeError):
             # Re-raise permanent errors so the task does not retry
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — a token refresh failure must degrade to publishing with the existing token so the platform API reports the real auth state, rather than pre-empting it with a locally guessed error
             # Log and continue with the existing token; let the API call
             # surface the actual auth error if the token is truly invalid.
             logger.warning(

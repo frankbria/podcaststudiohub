@@ -142,7 +142,7 @@ def validate_url_reachability_task(
 		logger.error(f"Reachability check error for {content_source_id}: {str(e)}")
 		return {"status": "failed", "error_message": str(e)}
 
-	except Exception as e:
+	except Exception as e:  # noqa: BLE001 — dispatched fire-and-forget off the create request, so anything not already classified must degrade to retry-then-permanent-failed rather than leave the task unacked
 		logger.error(f"Reachability check error for {content_source_id}: {str(e)}")
 		retry_countdown = 60 * (2 ** self.request.retries)
 		try:
@@ -199,7 +199,7 @@ def extract_content_task(
 			"error_message": str(e),
 		}
 
-	except Exception as e:
+	except Exception as e:  # noqa: BLE001 — the extractors' own errors are classified inside the service, so what reaches here is session or event-loop level and must still resolve to a status the polling caller can see
 		logger.error(f"Error extracting content for {content_source_id}: {str(e)}")
 		retry_countdown = 60 * (2 ** self.request.retries)
 		try:

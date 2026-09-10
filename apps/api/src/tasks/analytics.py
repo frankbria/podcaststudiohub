@@ -79,7 +79,7 @@ def track_analytics_event_task(self: Task, payload: Dict[str, Any]) -> Dict[str,
 		logger.warning(f"Analytics event {event_id} dropped (integrity error): {e}")
 		return {"status": "dropped", "id": event_id, "error": str(e)}
 
-	except Exception as e:
+	except Exception as e:  # noqa: BLE001 — analytics are fire-and-forget: any unexpected failure must become retry-then-drop, never an unacked task that redelivers forever
 		retry_countdown = 60 * (2 ** self.request.retries)
 		try:
 			raise self.retry(exc=e, countdown=retry_countdown)

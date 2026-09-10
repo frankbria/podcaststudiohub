@@ -10,6 +10,7 @@ Tests cover:
 - Protected endpoint access
 """
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID, uuid4
@@ -230,6 +231,60 @@ async def test_register_internal_error_hides_details(client: AsyncClient):
     assert response.status_code == 500
     assert response.json()["detail"] == "Registration failed. Please try again."
     assert secret not in response.text
+
+
+@pytest.mark.asyncio
+async def test_register_long_password_is_a_422_not_a_500(client: AsyncClient):
+    """A 73+ character password is a client error, not a server error (#488).
+
+    schemas/auth.py allows max_length=100 CHARACTERS, but bcrypt refuses more
+    than 72 BYTES -- so the length a password manager generates used to reach
+    auth_service's catch-all and come back as a 500 carrying bcrypt's own
+    "password cannot be longer than 72 bytes" text.
+    """
+    long_password = "Aa1!" + "x" * 69  # 73 chars, satisfies the complexity rules
+    assert len(long_password) == 73
+
+    response = await client.post(
+        "/auth/register",
+        json={
+            "email": "longpass@example.com",
+            "password": long_password,
+            "full_name": "Long Pass",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "72 bytes" not in response.text  # bcrypt's wording must not reach the client
+
+
+@pytest.mark.asyncio
+async def test_create_user_catch_all_does_not_leak_exception_text(test_db: AsyncSession):
+    """The SERVICE-level catch-all must not echo the exception into the response.
+
+    Deliberately distinct from test_register_internal_error_hides_details above:
+    that one patches src.routers.auth.create_user, so it never enters this
+    service and only exercises the router's generic handler. It therefore
+    certified "we do not leak" while this path -- the one that actually built
+    the 500 detail from str(e) -- had no coverage at all (#488).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    secret = "RLS policy users_tenant_isolation violated for relation users"
+    with patch(
+        "src.services.auth_service.set_tenant_context",
+        new=AsyncMock(side_effect=RuntimeError(secret)),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await create_user(
+                test_db,
+                email="leaky@example.com",
+                password="SecurePass123!",
+                full_name="Leaky User",
+            )
+
+    assert exc_info.value.status_code == 500
+    assert secret not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio

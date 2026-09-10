@@ -324,7 +324,20 @@ async def create_user(
             status_code=400,
             detail="Email already registered"
         )
-    except Exception:  # noqa: BLE001 — registration is unauthenticated, so any failure past the IntegrityError case must become an opaque 500 — the exception text is logged, never returned
+    except ValueError as exc:
+        # bcrypt refuses passwords over 72 BYTES, but schemas/auth.py allows
+        # max_length=100 CHARACTERS -- so a 73-100 char password (exactly what a
+        # password manager generates) reached the catch-all below and came back
+        # as a 500. It is a client error, and the byte/character mismatch means
+        # the schema alone cannot express the limit. Caught here so every caller
+        # is covered, including multibyte passwords under 72 characters.
+        await session.rollback()
+        logger.info("Registration rejected for %s: %s", email, exc)
+        raise HTTPException(
+            status_code=422,
+            detail="Password is too long. Please use a shorter password.",
+        )
+    except Exception:  # noqa: BLE001 — registration is unauthenticated, so any failure past the IntegrityError and ValueError cases must become an opaque 500 — the exception text is logged, never returned
         await session.rollback()
         # The detail deliberately does NOT echo str(e). This is the signup
         # endpoint: it is unauthenticated, and the frontend renders `detail`

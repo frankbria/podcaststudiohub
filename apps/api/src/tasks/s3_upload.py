@@ -50,7 +50,7 @@ def _cleanup_temp_file(file_path: str) -> None:
         elif os.path.isfile(real):
             os.remove(real)
             logger.info("Removed temp upload artifact: %s", real)
-    except Exception as exc:  # cleanup must never fail the task
+    except Exception as exc:  # cleanup must never fail the task  # noqa: BLE001 — cleanup must never fail the task: the artifact is disposable and the upload result is already decided
         logger.warning("Failed to clean up temp file %s: %s", file_path, exc)
 
 
@@ -160,7 +160,7 @@ def upload_to_s3_task(
                 "file_size_bytes": 0,
                 "error": str(e)
             }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — retry classification for upload; NOTE the MaxRetriesExceededError branch returns instead of raising, so link_error never fires — tracked in #498, not fixed here
         # Retry on any other transient failure
         logger.warning(
             f"S3 upload error for {file_path}, "

@@ -93,7 +93,7 @@ async def track_event(
 	try:
 		from ..tasks.analytics import track_analytics_event_task
 		track_analytics_event_task.delay(payload=payload)
-	except Exception as e:
+	except Exception as e:  # noqa: BLE001 — the event row is already built and returned as 201; a broker of any kind being unreachable must not fail an analytics write the caller does not depend on
 		# Broker unavailable — analytics are fire-and-forget; log and still 201.
 		logger.warning(f"Could not queue analytics event {payload['id']}: {e}")
 

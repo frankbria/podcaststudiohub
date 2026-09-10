@@ -124,7 +124,7 @@ async def create_content_source(
             logger.info(
                 f"Triggered extraction task for content source {content_source.id}"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — the content source is already committed; extraction is a follow-on the caller polls for, so no dispatch failure may turn a successful create into an error
             # Broker unavailable — log but don't fail creation
             logger.warning(
                 f"Could not queue extraction task for {content_source.id}: {e}"
@@ -142,7 +142,7 @@ async def create_content_source(
             logger.info(
                 f"Queued URL reachability check for content source {content_source.id}"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — reachability checking was moved off the request path precisely so it cannot affect the response (#322); a dispatch failure must leave the created source untouched
             # Broker unavailable — log but don't fail creation
             logger.warning(
                 f"Could not queue reachability check for {content_source.id}: {e}"
@@ -206,7 +206,7 @@ async def upload_pdf_content_source(
             logger.info(
                 f"Triggered extraction task for uploaded PDF content source {content_source.id}"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — the uploaded PDF is already stored and committed; a dispatch failure must not fail an upload the user would then repeat
             # Broker unavailable — log but don't fail the upload
             logger.warning(
                 f"Could not queue extraction task for {content_source.id}: {e}"
@@ -442,7 +442,7 @@ async def trigger_content_extraction(
         logger.info(
             f"Triggered extraction task {task.id} for content source {content_id}"
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — this endpoint's entire job is to enqueue, so any dispatch failure is the endpoint failing and must map to a single 503 rather than a partial success
         logger.error(f"Failed to queue extraction task for {content_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

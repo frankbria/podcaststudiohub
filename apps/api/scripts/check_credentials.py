@@ -59,7 +59,7 @@ def test_gemini_api():
                 "working": True
             })
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — one probe in a sequence: any Gemini SDK, auth or network failure means this key does not work here, and the remaining six probes must still run
         error_msg = str(e)
         if "API key not valid" in error_msg or "401" in error_msg or "403" in error_msg:
             status = "❌ Invalid"
@@ -68,8 +68,14 @@ def test_gemini_api():
             status = "⚠️ Quota Exceeded"
             message = f"Quota/rate limit issue: {error_msg[:100]}"
         else:
-            status = "❌ Network Error"
-            message = f"Connection failed: {error_msg[:100]}"
+            # Not necessarily a network fault: the auth/quota branches above are
+            # substring guesses, so everything else lands here -- including an
+            # ImportError for a package this script never declared (openai and
+            # google.generativeai are transitive via podcastfy only). Naming the
+            # exception type stops the report sending an operator to debug their
+            # network when the real answer is a missing package (#488).
+            status = "❌ Error"
+            message = f"{type(e).__name__}: {error_msg[:100]}"
 
         results.append({
             "service": service,
@@ -109,7 +115,7 @@ def test_openai_api():
             "working": True
         })
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — same probe contract: any OpenAI SDK, auth or network failure means this key does not work here, and the run must continue
         error_msg = str(e)
         if "Incorrect API key" in error_msg or "401" in error_msg or "authentication" in error_msg.lower():
             status = "❌ Invalid"
@@ -118,8 +124,14 @@ def test_openai_api():
             status = "⚠️ Quota Exceeded"
             message = f"Quota/rate limit issue: {error_msg[:100]}"
         else:
-            status = "❌ Network Error"
-            message = f"Connection failed: {error_msg[:100]}"
+            # Not necessarily a network fault: the auth/quota branches above are
+            # substring guesses, so everything else lands here -- including an
+            # ImportError for a package this script never declared (openai and
+            # google.generativeai are transitive via podcastfy only). Naming the
+            # exception type stops the report sending an operator to debug their
+            # network when the real answer is a missing package (#488).
+            status = "❌ Error"
+            message = f"{type(e).__name__}: {error_msg[:100]}"
 
         results.append({
             "service": service,
@@ -178,14 +190,20 @@ def test_elevenlabs_api():
                 "working": False
             })
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — any httpx, TLS, decode or status failure means the ElevenLabs key is unusable from this host; the report still needs the other probes
         error_msg = str(e)
         if "401" in error_msg or "403" in error_msg:
             status = "❌ Invalid"
             message = f"Authentication failed: {error_msg[:100]}"
         else:
-            status = "❌ Network Error"
-            message = f"Connection failed: {error_msg[:100]}"
+            # Not necessarily a network fault: the auth/quota branches above are
+            # substring guesses, so everything else lands here -- including an
+            # ImportError for a package this script never declared (openai and
+            # google.generativeai are transitive via podcastfy only). Naming the
+            # exception type stops the report sending an operator to debug their
+            # network when the real answer is a missing package (#488).
+            status = "❌ Error"
+            message = f"{type(e).__name__}: {error_msg[:100]}"
 
         results.append({
             "service": service,
@@ -211,10 +229,24 @@ def test_aws_s3():
         })
         return
 
+    # Imported outside the try: the `except NoCredentialsError` / `except
+    # ClientError` clauses below reference these names, so binding them inside
+    # the try means an ImportError makes Python raise NameError while
+    # *evaluating the except clause* -- which `except Exception` cannot catch,
+    # killing the script before it prints any report (#488).
     try:
         import boto3
         from botocore.exceptions import ClientError, NoCredentialsError
+    except ImportError as exc:
+        results.append({
+            "service": service,
+            "status": "❌ Error",
+            "message": f"{type(exc).__name__}: {exc}",
+            "working": False
+        })
+        return
 
+    try:
         # Create S3 client
         s3 = boto3.client(
             's3',
@@ -277,11 +309,11 @@ def test_aws_s3():
             "message": message,
             "working": False
         })
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — any boto3, credential or permission failure means these AWS credentials do not work here; the specific botocore cases are handled above
         results.append({
             "service": service,
-            "status": "❌ Network Error",
-            "message": f"Connection failed: {str(e)[:100]}",
+            "status": "❌ Error",
+            "message": f"{type(e).__name__}: {str(e)[:100]}",
             "working": False
         })
 
@@ -335,14 +367,20 @@ def test_transistor_api():
                 "working": False
             })
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — any httpx, TLS, decode or status failure means the Transistor key is unusable from this host; the run must continue
         error_msg = str(e)
         if "401" in error_msg:
             status = "❌ Invalid"
             message = f"Authentication failed: {error_msg[:100]}"
         else:
-            status = "❌ Network Error"
-            message = f"Connection failed: {error_msg[:100]}"
+            # Not necessarily a network fault: the auth/quota branches above are
+            # substring guesses, so everything else lands here -- including an
+            # ImportError for a package this script never declared (openai and
+            # google.generativeai are transitive via podcastfy only). Naming the
+            # exception type stops the report sending an operator to debug their
+            # network when the real answer is a missing package (#488).
+            status = "❌ Error"
+            message = f"{type(e).__name__}: {error_msg[:100]}"
 
         results.append({
             "service": service,
@@ -388,7 +426,7 @@ def test_database():
                 "working": True
             })
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — any driver, DNS, auth or SQL failure means one thing here: this DATABASE_URL does not work, and the other six probes must still run
         error_msg = str(e)
         if "password authentication failed" in error_msg.lower():
             status = "❌ Invalid"
@@ -442,7 +480,7 @@ def test_redis():
             "working": True
         })
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — any redis-py, socket or auth failure means one thing here: this REDIS_URL does not work, and the other six probes must still run
         error_msg = str(e)
         if "connection refused" in error_msg.lower():
             status = "❌ Connection Failed"

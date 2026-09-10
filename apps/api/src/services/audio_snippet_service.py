@@ -120,7 +120,7 @@ async def upload_audio_snippet(
 
 	except HTTPException:
 		raise
-	except Exception as e:
+	except Exception as e:  # noqa: BLE001 — the temp file is removed in finally regardless, and every failure here means the same thing to the caller: this audio file could not be processed
 		raise HTTPException(
 			status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
 			detail=f"Failed to process audio file: {str(e)}"
@@ -307,7 +307,7 @@ async def delete_audio_snippet(
 			if bucket:
 				storage = StorageService(bucket_name=bucket, region_name=settings.AWS_REGION)
 				await storage.delete_file(snippet.s3_key)
-		except Exception:
+		except Exception:  # noqa: BLE001 — the DB row is deleted either way, so a storage failure must not block the delete; it leaves an orphaned object, which is the lesser outcome
 			# Log but don't fail if S3 deletion fails
 			import logging
 			logging.getLogger(__name__).warning(

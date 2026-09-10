@@ -148,7 +148,7 @@ def drain_storage_deletion_outbox(self: Task) -> int:
                         storage = StorageService()
                     try:
                         asyncio.run(storage.delete_file(row.s3_key))
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — any storage-backend failure must map to the one outcome the outbox is built on (ok=False, attempts++, row stays queued) rather than abort the drain loop or the beat tick
                         ok = False
                         logger.warning(
                             "Failed to delete S3 object %s (attempt %d): %s",

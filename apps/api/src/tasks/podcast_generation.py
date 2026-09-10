@@ -46,7 +46,7 @@ def _load_generation_status(episode_id: str) -> Optional[str]:
         with SyncSessionLocal() as db:
             episode = db.get(Episode, uuid_module.UUID(episode_id))
             return episode.generation_status if episode is not None else None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — the idempotency guard must fail open: an unreadable status of any cause means 'proceed' rather than wedging the episode
         logger.warning(
             "Could not read generation_status for episode %s; proceeding: %s",
             episode_id, exc,
@@ -168,7 +168,7 @@ def resolve_composition_timeline(
                     "generated audio only",
                     project_id, len(snippets),
                 )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — timeline resolution is an enhancement; any failure must fall back to composing the generated audio alone rather than lose the episode
         logger.error(
             "Composition timeline resolution failed for project %s; composing "
             "the generated audio only: %s",
@@ -211,7 +211,7 @@ def _upload_to_s3_with_retries(
             logger.warning(
                 f"S3 upload attempt {attempt + 1}/{max_attempts} failed: {last_error}"
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — this is one attempt inside a bounded retry loop, so every failure must be recorded as last_error and let the loop decide, not escape mid-loop
             last_error = str(exc)
             logger.warning(
                 f"S3 upload attempt {attempt + 1}/{max_attempts} raised: {exc}"
@@ -462,7 +462,7 @@ def generate_podcast_task(
                         episode.duration_seconds = duration_seconds
                         episode.file_size_bytes = file_size_bytes
                         db.commit()
-            except Exception as persist_err:
+            except Exception as persist_err:  # noqa: BLE001 — the audio is already generated; failing to persist its metadata must not abort the workflow dispatch that follows
                 logger.error(
                     "Episode %s: failed to persist generation metadata before "
                     "workflow dispatch: %s",
@@ -511,7 +511,7 @@ def generate_podcast_task(
                     enable_distribution=enable_distribution,
                     platforms=platforms,
                 ).apply_async()
-            except Exception as broker_err:
+            except Exception as broker_err:  # noqa: BLE001 — generation already succeeded, so a broker failure of any kind must be recorded loudly and never re-mark a successful run as failed
                 logger.critical(
                     "Celery broker unavailable after successful generation for "
                     "episode %s — workflow chain could not be dispatched: %s",
@@ -526,7 +526,7 @@ def generate_podcast_task(
                     episode_id=episode_id,
                     generation_result=generation_result,
                 )
-            except Exception as broker_err:
+            except Exception as broker_err:  # noqa: BLE001 — a broker hiccup must not orphan a successful generation, so any dispatch failure falls through to the synchronous finalization below
                 logger.critical(
                     "Celery broker unavailable after successful generation for "
                     "episode %s — falling back to synchronous finalization: %s",
@@ -537,7 +537,7 @@ def generate_podcast_task(
                         episode_id=episode_id,
                         generation_result=generation_result,
                     )
-                except Exception as sync_err:
+                except Exception as sync_err:  # noqa: BLE001 — this is the fallback's fallback: the synchronous path has failed too, so there is nothing left to try and the only correct action is to record it
                     logger.critical(
                         "Synchronous finalization also failed for episode %s: %s",
                         episode_id, sync_err,
@@ -586,7 +586,7 @@ def generate_podcast_task(
             "error": msg,
         }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — this is the task's retry classification point; every failure must resolve to retry-or-permanent-failed so the episode never stays 'queued'
         logger.warning(
             f"Podcast generation error for episode {episode_id}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
@@ -833,7 +833,7 @@ def finalize_episode_generation_task(
             # of an already-committed completion.
             try:
                 refresh_project_rss_feed(episode.project_id, episode.user_id)
-            except Exception as rss_exc:
+            except Exception as rss_exc:  # noqa: BLE001 — the completion is already committed, so an RSS refresh failure of any kind must be logged and dropped rather than re-run finalization (#382)
                 logger.error(
                     f"RSS refresh after finalizing episode {episode_id} failed: {rss_exc}"
                 )
@@ -848,7 +848,7 @@ def finalize_episode_generation_task(
                 "file_size_bytes": file_size_bytes,
             }
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — finalization's retry classification point: any failure must become a retry or a recorded permanent failure, never an unacked task
             logger.warning(
                 f"Finalization error for episode {episode_id}, "
                 f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
@@ -865,7 +865,7 @@ def finalize_episode_generation_task(
                 # below can actually persist (issue #311).
                 try:
                     db.rollback()
-                except Exception as rollback_err:
+                except Exception as rollback_err:  # noqa: BLE001 — the session may already be in a failed-transaction state, and a rollback failure must not stop the failure-status write below from being attempted (#311)
                     logger.error(
                         "Rollback before failure-status write failed for "
                         f"episode {episode_id}: {rollback_err}"
@@ -880,7 +880,7 @@ def finalize_episode_generation_task(
                             "error_message": f"Finalization error: {str(e)}",
                         }
                         db.commit()
-                except Exception as db_err:
+                except Exception as db_err:  # noqa: BLE001 — this is the last-resort status write; if the DB is unreachable the caller must still receive the failed result rather than an exception
                     logger.error(f"Failed to update episode status after error: {db_err}")
                 return {"status": "failed", "error": str(e)}
 

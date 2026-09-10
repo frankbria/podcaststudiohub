@@ -11,6 +11,9 @@ import types
 from unittest.mock import MagicMock, create_autospec, patch
 from uuid import uuid4
 
+import pytest
+from redis.exceptions import RedisError
+
 from tests.module_patching import patch_modules
 
 from podcastfy.client import generate_podcast as real_generate_podcast
@@ -93,6 +96,31 @@ def test_release_fails_open_on_redis_error():
     client.eval.side_effect = ConnectionError("redis down")
     with patch.object(idempotency, "_redis", return_value=client):
         idempotency.release_generation_lock("ep1", "task-a")  # must not raise
+
+
+def test_acquire_does_not_fail_open_on_a_misconfigured_redis_url():
+    """A malformed REDIS_URL must fail LOUDLY, not silently disable the guard.
+
+    Fail-open is for outages, which are transient and self-heal.
+    ``Redis.from_url`` raises ValueError for a malformed URL, which is a
+    permanent config error -- swallowing it would leave every episode running
+    the paid, non-idempotent pipeline with no duplicate protection at all,
+    behind nothing louder than a warning (#488).
+    """
+    with patch.object(
+        idempotency, "_redis",
+        side_effect=ValueError("Redis URL must specify one of the following schemes"),
+    ):
+        with pytest.raises(ValueError):
+            idempotency.acquire_generation_lock("ep1", "task-a")
+
+
+def test_acquire_still_fails_open_on_a_redis_client_error():
+    """The narrowing must not cost the outage behaviour it was protecting."""
+    client = MagicMock()
+    client.set.side_effect = RedisError("connection pool exhausted")
+    with patch.object(idempotency, "_redis", return_value=client):
+        assert idempotency.acquire_generation_lock("ep1", "task-a") is True
 
 
 # ---------------------------------------------------------------------------

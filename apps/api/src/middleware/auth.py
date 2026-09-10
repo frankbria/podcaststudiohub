@@ -77,7 +77,7 @@ def get_user_id_from_token(token: str) -> Optional[str]:
     """
     try:
         return verify_access_token(token).get("sub")
-    except Exception:
+    except Exception:  # noqa: BLE001 — any token-verification failure means 'not an access token' for metering purposes; narrowing risks a 402 pre-empting the route's own 401
         return None
 
 
@@ -160,7 +160,7 @@ async def get_current_user(
     except HTTPException:
         # Re-raise HTTP exceptions
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — an unexpected failure while resolving a bearer token must present as 401, never a 500 that reveals the auth path's internals; deliberate statuses are re-raised by the HTTPException clause above
         # Catch-all for unexpected errors
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

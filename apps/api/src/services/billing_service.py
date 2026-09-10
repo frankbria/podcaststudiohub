@@ -32,7 +32,7 @@ def _get_stripe_key() -> Optional[str]:
 	try:
 		from ..config import settings  # type: ignore[import]
 		return getattr(settings, "STRIPE_SECRET_KEY", None)
-	except Exception:
+	except Exception:  # noqa: BLE001 — a settings-import failure must read as 'Stripe not configured', which disables billing rather than running it with a half-resolved key
 		return None
 
 

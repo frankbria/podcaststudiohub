@@ -48,7 +48,7 @@ def _resolve_segment_files(
             if s3_client is None:
                 s3_client = boto3.client("s3")
             s3_client.download_file(settings.AWS_S3_BUCKET, s3_key, tmp)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — probing an optional snippet must never fail the composition; an unreadable snippet is skipped and the rest of the timeline still composes
             logger.warning(
                 "Composition: skipping %s segment — download of s3://%s/%s "
                 "failed: %s",
@@ -156,7 +156,7 @@ def merge_audio_snippets_task(
             "error": None
         }
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — retry classification for composition; NOTE the MaxRetriesExceededError branch returns instead of raising, so link_error never fires — tracked in #498, not fixed here
         logger.warning(
             f"Audio composition error for episode {episode_id}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"

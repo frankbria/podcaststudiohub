@@ -126,7 +126,7 @@ def validate_oauth_state(state: str) -> Optional[str]:
 	"""
 	try:
 		return _redis().getdel(f"{_OAUTH_STATE_PREFIX}{state}")
-	except Exception as exc:
+	except Exception as exc:  # noqa: BLE001 — this is a CSRF control, so it fails closed: a Redis error of any kind must reject the OAuth state rather than accept it (deliberately unlike rate_limiter, which fails open)
 		logger.warning("OAuth state validation failed (Redis error) — rejecting: %s", exc)
 		return None
 
@@ -679,7 +679,7 @@ async def _test_webhook_connection(db: AsyncSession, config: dict) -> dict:
 			"message": f"Webhook returned error status: {e.response.status_code}",
 			"error": f"http_error_{e.response.status_code}",
 		}
-	except Exception as e:
+	except Exception as e:  # noqa: BLE001 — a connection test reports reachability, so every failure is the same answer; only the exception type is logged because the webhook URL and its response can carry a caller secret
 		logger.warning("Webhook connection test failed: %s", type(e).__name__)
 		return {
 			"success": False,
@@ -732,7 +732,7 @@ async def _test_spotify_connection(
 			"message": "Spotify connection failed",
 			"error": "connection_failed",
 		}
-	except Exception as e:
+	except Exception as e:  # noqa: BLE001 — same as the webhook test: any non-HTTPStatusError failure means Spotify is unreachable, and the type alone is logged to keep tokens out of the log
 		logger.warning("Spotify connection test failed: %s", type(e).__name__)
 		return {
 			"success": False,
@@ -765,7 +765,7 @@ async def _test_apple_connection(db: AsyncSession, config: dict) -> dict:
 			"message": f"Apple Podcasts credentials verified for show ID: {show_id}",
 			"show_details": {"id": show_id},
 		}
-	except Exception as e:
+	except Exception as e:  # noqa: BLE001 — any decryption failure means the stored credential is unusable, and the type alone is logged because the message can embed ciphertext or the encryption key
 		logger.warning("Apple Podcasts credential validation failed: %s", type(e).__name__)
 		return {
 			"success": False,

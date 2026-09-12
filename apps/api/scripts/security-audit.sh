@@ -20,13 +20,19 @@ uv export --format requirements-txt --no-hashes --no-emit-project -o "$reqs" -q
 # every podcastfy bump.
 #
 # Reachability was assessed on 2026-08-13 (#446) — being capped is why we CAN'T fix
-# these; being unreachable is why it's acceptable not to. 24 of 25 open alerts are
-# unreachable (the 14 litellm ones are proxy-server issues and we never run a proxy;
+# these; being unreachable is why it's acceptable not to. 26 of 27 open alerts are
+# unreachable (the 16 litellm ones are proxy-server issues and we never run a proxy;
 # the rest are unused features). The exception is GHSA-3644-q5cj-c5c7 (langsmith),
 # which IS on the generation hot path via podcastfy's hub.pull() — accepted because
 # every pull is commit-pinned. Full classification and re-check triggers:
 #   docs/podcastfy-advisory-reachability.md
 # The import-graph claims are enforced by tests/test_dependency_reachability.py.
+# Added 2026-09-12: CVE-2026-12773 (improper authentication in
+# litellm/proxy/_experimental/mcp_server/auth/user_api_key_auth_mcp.py, MCP Proxy)
+# and CVE-2026-12795 (missing authentication in
+# litellm/proxy/management_endpoints/ui_sso.py, SSO debug flow). Same proxy-only
+# class as everything below.
+#
 # Added 2026-09-10: CVE-2026-12771 (M2M JWT improper authorization in
 # litellm/proxy/auth/user_api_key_auth.py) and CVE-2026-12772 (session expiration
 # in litellm/proxy/auth/login_utils.py's authenticate_user). Both are
@@ -59,6 +65,8 @@ uvx pip-audit -r "$reqs" --no-deps --disable-pip --strict \
   --ignore-vuln PYSEC-2026-2562 \
   --ignore-vuln CVE-2026-12771 \
   --ignore-vuln CVE-2026-12772 \
+  --ignore-vuln CVE-2026-12773 \
+  --ignore-vuln CVE-2026-12795 \
   `# litellm 1.80.0, all five capped by openai<2 as described above:` \
   `# 3478 fixed in 1.82.0, 3477 in 1.83.7, 3476 in 1.83.10, 3479 in 1.84.0,` \
   `# CVE-2026-37004 in 1.83.7 -- SSTI in the proxy's /prompts/test endpoint,` \

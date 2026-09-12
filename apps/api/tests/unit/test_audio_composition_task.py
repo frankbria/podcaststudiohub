@@ -154,23 +154,61 @@ class TestMergeAudioSnippetsTask:
 
 		timeline = [{"file_path": "/tmp/bad.mp3"}]
 
-		with patch.object(merge_audio_snippets_task, "update_state"), \
-			 patch_modules(mock_modules), \
-			 patch.object(
-				merge_audio_snippets_task,
-				"retry",
-				side_effect=merge_audio_snippets_task.MaxRetriesExceededError(),
-			 ):
+		# Retries already at the limit, and NO retry mock: the task must decide
+		# terminality itself and let the original exception propagate, which is
+		# what makes Celery record FAILED and fire link_error (#498).
+		merge_audio_snippets_task.push_request(
+			retries=merge_audio_snippets_task.max_retries,
+			called_directly=False,
+			id="exhausted-1",
+		)
+		try:
+			with patch.object(merge_audio_snippets_task, "update_state"), \
+				 patch_modules(mock_modules):
+				with pytest.raises(RuntimeError, match="FFmpeg not found"):
+					merge_audio_snippets_task.run(
+						episode_id="ep-004",
+						timeline=timeline,
+						output_path="/tmp/out.mp3",
+					)
+		finally:
+			merge_audio_snippets_task.pop_request()
 
-			# Must RAISE, not return a failure dict (#498). A returned dict makes
-			# Celery record the task as succeeded, so link_error never fires and
-			# the chain runs on to mark the episode complete with no audio.
-			with pytest.raises(RuntimeError, match="FFmpeg not found"):
-				merge_audio_snippets_task.run(
-					episode_id="ep-004",
-					timeline=timeline,
-					output_path="/tmp/out.mp3",
-				)
+
+class TestRealRetryExhaustion:
+	"""The REAL exhaustion path, with Celery's own retry() rather than a mock.
+
+	Every other test in this file patches `retry` to raise
+	MaxRetriesExceededError. Celery never raises that when retry() is given an
+	`exc=` — it calls `raise_with_context(exc)` and re-raises the original. So
+	those tests model a branch that cannot execute in production, which is how
+	the dead `return {"status": "failed"}` survived (#498).
+	"""
+
+	def test_exhausted_retries_propagate_the_original_exception(self):
+		"""With retries at the limit the task fails, so link_error fires."""
+		mock_cls, mock_modules = _mock_pydub_modules()
+		mock_cls.empty.return_value = _make_mock_audio_segment()
+		mock_cls.from_file.side_effect = RuntimeError("ffmpeg exploded")
+		timeline = [{"file_path": "/tmp/seg.mp3"}]
+
+		# No retry mock: real Celery decides, exactly as a worker would.
+		merge_audio_snippets_task.push_request(
+			retries=merge_audio_snippets_task.max_retries,
+			called_directly=False,
+			id="real-exhaust-1",
+		)
+		try:
+			with patch.object(merge_audio_snippets_task, "update_state"), \
+				 patch_modules(mock_modules):
+				with pytest.raises(RuntimeError, match="ffmpeg exploded"):
+					merge_audio_snippets_task.run(
+						episode_id="ep-real-1",
+						timeline=timeline,
+						output_path="/tmp/out.mp3",
+					)
+		finally:
+			merge_audio_snippets_task.pop_request()
 
 
 class TestS3BackedSegments:
@@ -291,25 +329,28 @@ class TestS3BackedSegments:
 		mock_s3 = MagicMock()
 		mock_s3.download_file.side_effect = fake_download
 
-		with patch.object(merge_audio_snippets_task, "update_state"), \
-			 patch_modules(mock_modules), \
-			 patch("src.tasks.audio_composition.boto3") as mock_boto3, \
-			 patch("src.tasks.audio_composition.settings") as mock_settings, \
-			 patch.object(
-				merge_audio_snippets_task,
-				"retry",
-				side_effect=merge_audio_snippets_task.MaxRetriesExceededError(),
-			 ):
-			mock_boto3.client.return_value = mock_s3
-			mock_settings.AWS_S3_BUCKET = "test-bucket"
+		merge_audio_snippets_task.push_request(
+			retries=merge_audio_snippets_task.max_retries,
+			called_directly=False,
+			id="exhausted-2",
+		)
+		try:
+			with patch.object(merge_audio_snippets_task, "update_state"), \
+				 patch_modules(mock_modules), \
+				 patch("src.tasks.audio_composition.boto3") as mock_boto3, \
+				 patch("src.tasks.audio_composition.settings") as mock_settings:
+				mock_boto3.client.return_value = mock_s3
+				mock_settings.AWS_S3_BUCKET = "test-bucket"
 
-			# Raises now rather than returning a failure dict (#498); the finally
-			# block must still run, which is the whole point of this test.
-			with pytest.raises(RuntimeError, match="corrupt audio"):
-				merge_audio_snippets_task.run(
-					episode_id="ep-376c",
-					timeline=timeline,
-					output_path=str(tmp_path / "out.mp3"),
-				)
+				# The task raises on the terminal path (#498); the finally block
+				# must still run, which is the whole point of this test.
+				with pytest.raises(RuntimeError, match="corrupt audio"):
+					merge_audio_snippets_task.run(
+						episode_id="ep-376c",
+						timeline=timeline,
+						output_path=str(tmp_path / "out.mp3"),
+					)
+		finally:
+			merge_audio_snippets_task.pop_request()
 
 		assert downloaded and not os.path.exists(downloaded[0])

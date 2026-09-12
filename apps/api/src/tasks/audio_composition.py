@@ -161,21 +161,20 @@ def merge_audio_snippets_task(
             f"Audio composition error for episode {episode_id}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
         )
-        try:
-            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
-        except self.MaxRetriesExceededError:
+        # Decide terminality here rather than catching MaxRetriesExceededError.
+        # Celery raises that only when retry() is called WITHOUT exc=; given an
+        # exc it does `raise_with_context(exc)` instead (Task.retry, celery 5.6),
+        # so that except clause never fired and the `return {"status": "failed"}`
+        # it guarded was dead code (#498). Letting the original exception
+        # propagate is what makes Celery record the task FAILED, fire link_error
+        # and stop the chain. The finally block below still runs on this path.
+        if self.request.retries >= self.max_retries:
             logger.error(
                 f"Audio composition failed after {self.max_retries} retries "
                 f"for episode {episode_id}: {e}"
             )
-            # RAISE, do not return a failure dict (#498). Returning makes Celery
-            # record the task as succeeded: link_error never fires, the chain runs
-            # on to upload a file that was never written, and on_workflow_complete
-            # marks the episode 'complete' with no audio. The ORIGINAL exception
-            # is re-raised rather than MaxRetriesExceededError so the message
-            # on_workflow_failure recovers from the result backend names the real
-            # cause. The finally block below still runs on this path.
-            raise e
+            raise
+        raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
     finally:
         # Downloaded snippet tempfiles are per-attempt artifacts: remove them on
         # success, failure, AND the retry path (the next attempt re-downloads).

@@ -16,6 +16,7 @@ import pytest
 from tests.module_patching import patch_modules
 
 from botocore.exceptions import ClientError
+from celery.exceptions import Retry
 
 
 def _mock_podcastfy_modules():
@@ -37,8 +38,22 @@ def _mock_podcastfy_modules():
 
 
 def _make_celery_retry_exception(task):
-	"""Return a MaxRetriesExceededError for the given task."""
+	"""Return a MaxRetriesExceededError for the given task.
+
+	NOTE: this does not match real Celery when ``retry(exc=...)`` is given an
+	exception — it calls ``raise_with_context(exc)`` and re-raises the original
+	instead, so ``except MaxRetriesExceededError`` never fires. The tasks that
+	still rely on that dead branch are tracked in #520; the two fixed by #498
+	use ``_scheduled_retry`` below.
+	"""
 	return task.MaxRetriesExceededError()
+
+
+def _scheduled_retry(task=None):
+	"""What a real ``self.retry(exc=...)`` raises when it DOES schedule a retry."""
+	from celery.exceptions import Retry
+
+	return Retry("scheduled", None)
 
 
 def _make_client_error(code: str, message: str = "AWS error") -> ClientError:
@@ -89,7 +104,7 @@ class TestUploadToS3TaskRetry:
 			patch.object(
 				upload_to_s3_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(upload_to_s3_task),
+				side_effect=_scheduled_retry(upload_to_s3_task),
 			) as mock_retry,
 		):
 			mock_settings.AWS_REGION = "us-east-1"
@@ -100,7 +115,7 @@ class TestUploadToS3TaskRetry:
 
 			# Raises now that retry exhaustion fails the task (#498); the retry
 			# behaviour under test is unchanged.
-			with pytest.raises(ClientError):
+			with pytest.raises(Retry):
 				upload_to_s3_task.run(
 					file_path="/tmp/audio.mp3",
 					s3_key="test/key.mp3",
@@ -121,7 +136,7 @@ class TestUploadToS3TaskRetry:
 			patch.object(
 				upload_to_s3_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(upload_to_s3_task),
+				side_effect=_scheduled_retry(upload_to_s3_task),
 			) as mock_retry,
 		):
 			mock_settings.AWS_REGION = "us-east-1"
@@ -132,7 +147,7 @@ class TestUploadToS3TaskRetry:
 
 			# Raises now that retry exhaustion fails the task (#498); the retry
 			# behaviour under test is unchanged.
-			with pytest.raises(RuntimeError, match="Connection timeout"):
+			with pytest.raises(Retry):
 				upload_to_s3_task.run(
 					file_path="/tmp/audio.mp3",
 					s3_key="test/key.mp3",
@@ -153,7 +168,7 @@ class TestUploadToS3TaskRetry:
 			patch.object(
 				upload_to_s3_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(upload_to_s3_task),
+				side_effect=_scheduled_retry(upload_to_s3_task),
 			) as mock_retry,
 		):
 			mock_settings.AWS_REGION = "us-east-1"
@@ -164,7 +179,7 @@ class TestUploadToS3TaskRetry:
 
 			# Raises now that retry exhaustion fails the task (#498); the retry
 			# behaviour under test is unchanged.
-			with pytest.raises(RuntimeError, match="Timeout"):
+			with pytest.raises(Retry):
 				upload_to_s3_task.run(
 					file_path="/tmp/audio.mp3",
 					s3_key="test/key.mp3",
@@ -187,7 +202,7 @@ class TestUploadToS3TaskRetry:
 			patch.object(
 				upload_to_s3_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(upload_to_s3_task),
+				side_effect=_scheduled_retry(upload_to_s3_task),
 			) as mock_retry,
 		):
 			mock_settings.AWS_REGION = "us-east-1"
@@ -199,7 +214,7 @@ class TestUploadToS3TaskRetry:
 
 			# Raises now that retry exhaustion fails the task (#498); the retry
 			# behaviour under test is unchanged.
-			with pytest.raises(RuntimeError, match="Timeout"):
+			with pytest.raises(Retry):
 				upload_to_s3_task.run(
 					file_path="/tmp/audio.mp3",
 					s3_key="test/key.mp3",
@@ -278,13 +293,13 @@ class TestMergeAudioSnippetsTaskRetry:
 			patch.object(
 				merge_audio_snippets_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(merge_audio_snippets_task),
+				side_effect=_scheduled_retry(merge_audio_snippets_task),
 			) as mock_retry,
 		):
 			merge_audio_snippets_task.request.update(retries=0)
 			# Raises now that retry exhaustion fails the task (#498); the retry
 			# behaviour under test is unchanged.
-			with pytest.raises(RuntimeError, match="FFmpeg crashed"):
+			with pytest.raises(Retry):
 				merge_audio_snippets_task.run(
 					episode_id="ep-retry-01",
 					timeline=timeline,
@@ -307,13 +322,13 @@ class TestMergeAudioSnippetsTaskRetry:
 			patch.object(
 				merge_audio_snippets_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(merge_audio_snippets_task),
+				side_effect=_scheduled_retry(merge_audio_snippets_task),
 			) as mock_retry,
 		):
 			merge_audio_snippets_task.request.update(retries=0)
 			# Raises now that retry exhaustion fails the task (#498); the retry
 			# behaviour under test is unchanged.
-			with pytest.raises(RuntimeError, match="Disk full"):
+			with pytest.raises(Retry):
 				merge_audio_snippets_task.run(
 					episode_id="ep-backoff-01",
 					timeline=[{"file_path": "/tmp/seg.mp3"}],

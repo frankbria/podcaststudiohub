@@ -11,6 +11,8 @@ Verifies that:
 import types
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tests.module_patching import patch_modules
 
 from botocore.exceptions import ClientError
@@ -83,6 +85,7 @@ class TestUploadToS3TaskRetry:
 			patch("src.tasks.s3_upload.settings") as mock_settings,
 			patch("src.tasks.s3_upload.boto3") as mock_boto,
 			patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
+			patch.object(upload_to_s3_task, "update_state"),
 			patch.object(
 				upload_to_s3_task,
 				"retry",
@@ -95,14 +98,16 @@ class TestUploadToS3TaskRetry:
 			mock_boto.client.return_value = mock_s3
 			upload_to_s3_task.request.update(retries=0)
 
-			result = upload_to_s3_task.run(
-				file_path="/tmp/audio.mp3",
-				s3_key="test/key.mp3",
-				bucket_name="my-bucket",
-			)
+			# Raises now that retry exhaustion fails the task (#498); the retry
+			# behaviour under test is unchanged.
+			with pytest.raises(ClientError):
+				upload_to_s3_task.run(
+					file_path="/tmp/audio.mp3",
+					s3_key="test/key.mp3",
+					bucket_name="my-bucket",
+				)
 
 		mock_retry.assert_called_once()
-		assert result["status"] == "failed"
 
 	def test_generic_exception_calls_retry(self):
 		"""Generic exceptions must trigger self.retry() with backoff."""
@@ -112,6 +117,7 @@ class TestUploadToS3TaskRetry:
 			patch("src.tasks.s3_upload.settings") as mock_settings,
 			patch("src.tasks.s3_upload.boto3") as mock_boto,
 			patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
+			patch.object(upload_to_s3_task, "update_state"),
 			patch.object(
 				upload_to_s3_task,
 				"retry",
@@ -124,14 +130,16 @@ class TestUploadToS3TaskRetry:
 			mock_boto.client.return_value = mock_s3
 			upload_to_s3_task.request.update(retries=0)
 
-			result = upload_to_s3_task.run(
-				file_path="/tmp/audio.mp3",
-				s3_key="test/key.mp3",
-				bucket_name="my-bucket",
-			)
+			# Raises now that retry exhaustion fails the task (#498); the retry
+			# behaviour under test is unchanged.
+			with pytest.raises(RuntimeError, match="Connection timeout"):
+				upload_to_s3_task.run(
+					file_path="/tmp/audio.mp3",
+					s3_key="test/key.mp3",
+					bucket_name="my-bucket",
+				)
 
 		mock_retry.assert_called_once()
-		assert result["status"] == "failed"
 
 	def test_retry_called_with_countdown(self):
 		"""self.retry() must be called with a countdown (exponential backoff)."""
@@ -141,6 +149,7 @@ class TestUploadToS3TaskRetry:
 			patch("src.tasks.s3_upload.settings") as mock_settings,
 			patch("src.tasks.s3_upload.boto3") as mock_boto,
 			patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
+			patch.object(upload_to_s3_task, "update_state"),
 			patch.object(
 				upload_to_s3_task,
 				"retry",
@@ -153,11 +162,14 @@ class TestUploadToS3TaskRetry:
 			mock_boto.client.return_value = mock_s3
 			upload_to_s3_task.request.update(retries=0)
 
-			upload_to_s3_task.run(
-				file_path="/tmp/audio.mp3",
-				s3_key="test/key.mp3",
-				bucket_name="my-bucket",
-			)
+			# Raises now that retry exhaustion fails the task (#498); the retry
+			# behaviour under test is unchanged.
+			with pytest.raises(RuntimeError, match="Timeout"):
+				upload_to_s3_task.run(
+					file_path="/tmp/audio.mp3",
+					s3_key="test/key.mp3",
+					bucket_name="my-bucket",
+				)
 
 		call_kwargs = mock_retry.call_args.kwargs
 		assert "countdown" in call_kwargs
@@ -171,6 +183,7 @@ class TestUploadToS3TaskRetry:
 			patch("src.tasks.s3_upload.settings") as mock_settings,
 			patch("src.tasks.s3_upload.boto3") as mock_boto,
 			patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
+			patch.object(upload_to_s3_task, "update_state"),
 			patch.object(
 				upload_to_s3_task,
 				"retry",
@@ -184,11 +197,14 @@ class TestUploadToS3TaskRetry:
 			# Simulate second retry (retries already attempted=1)
 			upload_to_s3_task.request.update(retries=1)
 
-			upload_to_s3_task.run(
-				file_path="/tmp/audio.mp3",
-				s3_key="test/key.mp3",
-				bucket_name="my-bucket",
-			)
+			# Raises now that retry exhaustion fails the task (#498); the retry
+			# behaviour under test is unchanged.
+			with pytest.raises(RuntimeError, match="Timeout"):
+				upload_to_s3_task.run(
+					file_path="/tmp/audio.mp3",
+					s3_key="test/key.mp3",
+					bucket_name="my-bucket",
+				)
 
 		call_kwargs = mock_retry.call_args.kwargs
 		assert call_kwargs["countdown"] == 10  # Second retry: 10 seconds
@@ -266,14 +282,16 @@ class TestMergeAudioSnippetsTaskRetry:
 			) as mock_retry,
 		):
 			merge_audio_snippets_task.request.update(retries=0)
-			result = merge_audio_snippets_task.run(
-				episode_id="ep-retry-01",
-				timeline=timeline,
-				output_path="/tmp/out.mp3",
-			)
+			# Raises now that retry exhaustion fails the task (#498); the retry
+			# behaviour under test is unchanged.
+			with pytest.raises(RuntimeError, match="FFmpeg crashed"):
+				merge_audio_snippets_task.run(
+					episode_id="ep-retry-01",
+					timeline=timeline,
+					output_path="/tmp/out.mp3",
+				)
 
 		mock_retry.assert_called_once()
-		assert result["status"] == "failed"
 
 	def test_retry_countdown_on_first_attempt(self):
 		"""First retry countdown must be 5 seconds."""
@@ -293,11 +311,14 @@ class TestMergeAudioSnippetsTaskRetry:
 			) as mock_retry,
 		):
 			merge_audio_snippets_task.request.update(retries=0)
-			merge_audio_snippets_task.run(
-				episode_id="ep-backoff-01",
-				timeline=[{"file_path": "/tmp/seg.mp3"}],
-				output_path="/tmp/out.mp3",
-			)
+			# Raises now that retry exhaustion fails the task (#498); the retry
+			# behaviour under test is unchanged.
+			with pytest.raises(RuntimeError, match="Disk full"):
+				merge_audio_snippets_task.run(
+					episode_id="ep-backoff-01",
+					timeline=[{"file_path": "/tmp/seg.mp3"}],
+					output_path="/tmp/out.mp3",
+				)
 
 		assert mock_retry.call_args.kwargs["countdown"] == 5
 

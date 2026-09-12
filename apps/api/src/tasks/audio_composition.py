@@ -156,25 +156,25 @@ def merge_audio_snippets_task(
             "error": None
         }
 
-    except Exception as e:  # noqa: BLE001 — retry classification for composition; NOTE the MaxRetriesExceededError branch returns instead of raising, so link_error never fires — tracked in #498, not fixed here
+    except Exception as e:  # noqa: BLE001 — this is the task's single retry-classification point: pydub, ffmpeg and boto all raise their own unrelated types, and every one must become either another attempt or a task failure the chain can see
         logger.warning(
             f"Audio composition error for episode {episode_id}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
         )
-        try:
-            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
-        except self.MaxRetriesExceededError:
+        # Decide terminality here rather than catching MaxRetriesExceededError.
+        # Celery raises that only when retry() is called WITHOUT exc=; given an
+        # exc it does `raise_with_context(exc)` instead (Task.retry, celery 5.6),
+        # so that except clause never fired and the `return {"status": "failed"}`
+        # it guarded was dead code (#498). Letting the original exception
+        # propagate is what makes Celery record the task FAILED, fire link_error
+        # and stop the chain. The finally block below still runs on this path.
+        if self.request.retries >= self.max_retries:
             logger.error(
                 f"Audio composition failed after {self.max_retries} retries "
                 f"for episode {episode_id}: {e}"
             )
-            return {
-                "status": "failed",
-                "output_path": None,
-                "duration_seconds": 0,
-                "file_size_bytes": 0,
-                "error": str(e)
-            }
+            raise
+        raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
     finally:
         # Downloaded snippet tempfiles are per-attempt artifacts: remove them on
         # success, failure, AND the retry path (the next attempt re-downloads).

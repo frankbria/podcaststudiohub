@@ -392,6 +392,7 @@ class TestOnWorkflowComplete:
 		"""Episode.generation_status is set to 'complete'."""
 		episode_id = str(uuid.uuid4())
 		episode = _mock_episode(episode_id)
+		episode.s3_url = "https://bucket.s3.amazonaws.com/podcasts/ep.mp3"
 		mock_ctx, mock_session = _make_sync_session(episode)
 
 		from src.tasks.callbacks import on_workflow_complete
@@ -409,6 +410,7 @@ class TestOnWorkflowComplete:
 		"""All-success distribution keeps the terminal status 'complete' (issue #300)."""
 		episode_id = str(uuid.uuid4())
 		episode = _mock_episode(episode_id)
+		episode.s3_url = "https://bucket.s3.amazonaws.com/podcasts/ep.mp3"
 		episode.generation_progress = {
 			"distribution": {
 				"spotify": {"status": "complete"},
@@ -429,6 +431,7 @@ class TestOnWorkflowComplete:
 		"""A failed platform yields the distinguishable 'distribution_failed' status (issue #300)."""
 		episode_id = str(uuid.uuid4())
 		episode = _mock_episode(episode_id)
+		episode.s3_url = "https://bucket.s3.amazonaws.com/podcasts/ep.mp3"
 		episode.generation_progress = {
 			"distribution": {
 				"spotify": {"status": "complete"},
@@ -450,6 +453,7 @@ class TestOnWorkflowComplete:
 		"""A retried run that fully succeeds drops the prior failed_platforms (issue #300)."""
 		episode_id = str(uuid.uuid4())
 		episode = _mock_episode(episode_id)
+		episode.s3_url = "https://bucket.s3.amazonaws.com/podcasts/ep.mp3"
 		episode.generation_progress = {
 			"failed_platforms": ["apple_podcasts"],
 			"distribution": {
@@ -483,6 +487,7 @@ class TestOnWorkflowComplete:
 		"""A fully successful workflow triggers an RSS feed refresh (issue #382)."""
 		episode_id = str(uuid.uuid4())
 		episode = _mock_episode(episode_id)
+		episode.s3_url = "https://bucket.s3.amazonaws.com/podcasts/ep.mp3"
 		mock_ctx, _ = _make_sync_session(episode)
 
 		from src.tasks.callbacks import on_workflow_complete
@@ -496,6 +501,7 @@ class TestOnWorkflowComplete:
 		"""distribution_failed episodes are not 'complete', so no refresh (issue #382)."""
 		episode_id = str(uuid.uuid4())
 		episode = _mock_episode(episode_id)
+		episode.s3_url = "https://bucket.s3.amazonaws.com/podcasts/ep.mp3"
 		episode.generation_progress = {
 			"distribution": {"spotify": {"status": "failed", "error": "auth failed"}}
 		}
@@ -524,6 +530,7 @@ class TestOnWorkflowComplete:
 		"""A refresh blow-up must not raise or unset the committed status (issue #382)."""
 		episode_id = str(uuid.uuid4())
 		episode = _mock_episode(episode_id)
+		episode.s3_url = "https://bucket.s3.amazonaws.com/podcasts/ep.mp3"
 		mock_ctx, mock_session = _make_sync_session(episode)
 		mock_rss_refresh.side_effect = RuntimeError("S3 unreachable")
 
@@ -539,6 +546,64 @@ class TestOnWorkflowComplete:
 # ---------------------------------------------------------------------------
 # on_workflow_failure
 # ---------------------------------------------------------------------------
+
+	def test_never_marks_complete_without_an_s3_url(self):
+		"""An episode with no s3_url was never uploaded — it cannot be 'complete' (#498).
+
+		This is the chain-level invariant. Before #498, merge_audio_snippets_task
+		and upload_to_s3_task RETURNED a failure dict on retry exhaustion instead
+		of raising, so Celery recorded success, link_error never fired, the chain
+		ran on, and this callback marked a composition-only episode 'complete'
+		with no audio. The tasks now raise, and this guard is the second line of
+		defence: no future path may produce a complete episode with nothing to play.
+		"""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		assert episode.s3_url is None
+		mock_ctx, mock_session = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		assert episode.generation_status != "complete"
+		assert episode.generation_status == "failed"
+		assert episode.generation_progress.get("status") == "failed"
+
+	def test_missing_s3_url_records_why_it_is_not_complete(self):
+		"""The recorded reason must name the missing artifact, not just 'failed'."""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		mock_ctx, _ = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		assert "s3_url" in episode.generation_progress.get("error_message", "")
+
+	def test_missing_s3_url_does_not_refresh_the_rss_feed(self, mock_rss_refresh):
+		"""A failed episode must not be published to the feed (#382 + #498).
+
+		Uses the autouse mock_rss_refresh fixture rather than patching
+		src.tasks.rss_refresh: callbacks.py binds the name at import
+		(`from src.tasks.rss_refresh import refresh_project_rss_feed`), so
+		patching the source module leaves the bound reference untouched and the
+		assertion would pass whether or not the feed was refreshed.
+		"""
+		episode_id = str(uuid.uuid4())
+		episode = _mock_episode(episode_id)
+		mock_ctx, _ = _make_sync_session(episode)
+
+		from src.tasks.callbacks import on_workflow_complete
+
+		with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+			_invoke_task(on_workflow_complete, result={}, episode_id=episode_id)
+
+		mock_rss_refresh.assert_not_called()
+
 
 class TestOnWorkflowFailure:
 	"""Tests for the workflow error callback."""

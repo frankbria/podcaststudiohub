@@ -146,37 +146,27 @@ def upload_to_s3_task(
             f"Retryable S3 error ({error_code}) for {file_path}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
         )
-        try:
-            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
-        except self.MaxRetriesExceededError:
+        # Decide terminality here rather than catching MaxRetriesExceededError.
+        # Celery only raises that when retry() is called WITHOUT exc=; with an
+        # exc it does `raise_with_context(exc)` instead (Task.retry, celery 5.6),
+        # so `except self.MaxRetriesExceededError` never fired and the cleanup
+        # that used to live inside it never ran — leaking the temp artifact on
+        # every exhausted upload (#498).
+        if self.request.retries >= self.max_retries:
             logger.error(f"S3 upload failed after {self.max_retries} retries for {file_path}: {e}")
-            # Retries exhausted — no further retry will read the file, so the temp
-            # artifact is disposable. Without this, the failed tail leaks /tmp too.
+            # Terminal: no further attempt will read the file.
             _cleanup_temp_file(file_path)
-            return {
-                "status": "failed",
-                "s3_key": None,
-                "s3_url": None,
-                "file_size_bytes": 0,
-                "error": str(e)
-            }
-    except Exception as e:  # noqa: BLE001 — retry classification for upload; NOTE the MaxRetriesExceededError branch returns instead of raising, so link_error never fires — tracked in #498, not fixed here
+            raise
+        raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
+    except Exception as e:  # noqa: BLE001 — this is the task's catch-all retry-classification point: boto, the filesystem and the network raise unrelated types, and each must become another attempt or a task failure the chain can see
         # Retry on any other transient failure
         logger.warning(
             f"S3 upload error for {file_path}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
         )
-        try:
-            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
-        except self.MaxRetriesExceededError:
+        # Same terminality check as the ClientError branch above (#498).
+        if self.request.retries >= self.max_retries:
             logger.error(f"S3 upload failed after {self.max_retries} retries for {file_path}: {e}")
-            # Retries exhausted — no further retry will read the file, so the temp
-            # artifact is disposable. Without this, the failed tail leaks /tmp too.
             _cleanup_temp_file(file_path)
-            return {
-                "status": "failed",
-                "s3_key": None,
-                "s3_url": None,
-                "file_size_bytes": 0,
-                "error": str(e)
-            }
+            raise
+        raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))

@@ -153,14 +153,12 @@ def upload_to_s3_task(
             # Retries exhausted — no further retry will read the file, so the temp
             # artifact is disposable. Without this, the failed tail leaks /tmp too.
             _cleanup_temp_file(file_path)
-            return {
-                "status": "failed",
-                "s3_key": None,
-                "s3_url": None,
-                "file_size_bytes": 0,
-                "error": str(e)
-            }
-    except Exception as e:  # noqa: BLE001 — retry classification for upload; NOTE the MaxRetriesExceededError branch returns instead of raising, so link_error never fires — tracked in #498, not fixed here
+            # RAISE, do not return a failure dict (#498). A returned dict is a
+            # SUCCESS to Celery, so link_error never fires and the chain proceeds
+            # to mark the episode 'complete' with no s3_url. The original
+            # exception is re-raised so the recorded failure names the real cause.
+            raise e
+    except Exception as e:  # noqa: BLE001 — this is the task's catch-all retry-classification point: boto, the filesystem and the network raise unrelated types, and each must become another attempt or a task failure the chain can see
         # Retry on any other transient failure
         logger.warning(
             f"S3 upload error for {file_path}, "
@@ -173,10 +171,7 @@ def upload_to_s3_task(
             # Retries exhausted — no further retry will read the file, so the temp
             # artifact is disposable. Without this, the failed tail leaks /tmp too.
             _cleanup_temp_file(file_path)
-            return {
-                "status": "failed",
-                "s3_key": None,
-                "s3_url": None,
-                "file_size_bytes": 0,
-                "error": str(e)
-            }
+            # RAISE, not return (#498) — see the ClientError branch above. This is
+            # the branch a generic failure (a vanished file, a socket error) takes,
+            # and it is the one the chain actually hits most often.
+            raise e

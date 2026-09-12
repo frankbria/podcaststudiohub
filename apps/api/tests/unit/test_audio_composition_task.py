@@ -146,8 +146,8 @@ class TestMergeAudioSnippetsTask:
 
 		empty_seg.export.assert_not_called()
 
-	def test_error_path_returns_correct_shape(self):
-		"""When from_file raises, task retries and returns failed status after exhaustion."""
+	def test_error_path_raises_after_retries_are_exhausted(self):
+		"""When from_file keeps raising, the task fails rather than returning (#498)."""
 		mock_cls, mock_modules = _mock_pydub_modules()
 		mock_cls.empty.return_value = _make_mock_audio_segment()
 		mock_cls.from_file.side_effect = RuntimeError("FFmpeg not found")
@@ -162,17 +162,15 @@ class TestMergeAudioSnippetsTask:
 				side_effect=merge_audio_snippets_task.MaxRetriesExceededError(),
 			 ):
 
-			result = merge_audio_snippets_task.run(
-				episode_id="ep-004",
-				timeline=timeline,
-				output_path="/tmp/out.mp3",
-			)
-
-		assert result["status"] == "failed"
-		assert result["output_path"] is None
-		assert result["duration_seconds"] == 0
-		assert result["file_size_bytes"] == 0
-		assert "FFmpeg not found" in result["error"]
+			# Must RAISE, not return a failure dict (#498). A returned dict makes
+			# Celery record the task as succeeded, so link_error never fires and
+			# the chain runs on to mark the episode complete with no audio.
+			with pytest.raises(RuntimeError, match="FFmpeg not found"):
+				merge_audio_snippets_task.run(
+					episode_id="ep-004",
+					timeline=timeline,
+					output_path="/tmp/out.mp3",
+				)
 
 
 class TestS3BackedSegments:
@@ -305,11 +303,13 @@ class TestS3BackedSegments:
 			mock_boto3.client.return_value = mock_s3
 			mock_settings.AWS_S3_BUCKET = "test-bucket"
 
-			result = merge_audio_snippets_task.run(
-				episode_id="ep-376c",
-				timeline=timeline,
-				output_path=str(tmp_path / "out.mp3"),
-			)
+			# Raises now rather than returning a failure dict (#498); the finally
+			# block must still run, which is the whole point of this test.
+			with pytest.raises(RuntimeError, match="corrupt audio"):
+				merge_audio_snippets_task.run(
+					episode_id="ep-376c",
+					timeline=timeline,
+					output_path=str(tmp_path / "out.mp3"),
+				)
 
-		assert result["status"] == "failed"
 		assert downloaded and not os.path.exists(downloaded[0])

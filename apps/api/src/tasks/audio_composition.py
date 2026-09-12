@@ -156,7 +156,7 @@ def merge_audio_snippets_task(
             "error": None
         }
 
-    except Exception as e:  # noqa: BLE001 — retry classification for composition; NOTE the MaxRetriesExceededError branch returns instead of raising, so link_error never fires — tracked in #498, not fixed here
+    except Exception as e:  # noqa: BLE001 — this is the task's single retry-classification point: pydub, ffmpeg and boto all raise their own unrelated types, and every one must become either another attempt or a task failure the chain can see
         logger.warning(
             f"Audio composition error for episode {episode_id}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
@@ -168,13 +168,14 @@ def merge_audio_snippets_task(
                 f"Audio composition failed after {self.max_retries} retries "
                 f"for episode {episode_id}: {e}"
             )
-            return {
-                "status": "failed",
-                "output_path": None,
-                "duration_seconds": 0,
-                "file_size_bytes": 0,
-                "error": str(e)
-            }
+            # RAISE, do not return a failure dict (#498). Returning makes Celery
+            # record the task as succeeded: link_error never fires, the chain runs
+            # on to upload a file that was never written, and on_workflow_complete
+            # marks the episode 'complete' with no audio. The ORIGINAL exception
+            # is re-raised rather than MaxRetriesExceededError so the message
+            # on_workflow_failure recovers from the result backend names the real
+            # cause. The finally block below still runs on this path.
+            raise e
     finally:
         # Downloaded snippet tempfiles are per-attempt artifacts: remove them on
         # success, failure, AND the retry path (the next attempt re-downloads).

@@ -10,6 +10,7 @@ import tempfile
 import uuid
 from unittest.mock import MagicMock, patch
 
+import pytest
 from botocore.exceptions import ClientError
 from sqlalchemy.orm.exc import StaleDataError
 
@@ -155,15 +156,15 @@ class TestUploadToS3Task:
             mock_boto.client.return_value = mock_s3
             upload_to_s3_task.request.update(retries=3)
 
-            result = self._invoke_upload(
-                file_path="/tmp/audio.mp3",
-                s3_key="test/key.mp3",
-                bucket_name="my-bucket",
-            )
-
-        assert result["status"] == "failed"
-        assert result["s3_url"] is None
-        assert "Connection timeout" in result["error"]
+            # Raises rather than returning a failure dict (#498): a returned dict
+            # makes Celery record success, so link_error never fires and the
+            # chain marks the episode complete with no s3_url.
+            with pytest.raises(RuntimeError, match="Connection timeout"):
+                self._invoke_upload(
+                    file_path="/tmp/audio.mp3",
+                    s3_key="test/key.mp3",
+                    bucket_name="my-bucket",
+                )
 
     def test_upload_passes_content_type(self):
         """upload_to_s3_task passes content_type in ExtraArgs to S3."""
@@ -818,8 +819,8 @@ class TestNonRetryableS3Errors:
                     bucket_name="nonexistent-bucket",
                 )
 
-    def test_retryable_client_error_returns_failed_dict_after_max_retries(self):
-        """Retryable S3 errors return a failed dict after all retries are exhausted."""
+    def test_retryable_client_error_raises_after_max_retries(self):
+        """Retryable S3 errors RAISE once retries are exhausted, so link_error fires (#498)."""
         from src.tasks.s3_upload import upload_to_s3_task
 
         error_response = {"Error": {"Code": "InternalError", "Message": "Internal error"}}
@@ -841,14 +842,17 @@ class TestNonRetryableS3Errors:
             mock_boto.client.return_value = mock_s3
             upload_to_s3_task.request.update(retries=3)
 
-            result = self._invoke_upload(
-                file_path="/tmp/audio.mp3",
-                s3_key="test/key.mp3",
-                bucket_name="my-bucket",
-            )
+            with pytest.raises(ClientError) as exc_info:
+                self._invoke_upload(
+                    file_path="/tmp/audio.mp3",
+                    s3_key="test/key.mp3",
+                    bucket_name="my-bucket",
+                )
 
-        assert result["status"] == "failed"
-        assert "InternalError" in result["error"]
+        # The ORIGINAL error propagates, not MaxRetriesExceededError: the recorded
+        # failure message must name the real cause, since on_workflow_failure
+        # recovers it from the result backend to write into generation_progress.
+        assert "InternalError" in str(exc_info.value)
 
 
 # ============================================================================
@@ -1047,13 +1051,15 @@ class TestTempFileCleanup:
                 mock_boto.client.return_value = mock_s3
                 upload_to_s3_task.request.update(retries=3)
 
-                result = self._invoke_upload(
-                    file_path=path,
-                    s3_key="test/key.mp3",
-                    bucket_name="my-bucket",
-                )
+                # Raises now (#498); the temp-file cleanup must still happen on
+                # that path, which is what this test exists to prove.
+                with pytest.raises(RuntimeError, match="Connection timeout"):
+                    self._invoke_upload(
+                        file_path=path,
+                        s3_key="test/key.mp3",
+                        bucket_name="my-bucket",
+                    )
 
-            assert result["status"] == "failed"
             assert not os.path.exists(path), "temp file should be deleted after terminal failure"
         finally:
             if os.path.exists(path):

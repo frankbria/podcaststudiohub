@@ -364,6 +364,32 @@ def on_workflow_complete(self: Task, result: Dict[str, Any], episode_id: str) ->
 				return
 
 			current_progress = dict(episode.generation_progress or {})
+
+			# An episode with no s3_url was never uploaded, so there is nothing to
+			# play and it must never reach 'complete' (#498). Every workflow
+			# includes the upload stage (build_generation_workflow always appends
+			# it), so reaching here without one means a stage failed without
+			# failing the chain. The tasks now raise on retry exhaustion, which
+			# stops the chain before this callback runs; this is the second line
+			# of defence, so a future stage that returns a failure dict instead of
+			# raising cannot silently resurrect the bug.
+			if not episode.s3_url:
+				episode.generation_status = "failed"
+				current_progress["status"] = "failed"
+				current_progress["error_message"] = (
+					"Workflow reported success but the episode has no s3_url — "
+					"the upload stage did not complete."
+				)
+				current_progress["completed_at"] = _utcnow_iso()
+				episode.generation_progress = current_progress
+				db.commit()
+				logger.error(
+					"Episode %s reached on_workflow_complete with no s3_url; "
+					"marked failed instead of complete",
+					episode_id,
+				)
+				return
+
 			distribution = current_progress.get("distribution", {})
 			failed_platforms = [
 				platform

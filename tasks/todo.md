@@ -1,58 +1,50 @@
-# [P2.4] #489 — Adopt the react-hooks 7 rules (set-state-in-effect / incompatible-library)
+# [P2.5] #490 — Flaky `test_list_pagination_page_size`: root cause + deterministic paging
 
-Branch: `feature/issue-489-adopt-react-hooks-7-rules`. Plan source: self-authored (issue has DoD, no plan comment).
+Branch: `feature/issue-490-flaky-pagination-tiebreak`. Plan source: self-authored (issue has DoD, no plan comment).
 
-## Findings that shape the plan
+## Root-cause findings (Phase 2)
 
-- Real lint run (rules forced to `error`) reproduces the issue's 11 findings exactly: 10 `set-state-in-effect`,
-  1 `incompatible-library`. No `exhaustive-deps` finding surfaces — that one was an artifact.
-- Fixing `watch()` → `useWatch()` un-skips compilation of `episodes/[id]/page.tsx`, which **unmasks 2 more**
-  `set-state-in-effect` findings there (the 4-loader auth effect and `setProgressMessage` in the SSE effect).
-  True site count is **13**.
-- Rule semantics (read from the plugin source, `validateNoSetStateInEffects`): a setState is flagged when it is
-  reachable through the effect body's own blocks — including after `await`, inside `if`/`try` — or through a
-  component-level function that directly calls setState (`useCallback` is erased first, so the async loaders
-  count). setState inside a callback (`.then`, a listener) or a function declared inside the effect is not traced.
-  So the async loaders are flagged only because the compiler cannot see across `await`; every flagged site is
-  therefore restructured into a shape the compiler *can* verify, never suppressed.
-- React docs' sanctioned fetch shape: `fetchX().then(r => { if (!ignore) setX(r) })` + `ignore = true` cleanup.
-  That shape also closes a real stale-response race the current loaders have (analytics `days` switching,
-  App Router reusing `episodes/[id]` across id changes).
-- `enableAllowSetStateFromRefsInEffects` defaults on, but the loaders' `isMountedRef` guards don't dominate every
-  setState (`setLoading(false)` in `finally`), so they don't rescue the episodes page.
-
-## Design decisions (autonomous — no architectural fork)
-
-| Site | Fix |
-|---|---|
-| dashboard, distribution, analytics, projects/[id], projects/[id]/distribution, episodes/[id] loaders | Split each `useCallback` loader into a module-level `fetchX()` that returns data-or-null (toasting on failure) and applies state in the effect's `.then` with an ignore flag. Handlers that refresh after a mutation keep a small `reloadX()`/`loadEpisode()` (setState in event handlers is fine). |
-| distribution OAuth-return effect | Delete its `loadTargets()` — the auth effect already loads on mount, so this was a duplicate request. Its `exhaustive-deps` disable goes with it. |
-| analytics `setLoading(true)` on `days` change | Moved into the `Select` change handler (issue option b). |
-| episodes `setProgressMessage(STATUS_MESSAGES[status])` in SSE effect | Derive at render: `progressMessage \|\| STATUS_MESSAGES[status] \|\| "N% complete"`; `applyEpisode()` clears the transient SSE text when a fresh server snapshot lands. |
-| episodes `watch("sourceType")` | `useWatch({ control, name: "sourceType" })` (react-hook-form 7.81 installed; compiler-compatible). |
-| login `setRegistered` | Lazy `useState` initializer reads the URL; a `useSyncExternalStore` hydration gate keeps the server/client trees identical; the URL clear stays in an effect (external-system write, no setState). |
-| AppleConnectDialog reset-on-open effect | Move form + instructions into an inner component rendered inside `DialogContent`; Radix unmounts it when closed, so state resets by remount and the fetch is a plain mount effect with an ignore flag. |
-| theme-provider `mounted` / `resolvedTheme` | `useSyncExternalStore` over localStorage (custom + `storage` events) and over the `prefers-color-scheme` media query; `resolvedTheme` derived at render; the only effect left writes the `dark` class (external system). `mounted` disappears. Layout's nonce'd first-paint script is untouched. |
-| eslint.config.mjs | Delete the two `'off'` lines and the #482 comment. |
-
-Not doing: TanStack Query migration (installed but unwired; a bigger contract/test change than this lint adoption).
+- **Order dependence is structurally impossible for this test.** Every registered user gets its own
+  `tenant_id` (uuid4) and `audio_snippets` is under FORCE RLS, so rows from other tests cannot appear in
+  this user's list. `test_audio_snippets.py` is also the *first* module in the issue's `-k` selection, so no
+  earlier module can poison process state. And the test only asserts `len <= 2`, `page == 1`,
+  `page_size == 2` — leaked rows could not fail it anyway.
+- **Non-deterministic ordering cannot fail this test either** (it never inspects order). But the list
+  query *is* non-deterministic: `order_by(AudioSnippet.created_at.desc())` with no tiebreak, and
+  `created_at` is a `DateTime` default that can tie. With LIMIT/OFFSET, Postgres gives no stable order
+  for equal keys across queries, so a paging client can see duplicates/skips. That is the real product
+  defect the issue asked to rule out, and it gets fixed.
+- **The one observed failure has no surviving traceback.** The only assertions that *can* fail are the
+  fixture's `201` and the list's `200`, i.e. a non-2xx response. PR #486's body records that the same
+  session was under system memory pressure (two full-suite runs OOM-killed). Reproduction attempts here:
+  42 runs of the exact selection + 1 instrumented run (`-X dev`, `PYTHONASYNCIODEBUG=1`, GC-time warnings
+  surfaced) → 0 failures, 0 warnings; and the test has never failed in CI (7 non-dependabot failed runs
+  grepped). Conclusion: environmental, not logic. The test also swallowed the five upload status codes, so
+  a failed upload (e.g. a DB connection fault) would have surfaced only as the later `200` assertion —
+  which is exactly the shape of the report.
 
 ## Steps
 
-1. RED: lint with the rules active (13 errors); jest tests for the new behaviour that fail today —
-   analytics ignores a stale response after the period changes; distribution fetches targets once on OAuth return.
-2. Flip `eslint.config.mjs` (remove the two `'off'` lines + comment).
-3. Refactor the 8 files per the table.
-4. GREEN: `npm run lint:web` clean, `npx jest` green, coverage on changed lines.
-5. Deslop → quality gate (codex review; opencode has stalled 4/4 in this repo) → PR → demo → docs → CI → merge.
+1. **RED** — rewrite `test_list_pagination_page_size` to prove paging: assert every upload is `201`,
+   force all five `created_at` values to tie, page through with `page_size=2`, assert page sizes 2/2/1,
+   no overlap, union == uploaded ids, and a deterministic order (id desc within the tie). Fails on `main`
+   because ties currently come back in heap order.
+2. **GREEN** — `get_audio_snippets`: `order_by(created_at.desc(), id.desc())`. One line.
+3. Verify 20 consecutive runs of the issue's full selection.
+4. Follow-up issue (Phase 13): `project_service.get_projects` and `episode_service` list sort have the
+   same missing tiebreak.
 
-## Acceptance criteria (from #489) — shipped in PR #528 (f5309a1)
+## Acceptance criteria (issue DoD)
 
-- [x] All findings resolved by refactor (not suppression), site list re-derived from a real run (13 sites)
-- [x] The two `'off'` lines and the comment naming #482 are deleted from `eslint.config.mjs`
-- [x] `npm run lint:web` clean with the rules active
-- [x] Jest suite still green, and any component whose render behaviour changed has its test checked
-      (4 new regression tests; demo at `apps/web/docs/demos/issue489-react-hooks-7-rules.md`)
+- [x] Root cause identified (order dependence vs non-deterministic ordering) — see findings above
+- [x] Non-deterministic ordering → deterministic tiebreak in the list query (product fix)
+- [x] Test made self-diagnosing / self-isolating (asserts uploads, proves paging)
+- [x] Test passes across ≥20 consecutive runs of the full selection — 20/20, `apps/api/docs/demos/issue490-deterministic-paging.md`
 
-Follow-up: #529 (page-level `loading` reset on id change). Review notes: codex found the analytics
-loading regression (fixed cd0b58e); the browser demo found the login client-nav regression (fixed 7b48077).
+PR #531. Follow-up sweep filed as #530.
+
+## Autonomous decisions
+
+- Tiebreak column is `id` (UUID, PK) — always unique, no migration. No new index: the table has no
+  `created_at` index today and the issue does not ask for one.
+- Scope stays on `audio_snippets`; the projects/episodes tiebreaks are filed, not bundled.

@@ -238,8 +238,13 @@ async def get_audio_snippets(
 	total_result = await db.execute(count_query)
 	total = total_result.scalar()
 
-	# Get paginated results ordered by creation date descending
-	query = query.offset(skip).limit(limit).order_by(AudioSnippet.created_at.desc())
+	# Newest first; id breaks created_at ties so LIMIT/OFFSET pages never
+	# duplicate or skip a row (Postgres gives tied keys no stable order) (#490).
+	query = (
+		query.offset(skip)
+		.limit(limit)
+		.order_by(AudioSnippet.created_at.desc(), AudioSnippet.id.desc())
+	)
 	result = await db.execute(query)
 	snippets = result.scalars().all()
 

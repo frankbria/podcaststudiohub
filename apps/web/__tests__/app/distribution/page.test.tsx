@@ -481,6 +481,20 @@ describe('DistributionPage', () => {
     await waitFor(() => expect(window.location.search).toBe(''))
   })
 
+  it('loads targets once on an OAuth return — the auth effect already fetches on mount', async () => {
+    window.history.pushState({}, '', '/distribution?success=Spotify+connected')
+    const fetchMock = mockFetchRouter()
+    global.fetch = fetchMock
+    render(<DistributionPage />)
+
+    await screen.findByText('Spotify: My Show')
+    await waitFor(() => expect(showSuccessToast).toHaveBeenCalledWith('Spotify connected'))
+    const listCalls = fetchMock.mock.calls.filter(
+      ([url, init]) => url === '/api/proxy/distribution-targets' && (init?.method ?? 'GET') === 'GET'
+    )
+    expect(listCalls).toHaveLength(1)
+  })
+
   it('shows an error toast and strips query params on a failed Spotify OAuth return', async () => {
     window.history.pushState({}, '', '/distribution?error=access_denied')
     global.fetch = mockFetchRouter()

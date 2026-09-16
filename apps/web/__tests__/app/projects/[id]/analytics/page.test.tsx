@@ -1,12 +1,13 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ProjectAnalyticsPage from '@/app/(auth)/projects/[id]/analytics/page'
 
 const mockPush = jest.fn()
+let mockParamsId = 'p1'
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
-  useParams: () => ({ id: 'p1' }),
+  useParams: () => ({ id: mockParamsId }),
 }))
 
 jest.mock('next-auth/react', () => ({
@@ -68,6 +69,7 @@ function mockFetchRouter({
 describe('ProjectAnalyticsPage', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockParamsId = 'p1'
   })
 
   it('loads and displays analytics summary, trend, and top episodes', async () => {
@@ -178,6 +180,53 @@ describe('ProjectAnalyticsPage', () => {
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith('/api/proxy/projects/p1/analytics?days=7')
     )
+  })
+
+  it('ignores a stale response from the previous project when the id changes before it resolves', async () => {
+    // App Router reuses this page instance when only [id] changes, so a slow
+    // p1 response can land after p2 has already rendered.
+    const otherProject = {
+      ...fullAnalytics,
+      project_id: 'p2',
+      summary: { total_downloads: 777, total_plays: 0, total_listen_hours: 0 },
+    }
+    let resolveP1!: (value: unknown) => void
+    const p1Response = new Promise((resolve) => {
+      resolveP1 = resolve
+    })
+    global.fetch = jest.fn((url: string) =>
+      url.startsWith('/api/proxy/projects/p1/')
+        ? p1Response
+        : Promise.resolve({ ok: true, status: 200, json: async () => otherProject })
+    ) as jest.Mock
+
+    const { rerender } = render(<ProjectAnalyticsPage />)
+    mockParamsId = 'p2'
+    rerender(<ProjectAnalyticsPage />)
+    await screen.findByText('777')
+
+    await act(async () => {
+      resolveP1({ ok: true, status: 200, json: async () => fullAnalytics })
+    })
+    expect(screen.getByText('777')).toBeInTheDocument()
+    expect(screen.queryByText('120')).not.toBeInTheDocument()
+  })
+
+  it('shows the loading skeleton again when the project id changes', async () => {
+    global.fetch = jest.fn((url: string) =>
+      url.startsWith('/api/proxy/projects/p1/')
+        ? Promise.resolve({ ok: true, status: 200, json: async () => fullAnalytics })
+        : new Promise(() => {})
+    ) as jest.Mock
+
+    const { rerender } = render(<ProjectAnalyticsPage />)
+    await screen.findByText('120')
+
+    mockParamsId = 'p2'
+    rerender(<ProjectAnalyticsPage />)
+
+    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+    expect(screen.queryByText('120')).not.toBeInTheDocument()
   })
 
   it('navigates back to the project page', async () => {

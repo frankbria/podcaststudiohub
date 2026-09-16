@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
-import { useForm } from "react-hook-form"
+import { useForm, useWatch } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -135,9 +135,64 @@ const DEFAULT_CONFIGS: Record<string, Record<string, string>> = {
   edge: { voice_1: "en-US-GuyNeural", voice_2: "en-US-JennyNeural" },
 }
 
+// Backend calls (fetch + EventSource) go through the same-origin /api/proxy
+// handler, which injects the bearer token server-side from the httpOnly cookie
+// — sent automatically on same-origin requests, so no client token (#212).
+// Each fetcher returns null on failure; fetchEpisode has already shown the toast.
+async function fetchEpisode(episodeId: string): Promise<Episode | null> {
+  try {
+    const response = await fetch(`/api/proxy/episodes/${episodeId}`)
+    if (!response.ok) {
+      showErrorToast("Failed to load episode")
+      return null
+    }
+    return (await response.json()) as Episode
+  } catch (error) {
+    console.error("Failed to load episode:", error)
+    showErrorToast("Failed to load episode: Network error")
+    return null
+  }
+}
+
+async function fetchContentSources(episodeId: string): Promise<ContentSource[] | null> {
+  try {
+    const response = await fetch(`/api/proxy/episodes/${episodeId}/content`)
+    if (!response.ok) return null
+    const data = await response.json() as { content_sources?: ContentSource[] } | ContentSource[]
+    // API returns paginated response: { content_sources: [...], total, page, ... }
+    return Array.isArray(data) ? data : (data.content_sources ?? [])
+  } catch (error) {
+    console.error("Failed to load content sources:", error)
+    return null
+  }
+}
+
+async function fetchTTSConfigs(): Promise<TTSConfig[] | null> {
+  try {
+    const response = await fetch(`/api/proxy/tts-configs`)
+    if (!response.ok) return null
+    const data = await response.json() as { configs?: TTSConfig[] }
+    return data.configs ?? []
+  } catch (error) {
+    console.error("Failed to load TTS configs:", error)
+    return null
+  }
+}
+
+async function fetchEpisodeAnalytics(episodeId: string): Promise<EpisodeAnalyticsData | null> {
+  try {
+    const response = await fetch(`/api/proxy/analytics/episodes/${episodeId}`)
+    if (!response.ok) return null
+    return (await response.json()) as EpisodeAnalyticsData
+  } catch (error) {
+    console.error("Failed to load analytics:", error)
+    return null
+  }
+}
+
 export default function EpisodePage() {
   const router = useRouter()
-  const params = useParams()
+  const params = useParams<{ id: string }>()
   const { status: authStatus } = useSession()
   const [episode, setEpisode] = useState<Episode | null>(null)
   const [loading, setLoading] = useState(true)
@@ -157,9 +212,16 @@ export default function EpisodePage() {
   const [newTtsVoice1Id, setNewTtsVoice1Id] = useState<string>("")
   const [newTtsVoice2Id, setNewTtsVoice2Id] = useState<string>("")
   const [savingTts, setSavingTts] = useState(false)
-  const [analytics, setAnalytics] = useState<EpisodeAnalyticsData | null>(null)
-  const [analyticsLoading, setAnalyticsLoading] = useState(true)
-  const [analyticsError, setAnalyticsError] = useState(false)
+  // The loaded analytics remember which episode they belong to, so the
+  // section's loading/error state is derived and resets whenever the App
+  // Router swaps [id] on this same instance.
+  const [loadedAnalytics, setLoadedAnalytics] = useState<{
+    episodeId: string
+    data: EpisodeAnalyticsData | null
+  } | null>(null)
+  const analyticsLoading = loadedAnalytics?.episodeId !== params.id
+  const analyticsError = !analyticsLoading && loadedAnalytics?.data === null
+  const analytics = analyticsLoading ? null : loadedAnalytics?.data ?? null
   const robustESRef = useRef<RobustEventSource | null>(null)
   const stopPollingRef = useRef<(() => void) | null>(null)
   const isMountedRef = useRef(true)
@@ -178,96 +240,39 @@ export default function EpisodePage() {
     hasFiredPlayEventRef.current = false
   }, [params.id])
 
-  // Backend calls (fetch + EventSource) go through the same-origin /api/proxy
-  // handler, which injects the bearer token server-side from the httpOnly cookie
-  // — sent automatically on same-origin requests, so no client token (#212).
-  const loadEpisode = useCallback(async () => {
-    try {
-      const response = await fetch(
-        `/api/proxy/episodes/${params.id}`
-      )
-      if (response.ok) {
-        const data = await response.json() as Episode
-        if (!isMountedRef.current) return
-        setEpisode(data)
-        if (data.tts_config_id) {
-          setSelectedTtsConfigId(data.tts_config_id)
-        }
-        if (data.generation_progress?.progress !== undefined) {
-          setProgress(data.generation_progress.progress)
-        }
-      } else {
-        showErrorToast("Failed to load episode")
-      }
-    } catch (error) {
-      console.error("Failed to load episode:", error)
-      showErrorToast("Failed to load episode: Network error")
-    } finally {
-      setLoading(false)
+  // A fresh server snapshot supersedes any transient SSE progress text: the
+  // status-derived default (see the progress <p> below) applies until the
+  // stream sends new text.
+  const applyEpisode = useCallback((data: Episode) => {
+    setEpisode(data)
+    setProgressMessage("")
+    if (data.tts_config_id) {
+      setSelectedTtsConfigId(data.tts_config_id)
     }
-  }, [params.id])
-
-  const loadContentSources = useCallback(async () => {
-    try {
-      const response = await fetch(
-        `/api/proxy/episodes/${params.id}/content`
-      )
-      if (response.ok) {
-        const data = await response.json() as { content_sources?: ContentSource[] } | ContentSource[]
-        // API returns paginated response: { content_sources: [...], total, page, ... }
-        setContentSources(
-          Array.isArray(data) ? data : (data.content_sources ?? [])
-        )
-      }
-    } catch (error) {
-      console.error("Failed to load content sources:", error)
-    }
-  }, [params.id])
-
-  const loadTTSConfigs = useCallback(async () => {
-    try {
-      const response = await fetch(
-        `/api/proxy/tts-configs`
-      )
-      if (response.ok) {
-        const data = await response.json() as { configs?: TTSConfig[] }
-        setTtsConfigs(data.configs ?? [])
-      }
-    } catch (error) {
-      console.error("Failed to load TTS configs:", error)
+    if (data.generation_progress?.progress !== undefined) {
+      setProgress(data.generation_progress.progress)
     }
   }, [])
 
-  // Analytics is a supplementary, best-effort section: it has its own
-  // contained loading/error state and never blocks or errors the whole page.
-  const loadAnalytics = useCallback(async () => {
-    setAnalyticsLoading(true)
-    setAnalyticsError(false)
-    try {
-      const response = await fetch(
-        `/api/proxy/analytics/episodes/${params.id}`
-      )
-      if (response.ok) {
-        const data = await response.json() as EpisodeAnalyticsData
-        if (!isMountedRef.current) return
-        setAnalytics(data)
-      } else {
-        if (!isMountedRef.current) return
-        setAnalyticsError(true)
-      }
-    } catch (error) {
-      console.error("Failed to load analytics:", error)
-      if (!isMountedRef.current) return
-      setAnalyticsError(true)
-    } finally {
-      if (isMountedRef.current) setAnalyticsLoading(false)
-    }
-  }, [params.id])
+  // Reload paths for event handlers and the SSE stream; the initial load lives
+  // in the auth effect below so it can ignore a stale response on unmount or
+  // when the App Router swaps [id] on this same instance.
+  const loadEpisode = useCallback(async () => {
+    const data = await fetchEpisode(params.id)
+    if (!isMountedRef.current) return
+    if (data) applyEpisode(data)
+    setLoading(false)
+  }, [params.id, applyEpisode])
+
+  const loadContentSources = async () => {
+    const sources = await fetchContentSources(params.id)
+    if (sources) setContentSources(sources)
+  }
 
   const {
     register,
     handleSubmit,
-    watch,
+    control,
     setValue,
     formState: { errors, isSubmitting, isValid },
     reset,
@@ -279,23 +284,36 @@ export default function EpisodePage() {
     },
   })
 
-  const sourceType = watch("sourceType")
+  const sourceType = useWatch({ control, name: "sourceType" })
 
   useEffect(() => {
-    if (authStatus === "authenticated") {
-      loadEpisode()
-      loadContentSources()
-      loadTTSConfigs()
-      loadAnalytics()
+    if (authStatus !== "authenticated") return
+    let ignore = false
+    fetchEpisode(params.id).then((data) => {
+      if (ignore) return
+      if (data) applyEpisode(data)
+      setLoading(false)
+    })
+    fetchContentSources(params.id).then((sources) => {
+      if (!ignore && sources) setContentSources(sources)
+    })
+    fetchTTSConfigs().then((configs) => {
+      if (!ignore && configs) setTtsConfigs(configs)
+    })
+    // Analytics is a supplementary, best-effort section: it has its own
+    // contained loading/error state and never blocks or errors the whole page.
+    fetchEpisodeAnalytics(params.id).then((data) => {
+      if (!ignore) setLoadedAnalytics({ episodeId: params.id, data })
+    })
+    return () => {
+      ignore = true
     }
-  }, [authStatus, loadEpisode, loadContentSources, loadTTSConfigs, loadAnalytics])
+  }, [authStatus, params.id, applyEpisode])
 
   useEffect(() => {
     if (!episode?.generation_status || !ACTIVE_STATUSES.includes(episode.generation_status)) {
       return
     }
-
-    setProgressMessage(STATUS_MESSAGES[episode.generation_status] ?? "")
 
     // EventSource cannot set an Authorization header (W3C spec). Instead of
     // leaking the JWT in the URL, connect to the same-origin /api/proxy Route
@@ -477,7 +495,6 @@ export default function EpisodePage() {
   const generatePodcast = async () => {
     setGenerating(true)
     setProgress(0)
-    setProgressMessage(STATUS_MESSAGES.queued)
     try {
       // Always request distribution (#383): the backend only honors it when
       // ENABLE_PLATFORM_DISTRIBUTION is on AND the project has active
@@ -698,7 +715,9 @@ export default function EpisodePage() {
                   ></div>
                 </div>
                 <p className="text-sm text-muted-foreground mt-1" aria-live="polite">
-                  {progressMessage || `${progress}% complete`}
+                  {progressMessage ||
+                    STATUS_MESSAGES[episode?.generation_status ?? ""] ||
+                    `${progress}% complete`}
                 </p>
                 <ProgressConnectionStatus status={connectionStatus} />
               </div>

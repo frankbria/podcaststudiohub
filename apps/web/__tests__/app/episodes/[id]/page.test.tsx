@@ -6,11 +6,16 @@ import { withOverride } from '../../../../test-utils/fetch-router'
 
 const mockPush = jest.fn()
 const mockBack = jest.fn()
+let mockEpisodeId = 'ep1'
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush, back: mockBack }),
-  useParams: () => ({ id: 'ep1' }),
+  useParams: () => ({ id: mockEpisodeId }),
 }))
+
+beforeEach(() => {
+  mockEpisodeId = 'ep1'
+})
 
 jest.mock('next-auth/react', () => ({
   useSession: () => ({ status: 'authenticated' }),
@@ -1119,6 +1124,25 @@ describe('EpisodePage analytics section', () => {
 
     await screen.findByText('Test Episode')
     expect(await screen.findByText(/no analytics yet/i)).toBeInTheDocument()
+  })
+})
+
+describe('EpisodePage analytics on episode change', () => {
+  it('shows the analytics loading state again when the App Router swaps the episode id', async () => {
+    const analytics = { ...zeroAnalytics, metrics: { ...zeroAnalytics.metrics, total_downloads: 42 } }
+    global.fetch = withOverride(
+      mockEpisodeFetchRouter({ episode: completeEpisode, analytics }),
+      (url) => url.includes('/analytics/episodes/ep2'),
+      () => new Promise(() => {})
+    )
+    const { rerender } = render(<EpisodePage />)
+    expect(await screen.findByText('42')).toBeInTheDocument()
+
+    mockEpisodeId = 'ep2'
+    rerender(<EpisodePage />)
+
+    expect(screen.getByText(/loading analytics/i)).toBeInTheDocument()
+    expect(screen.queryByText('42')).not.toBeInTheDocument()
   })
 })
 

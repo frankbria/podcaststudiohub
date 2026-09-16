@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { signIn } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,23 +11,27 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 
 export default function LoginPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
+  // Signup redirects here with ?registered=true. The param is read through the
+  // router (useSearchParams) rather than window.location: during a client-side
+  // navigation this page renders before the browser URL is updated, so a
+  // render-time read of window.location still sees the previous page. The
+  // flag is latched into state (set-during-render, the "adjusting state on a
+  // prop change" pattern) so the banner survives the effect below clearing the
+  // param, which keeps a refresh from re-showing it (#323). Every route is
+  // dynamically rendered (the root layout reads headers()), so no Suspense
+  // boundary is needed for useSearchParams.
   const [registered, setRegistered] = useState(false)
-
-  // Signup redirects here with ?registered=true. Read window.location.search
-  // (not useSearchParams, which forces a build-time Suspense boundary — same
-  // pattern as the distribution page) and clear the param so a refresh doesn't
-  // re-show the banner (#323).
+  if (!registered && searchParams.get("registered") === "true") {
+    setRegistered(true)
+  }
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    if (params.get("registered") === "true") {
-      setRegistered(true)
-      window.history.replaceState({}, "", window.location.pathname)
-    }
-  }, [])
+    if (registered) window.history.replaceState({}, "", window.location.pathname)
+  }, [registered])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()

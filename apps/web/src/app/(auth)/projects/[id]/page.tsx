@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useRouter, useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
@@ -35,9 +35,60 @@ interface Project {
   description: string | null
 }
 
+// Backend calls go through the same-origin /api/proxy handler, which injects
+// the bearer token server-side from the httpOnly cookie — no client token (#212).
+// Both return null when the request failed; the error toast has already been shown.
+async function fetchProject(projectId: string): Promise<Project | null> {
+  try {
+    const response = await fetch(`/api/proxy/projects/${projectId}`)
+    if (!response.ok) {
+      showErrorToast("Failed to load project")
+      return null
+    }
+    // API returns `name`; map to this view-model's `title` (issue #337).
+    const data = await response.json() as { id: string; name: string; description: string | null }
+    return { id: data.id, title: data.name, description: data.description }
+  } catch (error) {
+    console.error("Failed to load project:", error)
+    showErrorToast("Failed to load project: Network error")
+    return null
+  }
+}
+
+async function fetchEpisodes(projectId: string): Promise<Episode[] | null> {
+  try {
+    const response = await fetch(`/api/proxy/episodes?project_id=${projectId}`)
+    if (!response.ok) {
+      showErrorToast("Failed to load episodes")
+      return null
+    }
+    // API returns {episodes: [...]} with nested episode_metadata; flatten to
+    // this view-model's title/description (issue #337).
+    const data = await response.json() as {
+      episodes?: Array<{
+        id: string
+        episode_metadata?: { title?: string; description?: string | null }
+        generation_status: string
+        created_at: string
+      }>
+    }
+    return (data.episodes ?? []).map((e) => ({
+      id: e.id,
+      title: e.episode_metadata?.title ?? "",
+      description: e.episode_metadata?.description ?? null,
+      generation_status: e.generation_status,
+      created_at: e.created_at,
+    }))
+  } catch (error) {
+    console.error("Failed to load episodes:", error)
+    showErrorToast("Failed to load episodes: Network error")
+    return null
+  }
+}
+
 export default function ProjectPage() {
   const router = useRouter()
-  const params = useParams()
+  const params = useParams<{ id: string }>()
   const { status: authStatus } = useSession()
   const [project, setProject] = useState<Project | null>(null)
   const [episodes, setEpisodes] = useState<Episode[]>([])
@@ -58,68 +109,21 @@ export default function ProjectPage() {
     mode: "onChange",
   })
 
-  // Backend calls go through the same-origin /api/proxy handler, which injects
-  // the bearer token server-side from the httpOnly cookie — no client token (#212).
-  const loadProject = useCallback(async () => {
-    try {
-      const response = await fetch(
-        `/api/proxy/projects/${params.id}`
-      )
-      if (response.ok) {
-        // API returns `name`; map to this view-model's `title` (issue #337).
-        const data = await response.json() as { id: string; name: string; description: string | null }
-        setProject({ id: data.id, title: data.name, description: data.description })
-      } else {
-        showErrorToast("Failed to load project")
-      }
-    } catch (error) {
-      console.error("Failed to load project:", error)
-      showErrorToast("Failed to load project: Network error")
-    } finally {
-      setLoading(false)
-    }
-  }, [params.id])
-
-  const loadEpisodes = useCallback(async () => {
-    try {
-      const response = await fetch(
-        `/api/proxy/episodes?project_id=${params.id}`
-      )
-      if (response.ok) {
-        // API returns {episodes: [...]} with nested episode_metadata; flatten to
-        // this view-model's title/description (issue #337).
-        const data = await response.json() as {
-          episodes?: Array<{
-            id: string
-            episode_metadata?: { title?: string; description?: string | null }
-            generation_status: string
-            created_at: string
-          }>
-        }
-        setEpisodes(
-          (data.episodes ?? []).map((e) => ({
-            id: e.id,
-            title: e.episode_metadata?.title ?? "",
-            description: e.episode_metadata?.description ?? null,
-            generation_status: e.generation_status,
-            created_at: e.created_at,
-          }))
-        )
-      } else {
-        showErrorToast("Failed to load episodes")
-      }
-    } catch (error) {
-      console.error("Failed to load episodes:", error)
-      showErrorToast("Failed to load episodes: Network error")
-    }
-  }, [params.id])
-
   useEffect(() => {
-    if (authStatus === "authenticated") {
-      loadProject()
-      loadEpisodes()
+    if (authStatus !== "authenticated") return
+    let ignore = false
+    fetchProject(params.id).then((loaded) => {
+      if (ignore) return
+      if (loaded) setProject(loaded)
+      setLoading(false)
+    })
+    fetchEpisodes(params.id).then((loaded) => {
+      if (!ignore && loaded) setEpisodes(loaded)
+    })
+    return () => {
+      ignore = true
     }
-  }, [authStatus, loadProject, loadEpisodes])
+  }, [authStatus, params.id])
 
   const onSubmit = async (data: EpisodeFormData) => {
     try {

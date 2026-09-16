@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -41,6 +41,25 @@ function platformLabel(target: DistributionTarget): string {
   return target.platform_name || targetTypeLabel(target.target_type)
 }
 
+// Backend calls go through the same-origin /api/proxy handler, which injects
+// the bearer token server-side from the httpOnly cookie — no client token (#212).
+// Returns null when the request failed; the error toast has already been shown.
+async function fetchTargets(): Promise<DistributionTarget[] | null> {
+  try {
+    const response = await fetch("/api/proxy/distribution-targets")
+    if (!response.ok) {
+      showErrorToast("Failed to load distribution targets")
+      return null
+    }
+    const data = (await response.json()) as DistributionTargetListResponse
+    return data.targets ?? []
+  } catch (error) {
+    console.error("Failed to load distribution targets:", error)
+    showErrorToast("Failed to load distribution targets: Network error")
+    return null
+  }
+}
+
 export default function DistributionPage() {
   const { status: authStatus } = useSession()
   const [targets, setTargets] = useState<DistributionTarget[]>([])
@@ -54,35 +73,30 @@ export default function DistributionPage() {
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [refreshingId, setRefreshingId] = useState<string | null>(null)
 
-  // Backend calls go through the same-origin /api/proxy handler, which injects
-  // the bearer token server-side from the httpOnly cookie — no client token (#212).
-  const loadTargets = useCallback(async () => {
-    try {
-      const response = await fetch("/api/proxy/distribution-targets")
-      if (response.ok) {
-        const data = (await response.json()) as DistributionTargetListResponse
-        setTargets(data.targets ?? [])
-      } else {
-        showErrorToast("Failed to load distribution targets")
-      }
-    } catch (error) {
-      console.error("Failed to load distribution targets:", error)
-      showErrorToast("Failed to load distribution targets: Network error")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
   useEffect(() => {
-    if (authStatus === "authenticated") {
-      loadTargets()
+    if (authStatus !== "authenticated") return
+    let ignore = false
+    fetchTargets().then((loaded) => {
+      if (ignore) return
+      if (loaded) setTargets(loaded)
+      setLoading(false)
+    })
+    return () => {
+      ignore = true
     }
-  }, [authStatus, loadTargets])
+  }, [authStatus])
+
+  const reloadTargets = async () => {
+    const loaded = await fetchTargets()
+    if (loaded) setTargets(loaded)
+  }
 
   // Spotify OAuth return: the backend callback redirects here with success/error
   // query params. We read window.location.search directly (not useSearchParams,
   // which forces a Suspense boundary at build time). The backend callback's
   // redirect URL must point back to /distribution (env-configured follow-up).
+  // The auth effect above already loads the targets on mount, so this only
+  // consumes the params.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const success = params.get("success")
@@ -95,9 +109,6 @@ export default function DistributionPage() {
       showSuccessToast(success || "Spotify connected")
     }
     window.history.replaceState({}, "", window.location.pathname)
-    loadTargets()
-    // Runs once on mount to consume the OAuth redirect's query params.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleTest = async (target: DistributionTarget) => {
@@ -192,12 +203,12 @@ export default function DistributionPage() {
 
   const handleAppleConnected = () => {
     showSuccessToast("Apple Podcasts connected")
-    loadTargets()
+    reloadTargets()
   }
 
   const handleWebhookConnected = () => {
     showSuccessToast("Webhook connected")
-    loadTargets()
+    reloadTargets()
   }
 
   if (loading) {

@@ -47,16 +47,16 @@ fi
 # shellcheck disable=SC2029  # ${LIVE} expanding client-side is the point
 ssh "${SSH_USER}@${SSH_HOST}" "cat ${LIVE}" > "$live"
 
-if diff -u --label "${LIVE} (live on ${SSH_HOST})" \
+if diff -u --label "${LIVE} (live on the deploy host)" \
 	--label "deployment/nginx/podcastfy.conf (committed, rendered)" \
 	"$live" "$expected"; then
-	echo "✓ nginx config on ${SSH_HOST} matches deployment/nginx/podcastfy.conf"
+	echo "✓ nginx config on the deploy host matches deployment/nginx/podcastfy.conf"
 	exit 0
 fi
 
 cat >&2 <<EOF
 
-❌ nginx config drift (issue #491): ${LIVE} on ${SSH_HOST} does not match
+❌ nginx config drift (issue #491): ${LIVE} on the deploy host does not match
    deployment/nginx/podcastfy.conf. The box serves what is installed, not what
    is committed. Re-sync as root from the root-owned clone:
 

@@ -20,6 +20,8 @@ from typing import Any
 from unittest.mock import MagicMock, create_autospec, patch
 from uuid import uuid4
 
+import pytest
+
 from tests.module_patching import patch_modules
 
 # Real podcastfy function — imported so tests assert against the ACTUAL
@@ -210,29 +212,29 @@ def test_task_returns_success_result():
 	assert result["error"] is None
 
 
-def test_task_returns_failed_result_on_exception():
-	"""Task must return dict with status=failed after retries exhausted."""
+def test_exhausted_retries_propagate_the_original_exception():
+	"""With retries at the limit and NO retry mock, real Celery decides: the
+	task fails with the engine's own exception rather than returning (#520)."""
 	mock_client, mock_modules = _mock_podcastfy_modules()
 	mock_client.generate_podcast = create_autospec(
 		real_generate_podcast, side_effect=RuntimeError("Podcastfy crashed")
 	)
 
-	with patch.object(generate_podcast_task, 'update_state'), \
-		 patch_modules(mock_modules), \
-		 patch.object(
-			generate_podcast_task,
-			"retry",
-			side_effect=generate_podcast_task.MaxRetriesExceededError(),
-		 ):
-
-		result = generate_podcast_task.run(
-			episode_id=str(uuid4()),
-			urls=["https://example.com"],
-		)
-
-	assert result["status"] == "failed"
-	assert "Podcastfy crashed" in result["error"]
-	assert result["audio_file_path"] is None
+	generate_podcast_task.push_request(
+		retries=generate_podcast_task.max_retries,
+		called_directly=False,
+		id="exhausted-gen",
+	)
+	try:
+		with patch.object(generate_podcast_task, 'update_state'), \
+			 patch_modules(mock_modules):
+			with pytest.raises(RuntimeError, match="Podcastfy crashed"):
+				generate_podcast_task.run(
+					episode_id=str(uuid4()),
+					urls=["https://example.com"],
+				)
+	finally:
+		generate_podcast_task.pop_request()
 
 
 # ============================================================================
@@ -299,19 +301,22 @@ def test_terminal_failure_cleans_up_run_dir():
 		mock_client.generate_podcast = create_autospec(
 			real_generate_podcast, side_effect=RuntimeError("boom")
 		)
-		with patch.object(generate_podcast_task, 'update_state'), \
-			 patch_modules(mock_modules), \
-			 patch('src.tasks.podcast_generation.tempfile.mkdtemp', return_value=run_dir), \
-			 patch.object(
-				generate_podcast_task,
-				"retry",
-				side_effect=generate_podcast_task.MaxRetriesExceededError(),
-			 ):
-			result = generate_podcast_task.run(
-				episode_id=str(uuid4()),
-				urls=["https://example.com"],
-			)
-		assert result["status"] == "failed"
+		generate_podcast_task.push_request(
+			retries=generate_podcast_task.max_retries,
+			called_directly=False,
+			id="exhausted-run-dir",
+		)
+		try:
+			with patch.object(generate_podcast_task, 'update_state'), \
+				 patch_modules(mock_modules), \
+				 patch('src.tasks.podcast_generation.tempfile.mkdtemp', return_value=run_dir):
+				with pytest.raises(RuntimeError, match="boom"):
+					generate_podcast_task.run(
+						episode_id=str(uuid4()),
+						urls=["https://example.com"],
+					)
+		finally:
+			generate_podcast_task.pop_request()
 		assert not os.path.exists(run_dir)
 	finally:
 		shutil.rmtree(run_dir, ignore_errors=True)

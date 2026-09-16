@@ -38,10 +38,6 @@ def _make_httpx_response(
 	return response
 
 
-def _make_celery_retry_exc(task):
-	return task.MaxRetriesExceededError()
-
-
 def _direct_publish_enabled():
 	"""Enable the experimental direct-publish path (issue #315) for one test."""
 	from src.config import settings

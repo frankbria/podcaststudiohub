@@ -595,25 +595,18 @@ def generate_podcast_task(
         # task body), so this attempt's partial artifacts are dead weight (#309).
         if run_dir:
             shutil.rmtree(run_dir, ignore_errors=True)
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'retrying',
-                'progress': 0,
-                'status': f'Retrying after error: {str(e)}'
-            }
-        )
-        try:
-            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
-        except self.MaxRetriesExceededError:
+        # Celery re-raises the original exception when retry(exc=...) is out of
+        # attempts, so the `except MaxRetriesExceededError` this replaces never
+        # ran: the #294 status write and the lock release were stranded, and every
+        # exhausted generation leaked its Redis lock until TTL (#520). Raising is
+        # what records FAILURE and fires the router's link_error.
+        if self.request.retries >= self.max_retries:
             logger.error(
                 f"Podcast generation failed after {self.max_retries} retries "
                 f"for episode {episode_id}: {e}"
             )
-            # Persist 'failed' to the DB. update_state() below only writes the
-            # ephemeral result backend; without this the episode stays stuck at
-            # 'queued' once retries are exhausted (issue #294).
+            # Persist 'failed' to the DB; the result backend alone would leave the
+            # episode stuck at 'queued' (issue #294).
             _update_episode(
                 episode_id,
                 updates={"generation_status": "failed"},
@@ -623,25 +616,19 @@ def generate_podcast_task(
                     "failed_at": _utcnow_iso(),
                 },
             )
-            self.update_state(
-                state='FAILURE',
-                meta={
-                    'episode_id': episode_id,
-                    'stage': 'failed',
-                    'progress': 0,
-                    'status': f'Generation failed: {str(e)}'
-                }
-            )
             if lock_held:
                 release_generation_lock(episode_id, task_id)
-            return {
-                "status": "failed",
-                "audio_file_path": None,
-                "transcript_path": None,
-                "duration_seconds": 0,
-                "file_size_bytes": 0,
-                "error": str(e)
+            raise
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'episode_id': episode_id,
+                'stage': 'retrying',
+                'progress': 0,
+                'status': f'Retrying after error: {str(e)}'
             }
+        )
+        raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
 
 
 @celery_app.task(
@@ -853,9 +840,12 @@ def finalize_episode_generation_task(
                 f"Finalization error for episode {episode_id}, "
                 f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
             )
-            try:
-                raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
-            except self.MaxRetriesExceededError:
+            # Celery re-raises the original exception on exhaustion, so the
+            # `except MaxRetriesExceededError` this replaces never ran and the
+            # #311 status write was stranded. Finalize is dispatched with no
+            # link_error, so without this write an exhausted finalize left the
+            # episode in-progress forever (#520).
+            if self.request.retries >= self.max_retries:
                 logger.error(
                     f"Finalization failed after {self.max_retries} retries "
                     f"for episode {episode_id}: {e}"
@@ -880,9 +870,10 @@ def finalize_episode_generation_task(
                             "error_message": f"Finalization error: {str(e)}",
                         }
                         db.commit()
-                except Exception as db_err:  # noqa: BLE001 — this is the last-resort status write; if the DB is unreachable the caller must still receive the failed result rather than an exception
+                except Exception as db_err:  # noqa: BLE001 — this is the last-resort status write; if the DB is unreachable the original error must still propagate rather than be masked by the cleanup's
                     logger.error(f"Failed to update episode status after error: {db_err}")
-                return {"status": "failed", "error": str(e)}
+                raise
+            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
 
 
 def build_generation_workflow(

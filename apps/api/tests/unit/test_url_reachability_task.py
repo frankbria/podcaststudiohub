@@ -10,6 +10,7 @@ and the network HEAD all mocked — mirroring test_extract_content_async.py.
 import inspect
 
 import pytest
+from celery.exceptions import Retry
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -117,7 +118,7 @@ def test_task_returns_failed_on_value_error_no_retry():
 
 
 def test_task_retries_on_transient_error():
-	"""A transient (non-ValueError) error attempts retry."""
+	"""A transient (non-ValueError) error attempts retry (Celery raises Retry to suspend the task)."""
 	from src.tasks.content_extraction import validate_url_reachability_task
 
 	with patch("src.tasks.content_extraction._validate_url_reachability_async", MagicMock()), \
@@ -126,9 +127,31 @@ def test_task_retries_on_transient_error():
 		     patch.object(
 		         validate_url_reachability_task,
 		         "retry",
-		         side_effect=validate_url_reachability_task.MaxRetriesExceededError(),
+		         side_effect=Retry("scheduled", None),
 		     ) as mock_retry:
-			result = validate_url_reachability_task.run(content_source_id=str(uuid4()))
+			with pytest.raises(Retry):
+				validate_url_reachability_task.run(content_source_id=str(uuid4()))
 
-	assert result["status"] == "failed"
 	mock_retry.assert_called_once()
+
+
+def test_exhausted_retries_propagate_the_original_exception():
+	"""With retries at the limit the task fails, so link_error fires (#520).
+
+	No retry mock here: real Celery decides, exactly as a worker would.
+	"""
+	from src.tasks.content_extraction import validate_url_reachability_task
+
+	with patch("src.tasks.content_extraction._validate_url_reachability_async", MagicMock()), \
+	     patch("src.tasks.content_extraction.asyncio.run", MagicMock(side_effect=ConnectionError("boom"))):
+		with patch.object(validate_url_reachability_task, "update_state"):
+			validate_url_reachability_task.push_request(
+				retries=validate_url_reachability_task.max_retries,
+				called_directly=False,
+				id="exhaust-reachability",
+			)
+			try:
+				with pytest.raises(ConnectionError, match="boom"):
+					validate_url_reachability_task.run(content_source_id=str(uuid4()))
+			finally:
+				validate_url_reachability_task.pop_request()

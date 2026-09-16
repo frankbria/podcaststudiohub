@@ -63,11 +63,14 @@ def track_analytics_event_task(self: Task, payload: Dict[str, Any]) -> Dict[str,
 	"""
 	Persist a tracked analytics event via Celery (issue #322).
 
-	Transient failures (broker/DB blips) retry with exponential backoff; an
-	``IntegrityError`` (duplicate id, or an episode/project deleted between
-	request and insert) is a permanent drop — retrying can never succeed.
+	Transient failures (broker/DB blips) retry with exponential backoff, then
+	fail the task once the retry budget is exhausted (the original exception
+	propagates — #520). An ``IntegrityError`` (duplicate id, or an
+	episode/project deleted between request and insert) is a permanent drop —
+	retrying can never succeed.
 
-	Returns a dict with ``status`` ('recorded' or 'dropped').
+	Returns a dict with ``status`` ('recorded' or 'dropped') on success or a
+	permanent drop; an exhausted retry raises instead of returning.
 	"""
 	event_id = payload.get("id")
 	try:
@@ -79,12 +82,12 @@ def track_analytics_event_task(self: Task, payload: Dict[str, Any]) -> Dict[str,
 		logger.warning(f"Analytics event {event_id} dropped (integrity error): {e}")
 		return {"status": "dropped", "id": event_id, "error": str(e)}
 
-	except Exception as e:  # noqa: BLE001 — analytics are fire-and-forget: any unexpected failure must become retry-then-drop, never an unacked task that redelivers forever
-		retry_countdown = 60 * (2 ** self.request.retries)
-		try:
-			raise self.retry(exc=e, countdown=retry_countdown)
-		except self.MaxRetriesExceededError:
+	except Exception as e:  # noqa: BLE001 — analytics are fire-and-forget: any unexpected failure must become retry-then-fail, never an unacked task that redelivers forever
+		# Celery re-raises the original exception when retry(exc=...) is out of
+		# attempts, so the `except MaxRetriesExceededError` this replaces never ran (#520).
+		if self.request.retries >= self.max_retries:
 			logger.error(
 				f"Analytics event {event_id} dropped after max retries: {e}"
 			)
-			return {"status": "dropped", "id": event_id, "error": f"Max retries exceeded: {e}"}
+			raise
+		raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))

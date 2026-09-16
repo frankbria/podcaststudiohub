@@ -13,6 +13,7 @@ from datetime import datetime
 from uuid import uuid4
 
 import pytest
+from celery.exceptions import Retry
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.exc import IntegrityError
@@ -108,6 +109,7 @@ def test_task_drops_on_integrity_error_without_retry():
 
 
 def test_task_retries_on_transient_error():
+	"""A transient error attempts retry (Celery raises Retry to suspend the task)."""
 	from src.tasks.analytics import track_analytics_event_task
 
 	with patch("src.tasks.analytics._track_event_async", MagicMock()), \
@@ -116,12 +118,37 @@ def test_task_retries_on_transient_error():
 		     patch.object(
 		         track_analytics_event_task,
 		         "retry",
-		         side_effect=track_analytics_event_task.MaxRetriesExceededError(),
+		         side_effect=Retry("scheduled", None),
 		     ) as mock_retry:
-			result = track_analytics_event_task.run(payload=_payload())
+			with pytest.raises(Retry):
+				track_analytics_event_task.run(payload=_payload())
 
-	assert result["status"] == "dropped"
 	mock_retry.assert_called_once()
+
+
+def test_exhausted_retries_propagate_the_original_exception(caplog):
+	"""With retries at the limit the task fails, so link_error fires (#520).
+
+	No retry mock here: real Celery decides, exactly as a worker would.
+	"""
+	from src.tasks.analytics import track_analytics_event_task
+
+	with patch("src.tasks.analytics._track_event_async", MagicMock()), \
+	     patch("src.tasks.analytics.asyncio.run", MagicMock(side_effect=ConnectionError("boom"))):
+		with patch.object(track_analytics_event_task, "update_state"):
+			track_analytics_event_task.push_request(
+				retries=track_analytics_event_task.max_retries,
+				called_directly=False,
+				id="exhaust-analytics",
+			)
+			try:
+				with caplog.at_level("ERROR"):
+					with pytest.raises(ConnectionError, match="boom"):
+						track_analytics_event_task.run(payload=_payload())
+			finally:
+				track_analytics_event_task.pop_request()
+
+	assert "dropped after max retries" in caplog.text
 
 
 def test_task_signature_accepts_payload():

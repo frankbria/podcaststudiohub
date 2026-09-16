@@ -46,9 +46,13 @@ Not doing: TanStack Query migration (installed but unwired; a bigger contract/te
 4. GREEN: `npm run lint:web` clean, `npx jest` green, coverage on changed lines.
 5. Deslop → quality gate (codex review; opencode has stalled 4/4 in this repo) → PR → demo → docs → CI → merge.
 
-## Acceptance criteria (from #489)
+## Acceptance criteria (from #489) — shipped in PR #528 (f5309a1)
 
-- [ ] All findings resolved by refactor (not suppression), site list re-derived from a real run
-- [ ] The two `'off'` lines and the comment naming #482 are deleted from `eslint.config.mjs`
-- [ ] `npm run lint:web` clean with the rules active
-- [ ] Jest suite still green, and any component whose render behaviour changed has its test checked
+- [x] All findings resolved by refactor (not suppression), site list re-derived from a real run (13 sites)
+- [x] The two `'off'` lines and the comment naming #482 are deleted from `eslint.config.mjs`
+- [x] `npm run lint:web` clean with the rules active
+- [x] Jest suite still green, and any component whose render behaviour changed has its test checked
+      (4 new regression tests; demo at `apps/web/docs/demos/issue489-react-hooks-7-rules.md`)
+
+Follow-up: #529 (page-level `loading` reset on id change). Review notes: codex found the analytics
+loading regression (fixed cd0b58e); the browser demo found the login client-nav regression (fixed 7b48077).

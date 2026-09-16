@@ -469,3 +469,32 @@ re-applying the exact inverse edit — never a whole-file checkout.
   orchestrator directly with a duplicate verdict. Tell reviewer subagents explicitly not to spawn.
 - **Showboat grep evidence must anchor on the code form** (`except X:` with the colon); a
   comment describing the removed pattern matched the bare name and muddied "no handler remains".
+
+## #489 / PR #528 (2026-09-16) — react-hooks 7 rule adoption
+
+- **`react-hooks/set-state-in-effect` semantics (read from the plugin source, not the docs):** a setState is
+  flagged when reachable through the effect body's own blocks — *including after `await`* and inside
+  `if`/`try` — or through a component-level function that calls setState directly (`useCallback` is
+  erased first, so async loaders count). setState inside a `.then` callback or a function declared
+  inside the effect is not traced. Probe candidate shapes with a scratch `.tsx` and
+  `npx eslint --rule '{...:"error"}' -f json` before designing the refactor.
+- **An `incompatible-library` finding hides other findings in the same file** — the compiler skips the
+  component entirely, so fixing `watch()` → `useWatch()` unmasked 2 more sites. Re-run the probe after
+  each fix; the issue's count is a floor.
+- **A render-time read of `window.location` misses client-side navigations.** During an App Router
+  transition the new page renders before the browser URL updates, so a lazy `useState` initializer saw
+  the *previous* page's URL. jest passed (it sets the URL before render); only the browser demo caught
+  it. Read the router (`useSearchParams`) instead — every route here is dynamic (root layout reads
+  `headers()`), so no Suspense boundary is needed.
+- **"Loading" that used to be set at the top of a loader must become derived state once the loader
+  moves into the effect** — key the loaded result by the id/period it belongs to and derive `loading`
+  from the mismatch; otherwise App Router id reuse shows stale content (codex caught this).
+- **`showboat exec` is `exec <file> bash '<cmd>'`** (no shell without the lang arg) and `showboat image`
+  wants the echoed path relative to the cwd; it copies the file to a hashed name next to the doc, so
+  delete the original afterwards and prune orphans after a `pop`.
+- **Frontend diff-cover:** rewrite `SF:src/…` to `SF:apps/web/src/…` and run from the repo root, else
+  "No lines with coverage information". `codex review --base main` takes no positional prompt.
+- **`pkill -f "next start"` kills the shell that issued it** (self-match, again) — `fuser -k 3000/tcp`.
+- **Background pollers (`gh pr checks --watch`, sleep loops) get killed under memory pressure** on this
+  box (mongod holds ~2.7 GB); poll in the foreground with a bounded loop.
+- **The GLM review check can pass with an empty placeholder comment** — green ≠ reviewed (#497).

@@ -20,13 +20,22 @@ uv export --format requirements-txt --no-hashes --no-emit-project -o "$reqs" -q
 # every podcastfy bump.
 #
 # Reachability was assessed on 2026-08-13 (#446) — being capped is why we CAN'T fix
-# these; being unreachable is why it's acceptable not to. 26 of 27 open alerts are
-# unreachable (the 16 litellm ones are proxy-server issues and we never run a proxy;
+# these; being unreachable is why it's acceptable not to. 30 of 31 open alerts are
+# unreachable (the 20 litellm ones are proxy-server issues and we never run a proxy;
 # the rest are unused features). The exception is GHSA-3644-q5cj-c5c7 (langsmith),
 # which IS on the generation hot path via podcastfy's hub.pull() — accepted because
 # every pull is commit-pinned. Full classification and re-check triggers:
 #   docs/podcastfy-advisory-reachability.md
 # The import-graph claims are enforced by tests/test_dependency_reachability.py.
+# Added 2026-09-15 (#523): CVE-2026-12796 (session expiration in
+# litellm/proxy/management_endpoints/ui_sso.py, SSO flow), CVE-2026-12797
+# (authorization in the proxy's banned_keywords pre-call hook), CVE-2026-12798 (SSRF in
+# litellm/proxy/_experimental/mcp_server/openapi_to_mcp_generator.py) and
+# CVE-2026-12799 (improper authorization in
+# litellm/proxy/management_endpoints/internal_user_endpoints.py, incomplete fix of
+# CVE-2025-0628). All four are litellm/proxy/* — same proxy-only class as below.
+# See #518 for why this list keeps growing by hand.
+#
 # Added 2026-09-12: CVE-2026-12773 (improper authentication in
 # litellm/proxy/_experimental/mcp_server/auth/user_api_key_auth_mcp.py, MCP Proxy)
 # and CVE-2026-12795 (missing authentication in
@@ -67,6 +76,10 @@ uvx pip-audit -r "$reqs" --no-deps --disable-pip --strict \
   --ignore-vuln CVE-2026-12772 \
   --ignore-vuln CVE-2026-12773 \
   --ignore-vuln CVE-2026-12795 \
+  --ignore-vuln CVE-2026-12796 \
+  --ignore-vuln CVE-2026-12797 \
+  --ignore-vuln CVE-2026-12798 \
+  --ignore-vuln CVE-2026-12799 \
   `# litellm 1.80.0, all five capped by openai<2 as described above:` \
   `# 3478 fixed in 1.82.0, 3477 in 1.83.7, 3476 in 1.83.10, 3479 in 1.84.0,` \
   `# CVE-2026-37004 in 1.83.7 -- SSTI in the proxy's /prompts/test endpoint,` \

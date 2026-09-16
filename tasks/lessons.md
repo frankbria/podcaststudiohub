@@ -519,3 +519,23 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **A subagent reviewer may not have Bash.** The internal reviewer confirmed diff scope via `grep`
   instead of `git diff`; it still found the #530 sweep. Give reviewers the file list in the prompt so
   a missing tool does not silently narrow the review.
+
+## #491 / PR #532 — nginx CSP drift on the dev box, deploy-side drift gate
+
+- **Auto mode denies remote writes over ssh** ("Remote Shell Writes" classifier), and the denial
+  drops the *whole* Bash command — including read-only steps chained before it. Capture before-state
+  evidence in its own command first, then hand the root commands to Frank with the exact lines.
+- **Operator-installed config needs an operator-independent check.** Committing
+  `deployment/nginx/podcastfy.conf` meant nothing for two months because nothing compared it to the
+  box. Anything installed by hand as root gets a read-only runner-side assertion in the deploy
+  (`check-nginx-drift.sh` is the template: `ssh cat` + `diff -u` against the committed file rendered
+  with the same substitutions provisioning applies).
+- **Put post-deploy gates after the health check, not before the deploy.** A drift in a root-owned
+  asset should turn the run red, not hold a security bump hostage to a one-minute re-sync.
+- **Do not bundle an nginx conf change into a PR that adds a drift gate**: the change re-drifts the
+  box the moment it merges. The `ssl_stapling` cleanup went to #533 for exactly that reason.
+- **Never put the box's address in demos or scripts** — a local `Host staging-ts` ssh alias keeps
+  Showboat output and script logs clean (`~/.ssh/config`, Tailscale route).
+- **Sibling-file style beats the linter's opinion when the linter does not own the directory**:
+  `deployment/tests/` is tab-indented and outside `apps/api`'s ruff format scope; `ruff check` there is
+  still useful (it caught `subprocess.run` without `check=`), `ruff format --check` is not.

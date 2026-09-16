@@ -23,10 +23,10 @@ Plan source: self-authored (issue has a definition of done, no plan comment).
        `systemctl reload nginx`. Must land before merge or the first deploy goes red.
 
 ## Acceptance criteria (issue DoD)
-- [ ] Box config re-synced from `deployment/nginx/podcastfy.conf`; document CSP only from the middleware
-- [ ] `curl -sI https://dev.podcaststudiohub.me/login | grep -ci content-security-policy` → 1
-- [ ] Remaining header is the nonce policy; `/static/` still carries its own strict CSP
-- [ ] Deploy step asserts live config == committed config and fails loudly on drift (nginx stays operator-installed)
+- [x] Box config re-synced from `deployment/nginx/podcastfy.conf`; document CSP only from the middleware
+- [x] `curl -sI https://dev.podcaststudiohub.me/login | grep -ci content-security-policy` → 1
+- [x] Remaining header is the nonce policy; `/static/` still carries its own strict CSP
+- [x] Deploy step asserts live config == committed config and fails loudly on drift (nginx stays operator-installed)
 
 ## Autonomous decisions
 - Gate placement: after Health Check (deploy completes, run goes red on drift). Pre-deploy would block

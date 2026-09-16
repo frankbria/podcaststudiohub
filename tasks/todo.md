@@ -1,50 +1,34 @@
-# [P2.5] #490 — Flaky `test_list_pagination_page_size`: root cause + deterministic paging
+# Issue #491 — Dev VPS serves two CSP headers (nginx config on the box predates #307)
 
-Branch: `feature/issue-490-flaky-pagination-tiebreak`. Plan source: self-authored (issue has DoD, no plan comment).
+Plan source: self-authored (issue has a definition of done, no plan comment).
 
-## Root-cause findings (Phase 2)
-
-- **Order dependence is structurally impossible for this test.** Every registered user gets its own
-  `tenant_id` (uuid4) and `audio_snippets` is under FORCE RLS, so rows from other tests cannot appear in
-  this user's list. `test_audio_snippets.py` is also the *first* module in the issue's `-k` selection, so no
-  earlier module can poison process state. And the test only asserts `len <= 2`, `page == 1`,
-  `page_size == 2` — leaked rows could not fail it anyway.
-- **Non-deterministic ordering cannot fail this test either** (it never inspects order). But the list
-  query *is* non-deterministic: `order_by(AudioSnippet.created_at.desc())` with no tiebreak, and
-  `created_at` is a `DateTime` default that can tie. With LIMIT/OFFSET, Postgres gives no stable order
-  for equal keys across queries, so a paging client can see duplicates/skips. That is the real product
-  defect the issue asked to rule out, and it gets fixed.
-- **The one observed failure has no surviving traceback.** The only assertions that *can* fail are the
-  fixture's `201` and the list's `200`, i.e. a non-2xx response. PR #486's body records that the same
-  session was under system memory pressure (two full-suite runs OOM-killed). Reproduction attempts here:
-  42 runs of the exact selection + 1 instrumented run (`-X dev`, `PYTHONASYNCIODEBUG=1`, GC-time warnings
-  surfaced) → 0 failures, 0 warnings; and the test has never failed in CI (7 non-dependabot failed runs
-  grepped). Conclusion: environmental, not logic. The test also swallowed the five upload status codes, so
-  a failed upload (e.g. a DB connection fault) would have surfaced only as the later `200` assertion —
-  which is exactly the shape of the report.
+## Diagnosis (verified 2026-09-16)
+- `curl -sI https://dev.podcaststudiohub.me/login | grep -ci content-security-policy` → 2
+- `/etc/nginx/sites-available/podcastfy` on the box is dated 2026-07-06 (pre-#307, owned by `ubuntu`).
+  Diff vs `deployment/nginx/podcastfy.conf`: stale server-level CSP with `'unsafe-inline'`,
+  stale `/static/` CSP, missing `/ready` location.
+- Root-owned clone `/root/podcaststudiohub` exists (README "How the box gets deployment assets").
 
 ## Steps
-
-1. **RED** — rewrite `test_list_pagination_page_size` to prove paging: assert every upload is `201`,
-   force all five `created_at` values to tie, page through with `page_size=2`, assert page sizes 2/2/1,
-   no overlap, union == uploaded ids, and a deterministic order (id desc within the tie). Fails on `main`
-   because ties currently come back in heap order.
-2. **GREEN** — `get_audio_snippets`: `order_by(created_at.desc(), id.desc())`. One line.
-3. Verify 20 consecutive runs of the issue's full selection.
-4. Follow-up issue (Phase 13): `project_service.get_projects` and `episode_service` list sort have the
-   same missing tiebreak.
+1. [ ] Test first: `deployment/tests/test_nginx_drift.py` — script exists/executable/`set -euo pipefail`,
+       diffs `/etc/nginx/sites-available/podcastfy`, mirrors provision-ssl.sh DOMAIN/API_PORT/FRONTEND_PORT
+       substitutions, workflow runs it after the Health Check; functional run with an `ssh` shim
+       (in-sync → exit 0, drifted → non-zero + diff on stdout).
+2. [ ] `deployment/scripts/check-nginx-drift.sh` — runner-side: `ssh cat` the live site file, `diff -u`
+       against the committed conf rendered with the same substitutions provision-ssl.sh applies.
+3. [ ] `.github/workflows/deploy-dev.yml` — step "Assert nginx config matches repo" after Health Check
+       (post-deploy so a drift goes red without blocking security deploys).
+4. [ ] `deployment/README.md` — "To update the Nginx config" section: sync from the root clone, note the gate.
+5. [ ] Ops (root on the box): `git -C /root/podcaststudiohub pull`, copy conf → sites-available, `nginx -t`,
+       `systemctl reload nginx`. Must land before merge or the first deploy goes red.
 
 ## Acceptance criteria (issue DoD)
-
-- [x] Root cause identified (order dependence vs non-deterministic ordering) — see findings above
-- [x] Non-deterministic ordering → deterministic tiebreak in the list query (product fix)
-- [x] Test made self-diagnosing / self-isolating (asserts uploads, proves paging)
-- [x] Test passes across ≥20 consecutive runs of the full selection — 20/20, `apps/api/docs/demos/issue490-deterministic-paging.md`
-
-PR #531. Follow-up sweep filed as #530.
+- [ ] Box config re-synced from `deployment/nginx/podcastfy.conf`; document CSP only from the middleware
+- [ ] `curl -sI https://dev.podcaststudiohub.me/login | grep -ci content-security-policy` → 1
+- [ ] Remaining header is the nonce policy; `/static/` still carries its own strict CSP
+- [ ] Deploy step asserts live config == committed config and fails loudly on drift (nginx stays operator-installed)
 
 ## Autonomous decisions
-
-- Tiebreak column is `id` (UUID, PK) — always unique, no migration. No new index: the table has no
-  `created_at` index today and the issue does not ask for one.
-- Scope stays on `audio_snippets`; the projects/episodes tiebreaks are filed, not bundled.
+- Gate placement: after Health Check (deploy completes, run goes red on drift). Pre-deploy would block
+  security bumps on a 1-minute operator action.
+- Drift check is a runner-side script (nothing new rsynced to the box; nothing root-run).

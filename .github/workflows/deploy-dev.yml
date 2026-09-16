@@ -541,3 +541,19 @@ jobs:
           wait_for "Frontend" "$FRONTEND_URL" "200" || exit 1
 
           echo "🚀 Deployment successful!"
+
+      - name: Assert nginx config matches repo
+        env:
+          SSH_HOST: ${{ vars.SERVER_HOST }}
+          SSH_USER: ${{ secrets.SERVER_USER }}
+          API_PORT: ${{ vars.API_PORT }}
+          FRONTEND_PORT: ${{ vars.FRONTEND_PORT }}
+        run: |
+          # nginx is operator-installed as root (see the rsync comment above),
+          # so nothing in this workflow writes it — and until issue #491
+          # nothing checked it either, which is how the dev box served a
+          # pre-#307 CSP for two months. Runs AFTER the health check on
+          # purpose: the app deploy has already landed, so a drift turns the
+          # run red and prints the diff without holding a security bump
+          # hostage to a one-minute operator re-sync.
+          bash deployment/scripts/check-nginx-drift.sh

@@ -893,10 +893,27 @@ curl -sI https://dev.podcaststudiohub.me | grep -iE \
 nmap --script ssl-enum-ciphers -p 443 dev.podcaststudiohub.me
 ```
 
-**To update the Nginx config** (after editing `deployment/nginx/podcastfy.conf`):
+**To update the Nginx config** (after merging a change to `deployment/nginx/podcastfy.conf`),
+install it as root from the root-owned clone — never from the deploy-account tree:
 ```bash
-scp deployment/nginx/podcastfy.conf root@<SERVER_IP>:/etc/nginx/sites-available/podcastfy
-ssh root@<SERVER_IP> "nginx -t && systemctl reload nginx"
+ssh root@<SERVER_IP>
+git -C /root/podcaststudiohub pull
+cp /root/podcaststudiohub/deployment/nginx/podcastfy.conf /etc/nginx/sites-available/podcastfy
+nginx -t && systemctl reload nginx
+```
+
+**The deploy asserts the installed config matches the committed one** (issue #491).
+The last step of `deploy-dev.yml` runs `deployment/scripts/check-nginx-drift.sh`, which
+`ssh`-reads `/etc/nginx/sites-available/podcastfy` and diffs it against the committed
+file rendered with the same `DOMAIN` / `API_PORT` / `FRONTEND_PORT` substitutions
+`provision-ssl.sh` applies. A mismatch turns the deploy red and prints the diff plus
+the re-sync commands above. It runs *after* the app deploy and health check on
+purpose: the app is already live, so drift never holds a security bump hostage to a
+one-minute operator re-sync — it just cannot go unnoticed. Merging an nginx change
+therefore means doing the re-sync above before (or right after) the deploy runs.
+Run the check by hand from a checkout:
+```bash
+SSH_HOST=<SERVER_IP> SSH_USER=<deploy-or-root-user> bash deployment/scripts/check-nginx-drift.sh
 ```
 
 ## Troubleshooting

@@ -1,6 +1,6 @@
 "use client"
 
-import React, { createContext, useContext, useEffect, useState } from "react"
+import React, { createContext, useContext, useEffect, useSyncExternalStore } from "react"
 
 type Theme = "light" | "dark" | "system"
 
@@ -12,66 +12,51 @@ interface ThemeContextType {
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined)
 
+// The stored choice and the OS preference are both external mutable state, so
+// they are read through useSyncExternalStore: the server snapshot ("system",
+// light) matches the pre-hydration DOM, and the real values take over right
+// after hydration — the same first-paint story as before, minus the `mounted`
+// flag. The <head> script in the root layout still sets the class before paint.
+const STORAGE_KEY = "theme"
+const THEME_CHANGE_EVENT = "podcastfy:theme-change"
+const DARK_QUERY = "(prefers-color-scheme: dark)"
+
+function subscribeTheme(onChange: () => void) {
+  window.addEventListener("storage", onChange)
+  window.addEventListener(THEME_CHANGE_EVENT, onChange)
+  return () => {
+    window.removeEventListener("storage", onChange)
+    window.removeEventListener(THEME_CHANGE_EVENT, onChange)
+  }
+}
+
+function getTheme(): Theme {
+  const saved = localStorage.getItem(STORAGE_KEY)
+  return saved === "light" || saved === "dark" ? saved : "system"
+}
+
+function subscribeSystemDark(onChange: () => void) {
+  const mediaQuery = window.matchMedia(DARK_QUERY)
+  mediaQuery.addEventListener("change", onChange)
+  return () => mediaQuery.removeEventListener("change", onChange)
+}
+
+function getSystemDark() {
+  return window.matchMedia(DARK_QUERY).matches
+}
+
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("system")
-  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">("light")
-  const [mounted, setMounted] = useState(false)
+  const theme = useSyncExternalStore<Theme>(subscribeTheme, getTheme, () => "system")
+  const systemDark = useSyncExternalStore(subscribeSystemDark, getSystemDark, () => false)
+  const resolvedTheme = theme === "system" ? (systemDark ? "dark" : "light") : theme
 
   useEffect(() => {
-    setMounted(true)
-    const savedTheme = localStorage.getItem("theme") as Theme | null
-    if (savedTheme && ["light", "dark", "system"].includes(savedTheme)) {
-      setThemeState(savedTheme)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!mounted) return
-
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
-    const resolved = theme === "system" ? (prefersDark ? "dark" : "light") : theme
-    setResolvedTheme(resolved)
-
-    if (resolved === "dark") {
-      document.documentElement.classList.add("dark")
-    } else {
-      document.documentElement.classList.remove("dark")
-    }
-  }, [theme, mounted])
-
-  useEffect(() => {
-    if (!mounted) return
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)")
-
-    const handleChange = () => {
-      if (theme === "system") {
-        const resolved = mediaQuery.matches ? "dark" : "light"
-        setResolvedTheme(resolved)
-        if (resolved === "dark") {
-          document.documentElement.classList.add("dark")
-        } else {
-          document.documentElement.classList.remove("dark")
-        }
-      }
-    }
-
-    mediaQuery.addEventListener("change", handleChange)
-    return () => mediaQuery.removeEventListener("change", handleChange)
-  }, [theme, mounted])
+    document.documentElement.classList.toggle("dark", resolvedTheme === "dark")
+  }, [resolvedTheme])
 
   const setTheme = (newTheme: Theme) => {
-    setThemeState(newTheme)
-    localStorage.setItem("theme", newTheme)
-
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches
-    const resolved =
-      newTheme === "system" ? (prefersDark ? "dark" : "light") : newTheme
-    setResolvedTheme(resolved)
-    if (resolved === "dark") {
-      document.documentElement.classList.add("dark")
-    } else {
-      document.documentElement.classList.remove("dark")
-    }
+    localStorage.setItem(STORAGE_KEY, newTheme)
+    window.dispatchEvent(new Event(THEME_CHANGE_EVENT))
   }
 
   return (

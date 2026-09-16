@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useSyncExternalStore } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { signIn } from "next-auth/react"
@@ -9,25 +9,30 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
+// useSyncExternalStore with a no-op subscription: false during SSR/hydration, true after.
+const subscribeNever = () => () => {}
+
 export default function LoginPage() {
   const router = useRouter()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
-  const [registered, setRegistered] = useState(false)
-
   // Signup redirects here with ?registered=true. Read window.location.search
   // (not useSearchParams, which forces a build-time Suspense boundary — same
-  // pattern as the distribution page) and clear the param so a refresh doesn't
-  // re-show the banner (#323).
+  // pattern as the distribution page). The server render can't see the URL, so
+  // the banner is gated on hydration to keep the server and client trees
+  // identical; the effect then clears the param so a refresh doesn't re-show
+  // the banner (#323).
+  const [registered] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("registered") === "true"
+  )
+  const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false)
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    if (params.get("registered") === "true") {
-      setRegistered(true)
-      window.history.replaceState({}, "", window.location.pathname)
-    }
-  }, [])
+    if (registered) window.history.replaceState({}, "", window.location.pathname)
+  }, [registered])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -62,7 +67,7 @@ export default function LoginPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
-            {registered && (
+            {hydrated && registered && (
               <div role="status" className="rounded-md bg-muted p-2 text-sm text-foreground">
                 Account created. Please sign in.
               </div>

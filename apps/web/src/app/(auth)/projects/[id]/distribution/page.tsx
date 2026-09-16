@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
@@ -70,9 +70,45 @@ function mapPodcastMetadataToForm(
   }
 }
 
+// Backend calls go through the same-origin /api/proxy handler, which injects
+// the bearer token server-side from the httpOnly cookie — no client token (#212).
+async function fetchProject(projectId: string): Promise<ProjectSummary | null> {
+  try {
+    const response = await fetch(`/api/proxy/projects/${projectId}`)
+    if (!response.ok) return null
+    const data = (await response.json()) as {
+      id: string
+      name: string
+      podcast_metadata?: RawPodcastMetadata
+    }
+    return {
+      id: data.id,
+      title: data.name,
+      podcastMetadata: mapPodcastMetadataToForm(data.podcast_metadata),
+    }
+  } catch (error) {
+    console.error("Failed to load project:", error)
+    return null
+  }
+}
+
+// Null means "no feed yet" (404) or a failure whose toast has already been shown.
+async function fetchFeed(projectId: string): Promise<RssFeed | null> {
+  try {
+    const response = await fetch(`/api/proxy/projects/${projectId}/rss-feed`)
+    if (response.ok) return (await response.json()) as RssFeed
+    if (response.status !== 404) showErrorToast("Failed to load RSS feed")
+    return null
+  } catch (error) {
+    console.error("Failed to load RSS feed:", error)
+    showErrorToast("Failed to load RSS feed: Network error")
+    return null
+  }
+}
+
 export default function DistributionPage() {
   const router = useRouter()
-  const params = useParams()
+  const params = useParams<{ id: string }>()
   const { status: authStatus } = useSession()
   const [project, setProject] = useState<ProjectSummary | null>(null)
   const [feed, setFeed] = useState<RssFeed | null>(null)
@@ -80,54 +116,21 @@ export default function DistributionPage() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [showEditMetadata, setShowEditMetadata] = useState(false)
 
-  // Backend calls go through the same-origin /api/proxy handler, which injects
-  // the bearer token server-side from the httpOnly cookie — no client token (#212).
-  const loadProject = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/proxy/projects/${params.id}`)
-      if (response.ok) {
-        const data = (await response.json()) as {
-          id: string
-          name: string
-          podcast_metadata?: RawPodcastMetadata
-        }
-        setProject({
-          id: data.id,
-          title: data.name,
-          podcastMetadata: mapPodcastMetadataToForm(data.podcast_metadata),
-        })
-      }
-    } catch (error) {
-      console.error("Failed to load project:", error)
-    }
-  }, [params.id])
-
-  const loadFeed = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/proxy/projects/${params.id}/rss-feed`)
-      if (response.ok) {
-        const data = (await response.json()) as RssFeed
-        setFeed(data)
-      } else if (response.status === 404) {
-        setFeed(null)
-      } else {
-        setFeed(null)
-        showErrorToast("Failed to load RSS feed")
-      }
-    } catch (error) {
-      console.error("Failed to load RSS feed:", error)
-      showErrorToast("Failed to load RSS feed: Network error")
-    } finally {
-      setLoading(false)
-    }
-  }, [params.id])
-
   useEffect(() => {
-    if (authStatus === "authenticated") {
-      loadProject()
-      loadFeed()
+    if (authStatus !== "authenticated") return
+    let ignore = false
+    fetchProject(params.id).then((loaded) => {
+      if (!ignore && loaded) setProject(loaded)
+    })
+    fetchFeed(params.id).then((loaded) => {
+      if (ignore) return
+      setFeed(loaded)
+      setLoading(false)
+    })
+    return () => {
+      ignore = true
     }
-  }, [authStatus, loadProject, loadFeed])
+  }, [authStatus, params.id])
 
   const handleGenerate = async () => {
     setIsGenerating(true)

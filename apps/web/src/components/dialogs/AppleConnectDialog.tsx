@@ -31,46 +31,60 @@ interface AppleConnectDialogProps {
   onConnected: () => void
 }
 
+// Returns null when the request failed; the error toast has already been shown.
+async function fetchInstructions(): Promise<AppleAuthorizeInfo | null> {
+  try {
+    const response = await fetch("/api/proxy/distribution-targets/apple/authorize", {
+      method: "POST",
+    })
+    if (!response.ok) {
+      showErrorToast("Failed to load Apple Podcasts setup instructions")
+      return null
+    }
+    return (await response.json()) as AppleAuthorizeInfo
+  } catch (error) {
+    console.error("Failed to load Apple Podcasts setup instructions:", error)
+    showErrorToast("Failed to load Apple Podcasts setup instructions: Network error")
+    return null
+  }
+}
+
 export function AppleConnectDialog({ open, onOpenChange, onConnected }: AppleConnectDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <AppleConnectForm onConnected={onConnected} onClose={() => onOpenChange(false)} />
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Mounted only while the dialog is open (Radix unmounts DialogContent on
+// close), so the form and the fetched instructions start fresh on every open.
+function AppleConnectForm({ onConnected, onClose }: { onConnected: () => void; onClose: () => void }) {
   const [instructions, setInstructions] = useState<AppleAuthorizeInfo | null>(null)
-  const [loadingInstructions, setLoadingInstructions] = useState(false)
+  const [loadingInstructions, setLoadingInstructions] = useState(true)
 
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting, isValid },
-    reset,
   } = useForm<AppleDistributionFormData>({
     resolver: zodResolver(appleDistributionSchema),
     mode: "onChange",
   })
 
   useEffect(() => {
-    if (!open) return
-    reset()
-    setInstructions(null)
-    setLoadingInstructions(true)
-
-    const loadInstructions = async () => {
-      try {
-        const response = await fetch("/api/proxy/distribution-targets/apple/authorize", {
-          method: "POST",
-        })
-        if (response.ok) {
-          setInstructions((await response.json()) as AppleAuthorizeInfo)
-        } else {
-          showErrorToast("Failed to load Apple Podcasts setup instructions")
-        }
-      } catch (error) {
-        console.error("Failed to load Apple Podcasts setup instructions:", error)
-        showErrorToast("Failed to load Apple Podcasts setup instructions: Network error")
-      } finally {
-        setLoadingInstructions(false)
-      }
+    let ignore = false
+    fetchInstructions().then((info) => {
+      if (ignore) return
+      setInstructions(info)
+      setLoadingInstructions(false)
+    })
+    return () => {
+      ignore = true
     }
-
-    loadInstructions()
-  }, [open, reset])
+  }, [])
 
   const onSubmit = async (data: AppleDistributionFormData) => {
     try {
@@ -86,9 +100,8 @@ export function AppleConnectDialog({ open, onOpenChange, onConnected }: AppleCon
       })
 
       if (response.ok) {
-        reset()
         onConnected()
-        onOpenChange(false)
+        onClose()
       } else {
         // Surface the backend's validation message (e.g. 422 detail) when present.
         const body = await response.json().catch(() => null)
@@ -102,111 +115,97 @@ export function AppleConnectDialog({ open, onOpenChange, onConnected }: AppleCon
     }
   }
 
-  const handleOpenChange = (nextOpen: boolean) => {
-    onOpenChange(nextOpen)
-    if (!nextOpen) {
-      reset()
-    }
-  }
-
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <HugeiconsIcon icon={AppleIcon} size={20} />
-            Connect Apple Podcasts
-          </DialogTitle>
-          <DialogDescription>
-            Apple Podcasts ingests episodes from your project&apos;s public RSS feed —
-            connecting your account here records a distribution target, it does not directly
-            upload episodes.
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <DialogHeader>
+        <DialogTitle className="flex items-center gap-2">
+          <HugeiconsIcon icon={AppleIcon} size={20} />
+          Connect Apple Podcasts
+        </DialogTitle>
+        <DialogDescription>
+          Apple Podcasts ingests episodes from your project&apos;s public RSS feed —
+          connecting your account here records a distribution target, it does not directly
+          upload episodes.
+        </DialogDescription>
+      </DialogHeader>
 
-        {loadingInstructions && (
-          <p className="text-sm text-muted-foreground">Loading setup instructions...</p>
-        )}
+      {loadingInstructions && (
+        <p className="text-sm text-muted-foreground">Loading setup instructions...</p>
+      )}
 
-        {instructions && (
-          <div className="rounded-md border border-border bg-muted p-3 text-sm space-y-2">
-            <p>{instructions.message}</p>
-            <div className="flex flex-col gap-1">
-              {/* setup_instructions is a URL to Apple's help doc, not prose */}
-              <a
-                href={instructions.setup_instructions}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline"
-              >
-                View setup instructions
-              </a>
-              <a
-                href={instructions.podcasts_connect_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline"
-              >
-                Open Apple Podcasts Connect
-              </a>
-            </div>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 mt-4" noValidate>
-          <div>
-            <Label htmlFor="apple-show-id" className="mb-1">
-              Show ID <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id="apple-show-id"
-              type="text"
-              placeholder="1234567890"
-              aria-invalid={errors.showId ? "true" : "false"}
-              aria-describedby={errors.showId ? "apple-show-id-error" : undefined}
-              {...register("showId")}
-              className={errors.showId ? "border-destructive" : ""}
-            />
-            {errors.showId && (
-              <p id="apple-show-id-error" className="text-destructive text-sm mt-1" role="alert">
-                {errors.showId.message}
-              </p>
-            )}
-          </div>
-          <div>
-            <Label htmlFor="apple-api-key" className="mb-1">
-              API Key <span className="text-destructive">*</span>
-            </Label>
-            <Input
-              id="apple-api-key"
-              type="password"
-              placeholder="Apple Podcasts Connect API key"
-              aria-invalid={errors.apiKey ? "true" : "false"}
-              aria-describedby={errors.apiKey ? "apple-api-key-error" : undefined}
-              {...register("apiKey")}
-              className={errors.apiKey ? "border-destructive" : ""}
-            />
-            {errors.apiKey && (
-              <p id="apple-api-key-error" className="text-destructive text-sm mt-1" role="alert">
-                {errors.apiKey.message}
-              </p>
-            )}
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => handleOpenChange(false)}
-              disabled={isSubmitting}
+      {instructions && (
+        <div className="rounded-md border border-border bg-muted p-3 text-sm space-y-2">
+          <p>{instructions.message}</p>
+          <div className="flex flex-col gap-1">
+            {/* setup_instructions is a URL to Apple's help doc, not prose */}
+            <a
+              href={instructions.setup_instructions}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary underline"
             >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={isSubmitting || !isValid}>
-              {isSubmitting ? "Connecting..." : "Connect"}
-            </Button>
+              View setup instructions
+            </a>
+            <a
+              href={instructions.podcasts_connect_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary underline"
+            >
+              Open Apple Podcasts Connect
+            </a>
           </div>
-        </form>
-      </DialogContent>
-    </Dialog>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 mt-4" noValidate>
+        <div>
+          <Label htmlFor="apple-show-id" className="mb-1">
+            Show ID <span className="text-destructive">*</span>
+          </Label>
+          <Input
+            id="apple-show-id"
+            type="text"
+            placeholder="1234567890"
+            aria-invalid={errors.showId ? "true" : "false"}
+            aria-describedby={errors.showId ? "apple-show-id-error" : undefined}
+            {...register("showId")}
+            className={errors.showId ? "border-destructive" : ""}
+          />
+          {errors.showId && (
+            <p id="apple-show-id-error" className="text-destructive text-sm mt-1" role="alert">
+              {errors.showId.message}
+            </p>
+          )}
+        </div>
+        <div>
+          <Label htmlFor="apple-api-key" className="mb-1">
+            API Key <span className="text-destructive">*</span>
+          </Label>
+          <Input
+            id="apple-api-key"
+            type="password"
+            placeholder="Apple Podcasts Connect API key"
+            aria-invalid={errors.apiKey ? "true" : "false"}
+            aria-describedby={errors.apiKey ? "apple-api-key-error" : undefined}
+            {...register("apiKey")}
+            className={errors.apiKey ? "border-destructive" : ""}
+          />
+          {errors.apiKey && (
+            <p id="apple-api-key-error" className="text-destructive text-sm mt-1" role="alert">
+              {errors.apiKey.message}
+            </p>
+          )}
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose} disabled={isSubmitting}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isSubmitting || !isValid}>
+            {isSubmitting ? "Connecting..." : "Connect"}
+          </Button>
+        </div>
+      </form>
+    </>
   )
 }

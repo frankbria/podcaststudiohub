@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useSession } from "next-auth/react"
 import { Button } from "@/components/ui/button"
@@ -34,45 +34,59 @@ interface Analytics {
   top_episodes: TopEpisode[]
 }
 
+// Backend calls go through the same-origin /api/proxy handler, which injects
+// the bearer token server-side from the httpOnly cookie — no client token (#212).
+// Returns null when the request failed; the error toast has already been shown.
+async function fetchAnalytics(
+  projectId: string,
+  days: string
+): Promise<Analytics | "not-found" | null> {
+  try {
+    const response = await fetch(`/api/proxy/projects/${projectId}/analytics?days=${days}`)
+    if (response.ok) return (await response.json()) as Analytics
+    if (response.status === 404) return "not-found"
+    showErrorToast("Failed to load analytics")
+    return null
+  } catch (error) {
+    console.error("Failed to load analytics:", error)
+    showErrorToast("Failed to load analytics: Network error")
+    return null
+  }
+}
+
 export default function ProjectAnalyticsPage() {
   const router = useRouter()
-  const params = useParams()
+  const params = useParams<{ id: string }>()
   const { status: authStatus } = useSession()
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
   const [notFound, setNotFound] = useState(false)
   const [loading, setLoading] = useState(true)
   const [days, setDays] = useState("30")
 
-  // Backend calls go through the same-origin /api/proxy handler, which injects
-  // the bearer token server-side from the httpOnly cookie — no client token (#212).
-  const loadAnalytics = useCallback(async () => {
-    setLoading(true)
-    try {
-      const response = await fetch(
-        `/api/proxy/projects/${params.id}/analytics?days=${days}`
-      )
-      if (response.ok) {
-        const data = await response.json() as Analytics
-        setAnalytics(data)
-        setNotFound(false)
-      } else if (response.status === 404) {
-        setNotFound(true)
-      } else {
-        showErrorToast("Failed to load analytics")
-      }
-    } catch (error) {
-      console.error("Failed to load analytics:", error)
-      showErrorToast("Failed to load analytics: Network error")
-    } finally {
-      setLoading(false)
-    }
-  }, [params.id, days])
-
   useEffect(() => {
-    if (authStatus === "authenticated") {
-      loadAnalytics()
+    if (authStatus !== "authenticated") return
+    // App Router reuses this page instance when only [id] changes, so a slow
+    // response for the previous project must not overwrite the current one.
+    let ignore = false
+    fetchAnalytics(params.id, days).then((result) => {
+      if (ignore) return
+      if (result === "not-found") {
+        setNotFound(true)
+      } else if (result) {
+        setAnalytics(result)
+        setNotFound(false)
+      }
+      setLoading(false)
+    })
+    return () => {
+      ignore = true
     }
-  }, [authStatus, loadAnalytics])
+  }, [authStatus, params.id, days])
+
+  const changePeriod = (value: string) => {
+    setDays(value)
+    setLoading(true)
+  }
 
   const goBack = () => router.push(`/projects/${params.id}`)
 
@@ -122,7 +136,7 @@ export default function ProjectAnalyticsPage() {
 
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl font-bold">Analytics</h1>
-          <Select value={days} onValueChange={setDays}>
+          <Select value={days} onValueChange={changePeriod}>
             <SelectTrigger aria-label="Select time period" className="w-40">
               <SelectValue />
             </SelectTrigger>

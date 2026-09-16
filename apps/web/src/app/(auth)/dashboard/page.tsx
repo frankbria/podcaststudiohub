@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useSession } from "next-auth/react"
@@ -28,6 +28,35 @@ interface Project {
   created_at: string
 }
 
+// Backend calls go through the same-origin /api/proxy handler, which injects
+// the bearer token server-side from the httpOnly cookie — no client token (#212).
+// Returns null when the request failed; the error toast has already been shown.
+async function fetchProjects(): Promise<Project[] | null> {
+  try {
+    const response = await fetch(`/api/proxy/projects`)
+    if (!response.ok) {
+      showErrorToast("Failed to load projects")
+      return null
+    }
+    // API is the contract source of truth: it returns {projects: [...]} where
+    // each row uses `name`. Map to this view-model's `title` (issue #337).
+    const data = await response.json() as {
+      projects?: Array<{ id: string; name: string; description: string | null; episode_count?: number; created_at: string }>
+    }
+    return (data.projects ?? []).map((p) => ({
+      id: p.id,
+      title: p.name,
+      description: p.description,
+      episode_count: p.episode_count ?? 0,
+      created_at: p.created_at,
+    }))
+  } catch (error) {
+    console.error("Failed to load projects:", error)
+    showErrorToast("Failed to load projects: Network error")
+    return null
+  }
+}
+
 export default function DashboardPage() {
   const router = useRouter()
   const { status } = useSession()
@@ -48,45 +77,22 @@ export default function DashboardPage() {
     mode: "onChange",
   })
 
-  // Backend calls go through the same-origin /api/proxy handler, which injects
-  // the bearer token server-side from the httpOnly cookie — no client token (#212).
-  const loadProjects = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/proxy/projects`)
-
-      if (response.ok) {
-        // API is the contract source of truth: it returns {projects: [...]} where
-        // each row uses `name`. Map to this view-model's `title` (issue #337).
-        const data = await response.json() as {
-          projects?: Array<{ id: string; name: string; description: string | null; episode_count?: number; created_at: string }>
-        }
-        setProjects(
-          (data.projects ?? []).map((p) => ({
-            id: p.id,
-            title: p.name,
-            description: p.description,
-            episode_count: p.episode_count ?? 0,
-            created_at: p.created_at,
-          }))
-        )
-      } else {
-        showErrorToast("Failed to load projects")
-      }
-    } catch (error) {
-      console.error("Failed to load projects:", error)
-      showErrorToast("Failed to load projects: Network error")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
   useEffect(() => {
     if (status === "unauthenticated") {
       router.push("/login")
-    } else if (status === "authenticated") {
-      loadProjects()
+      return
     }
-  }, [status, router, loadProjects])
+    if (status !== "authenticated") return
+    let ignore = false
+    fetchProjects().then((projects) => {
+      if (ignore) return
+      if (projects) setProjects(projects)
+      setLoading(false)
+    })
+    return () => {
+      ignore = true
+    }
+  }, [status, router])
 
   const onSubmit = async (data: ProjectFormData) => {
     try {
@@ -111,7 +117,8 @@ export default function DashboardPage() {
         showSuccessToast("Project created successfully")
         setShowCreateDialog(false)
         reset()
-        loadProjects()
+        const projects = await fetchProjects()
+        if (projects) setProjects(projects)
       } else {
         showErrorToast("Failed to create project: " + response.statusText)
       }

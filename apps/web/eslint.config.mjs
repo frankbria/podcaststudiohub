@@ -49,16 +49,6 @@ const config = [
           ],
         },
       ],
-
-      // eslint-config-next 16 pulls eslint-plugin-react-hooks 7, which added a
-      // compiler-derived rule set the 15.x config never ran. Adopting it is
-      // real refactoring (10 findings across app code, chiefly effects that
-      // setState synchronously), not lint plumbing -- the same call made for
-      // ruff's widened default set, which is pinned in apps/api/pyproject.toml
-      // rather than adopted here. Tracked in #482; delete these two lines when
-      // that lands.
-      'react-hooks/set-state-in-effect': 'off',
-      'react-hooks/incompatible-library': 'off',
     },
   },
 

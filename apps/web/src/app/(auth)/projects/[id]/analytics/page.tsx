@@ -58,35 +58,36 @@ export default function ProjectAnalyticsPage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
   const { status: authStatus } = useSession()
-  const [analytics, setAnalytics] = useState<Analytics | null>(null)
-  const [notFound, setNotFound] = useState(false)
-  const [loading, setLoading] = useState(true)
   const [days, setDays] = useState("30")
+  // The loaded result remembers which project/period it belongs to, so
+  // "loading" is derived: any change of [id] (App Router reuses this page
+  // instance) or period shows the skeleton until the matching response lands.
+  const query = `${params.id}:${days}`
+  const [loaded, setLoaded] = useState<{
+    query: string
+    analytics: Analytics | null
+    notFound: boolean
+  } | null>(null)
+  const loading = loaded?.query !== query
+  const analytics = loaded?.analytics ?? null
+  const notFound = loaded?.notFound ?? false
 
   useEffect(() => {
     if (authStatus !== "authenticated") return
-    // App Router reuses this page instance when only [id] changes, so a slow
-    // response for the previous project must not overwrite the current one.
     let ignore = false
     fetchAnalytics(params.id, days).then((result) => {
       if (ignore) return
-      if (result === "not-found") {
-        setNotFound(true)
-      } else if (result) {
-        setAnalytics(result)
-        setNotFound(false)
-      }
-      setLoading(false)
+      setLoaded((prev) => ({
+        query,
+        // A failed reload keeps the previous data on screen, as before.
+        analytics: result && result !== "not-found" ? result : (prev?.analytics ?? null),
+        notFound: result === "not-found",
+      }))
     })
     return () => {
       ignore = true
     }
-  }, [authStatus, params.id, days])
-
-  const changePeriod = (value: string) => {
-    setDays(value)
-    setLoading(true)
-  }
+  }, [authStatus, params.id, days, query])
 
   const goBack = () => router.push(`/projects/${params.id}`)
 
@@ -136,7 +137,7 @@ export default function ProjectAnalyticsPage() {
 
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl font-bold">Analytics</h1>
-          <Select value={days} onValueChange={changePeriod}>
+          <Select value={days} onValueChange={setDays}>
             <SelectTrigger aria-label="Select time period" className="w-40">
               <SelectValue />
             </SelectTrigger>

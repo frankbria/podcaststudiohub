@@ -212,9 +212,16 @@ export default function EpisodePage() {
   const [newTtsVoice1Id, setNewTtsVoice1Id] = useState<string>("")
   const [newTtsVoice2Id, setNewTtsVoice2Id] = useState<string>("")
   const [savingTts, setSavingTts] = useState(false)
-  const [analytics, setAnalytics] = useState<EpisodeAnalyticsData | null>(null)
-  const [analyticsLoading, setAnalyticsLoading] = useState(true)
-  const [analyticsError, setAnalyticsError] = useState(false)
+  // The loaded analytics remember which episode they belong to, so the
+  // section's loading/error state is derived and resets whenever the App
+  // Router swaps [id] on this same instance.
+  const [loadedAnalytics, setLoadedAnalytics] = useState<{
+    episodeId: string
+    data: EpisodeAnalyticsData | null
+  } | null>(null)
+  const analyticsLoading = loadedAnalytics?.episodeId !== params.id
+  const analyticsError = !analyticsLoading && loadedAnalytics?.data === null
+  const analytics = analyticsLoading ? null : loadedAnalytics?.data ?? null
   const robustESRef = useRef<RobustEventSource | null>(null)
   const stopPollingRef = useRef<(() => void) | null>(null)
   const isMountedRef = useRef(true)
@@ -296,10 +303,7 @@ export default function EpisodePage() {
     // Analytics is a supplementary, best-effort section: it has its own
     // contained loading/error state and never blocks or errors the whole page.
     fetchEpisodeAnalytics(params.id).then((data) => {
-      if (ignore) return
-      setAnalytics(data)
-      setAnalyticsError(data === null)
-      setAnalyticsLoading(false)
+      if (!ignore) setLoadedAnalytics({ episodeId: params.id, data })
     })
     return () => {
       ignore = true

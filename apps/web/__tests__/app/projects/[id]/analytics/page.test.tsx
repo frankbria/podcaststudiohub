@@ -212,6 +212,23 @@ describe('ProjectAnalyticsPage', () => {
     expect(screen.queryByText('120')).not.toBeInTheDocument()
   })
 
+  it('shows the loading skeleton again when the project id changes', async () => {
+    global.fetch = jest.fn((url: string) =>
+      url.startsWith('/api/proxy/projects/p1/')
+        ? Promise.resolve({ ok: true, status: 200, json: async () => fullAnalytics })
+        : new Promise(() => {})
+    ) as jest.Mock
+
+    const { rerender } = render(<ProjectAnalyticsPage />)
+    await screen.findByText('120')
+
+    mockParamsId = 'p2'
+    rerender(<ProjectAnalyticsPage />)
+
+    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+    expect(screen.queryByText('120')).not.toBeInTheDocument()
+  })
+
   it('navigates back to the project page', async () => {
     global.fetch = mockFetchRouter()
     render(<ProjectAnalyticsPage />)

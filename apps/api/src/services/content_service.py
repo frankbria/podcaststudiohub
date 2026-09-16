@@ -5,6 +5,7 @@ Provides CRUD operations for content sources with episode validation, pagination
 and extraction status management. RLS ensures tenant isolation.
 """
 
+import logging
 import os
 import tempfile
 import uuid
@@ -21,6 +22,8 @@ from ..utils.validators import (
     sanitize_filename,
     validate_pdf_format,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def add_content_source(
@@ -89,6 +92,7 @@ async def _upload_pdf_to_s3(file_path: str, s3_key: str) -> str:
     from ..config import settings
     from ..services.storage_service import StorageService
 
+
     bucket = getattr(settings, "AWS_S3_BUCKET", None)
     if not bucket:
         # Without S3 the PDF cannot be persisted anywhere extraction can read it,
@@ -135,7 +139,7 @@ async def upload_pdf_content(
 
     Raises:
         HTTPException: 404 if episode not found, 413 if too large,
-            422 if invalid format / storage failure.
+            422 if invalid format / local file failure, 503 if file storage is unavailable.
     """
     # Verify episode exists (RLS ensures it's in the correct tenant)
     episode = await db.get(Episode, episode_id)
@@ -195,10 +199,18 @@ async def upload_pdf_content(
 
     except HTTPException:
         raise
-    except Exception as e:  # noqa: BLE001 — the temp file is cleaned up in finally regardless, and any storage failure means the same thing to the caller: this PDF could not be stored
+    except (OSError, ValueError):
+        # Local temp-file / value failure: the file itself could not be stored.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=f"Failed to store PDF: {str(e)}",
+            detail="Failed to store PDF.",
+        )
+    except Exception:  # noqa: BLE001 — anything else is the storage backend: boto3 raises S3UploadFailedError / ClientError, plain Exceptions that are never OSError (#501)
+        # The boto message carries bucket, key and tenant/episode UUIDs — log it, never return it.
+        logger.exception("S3 upload failed for PDF on episode %s", episode_id)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="File storage is unavailable.",
         )
     finally:
         if temp_path and os.path.exists(temp_path):

@@ -848,3 +848,56 @@ async def test_download_url_with_s3(client, auth_headers):
 	assert data["snippet_id"] == snippet_id
 	assert data["download_url"] == presigned_url
 	assert data["expires_in_seconds"] == 3600
+
+
+# ---------------------------------------------------------------------------
+# #501 — storage outages are 503 and never leak boto detail; client faults stay 422
+# ---------------------------------------------------------------------------
+
+BOTO_ACCESS_DENIED = (
+	"Failed to upload file to S3: An error occurred (AccessDenied) when calling the "
+	"PutObject operation on bucket my-secret-bucket key audio-snippets/11111111-2222-3333-4444-555555555555/x.mp3"
+)
+
+
+@pytest.mark.asyncio
+async def test_upload_s3_failure_returns_503_without_boto_detail(client, auth_headers, caplog):
+	"""An S3 failure is a 503 with a fixed message; the boto text goes to the log only."""
+	audio_bytes = make_audio_file("intro.mp3")
+
+	with patch("src.services.audio_snippet_service._upload_to_s3", new_callable=AsyncMock) as mock_s3:
+		mock_s3.side_effect = Exception(BOTO_ACCESS_DENIED)
+		with patch("src.services.audio_snippet_service.get_audio_duration", return_value=1.0):
+			response = await client.post(
+				"/audio-snippets/upload",
+				headers=auth_headers,
+				files={"file": ("intro.mp3", io.BytesIO(audio_bytes), "audio/mpeg")},
+				data={"name": "Intro", "snippet_type": "intro"},
+			)
+
+	assert response.status_code == 503
+	assert response.json()["detail"] == "File storage is unavailable."
+	assert "my-secret-bucket" not in response.text
+	assert "11111111-2222" not in response.text
+	assert "AccessDenied" not in response.text
+	assert "my-secret-bucket" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_upload_local_io_failure_stays_422_without_detail(client, auth_headers):
+	"""A local OSError on this path is still reported as 422, with no str(e) in the body."""
+	audio_bytes = make_audio_file("intro.mp3")
+
+	with patch("src.services.audio_snippet_service._upload_to_s3", new_callable=AsyncMock) as mock_s3:
+		mock_s3.side_effect = OSError("disk full at /tmp/secret-path")
+		with patch("src.services.audio_snippet_service.get_audio_duration", return_value=1.0):
+			response = await client.post(
+				"/audio-snippets/upload",
+				headers=auth_headers,
+				files={"file": ("intro.mp3", io.BytesIO(audio_bytes), "audio/mpeg")},
+				data={"name": "Intro", "snippet_type": "intro"},
+			)
+
+	assert response.status_code == 422
+	assert response.json()["detail"] == "Failed to process audio file."
+	assert "secret-path" not in response.text

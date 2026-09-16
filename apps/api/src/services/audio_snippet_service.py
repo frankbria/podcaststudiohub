@@ -5,6 +5,7 @@ Provides CRUD operations for audio snippets with file upload to S3,
 metadata extraction, pagination, filtering, and tenant isolation via RLS.
 """
 
+import logging
 import os
 import tempfile
 import uuid
@@ -26,6 +27,8 @@ from ..utils.audio_utils import (
 	get_content_type,
 	MAX_FILE_SIZE_BYTES,
 )
+
+logger = logging.getLogger(__name__)
 
 
 async def upload_audio_snippet(
@@ -58,7 +61,8 @@ async def upload_audio_snippet(
 		Created AudioSnippet instance
 
 	Raises:
-		HTTPException: 413 if file too large, 422 if invalid format/corrupted, 404 if project not found
+		HTTPException: 413 if file too large, 422 if invalid format/corrupted, 404 if project not found,
+			503 if file storage is unavailable
 	"""
 	# Validate project exists if provided
 	if project_id is not None:
@@ -120,10 +124,18 @@ async def upload_audio_snippet(
 
 	except HTTPException:
 		raise
-	except Exception as e:  # noqa: BLE001 — the temp file is removed in finally regardless, and every failure here means the same thing to the caller: this audio file could not be processed
+	except (OSError, ValueError):
+		# Local temp-file / value failure: the file itself could not be processed.
 		raise HTTPException(
 			status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-			detail=f"Failed to process audio file: {str(e)}"
+			detail="Failed to process audio file."
+		)
+	except Exception:  # noqa: BLE001 — anything else is the storage backend: boto3 raises S3UploadFailedError / ClientError, plain Exceptions that are never OSError (#501)
+		# The boto message carries bucket, key and tenant/user UUIDs — log it, never return it.
+		logger.exception("S3 upload failed for audio snippet %s", snippet_id)
+		raise HTTPException(
+			status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+			detail="File storage is unavailable."
 		)
 	finally:
 		# Clean up temp file
@@ -309,9 +321,8 @@ async def delete_audio_snippet(
 				await storage.delete_file(snippet.s3_key)
 		except Exception:  # noqa: BLE001 — the DB row is deleted either way, so a storage failure must not block the delete; it leaves an orphaned object, which is the lesser outcome
 			# Log but don't fail if S3 deletion fails
-			import logging
-			logging.getLogger(__name__).warning(
-				f"Failed to delete S3 object {snippet.s3_key} for snippet {snippet.id}"
+			logger.warning(
+				"Failed to delete S3 object %s for snippet %s", snippet.s3_key, snippet.id
 			)
 
 	await db.delete(snippet)
@@ -340,6 +351,7 @@ async def generate_download_url(snippet: AudioSnippet, expiration: int = 3600) -
 
 	from ..config import settings
 	from ..services.storage_service import StorageService
+
 
 	bucket = getattr(settings, "AWS_S3_BUCKET", None)
 	if not bucket:

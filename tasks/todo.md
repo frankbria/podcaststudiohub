@@ -1,72 +1,37 @@
-# [P0.1] #481 — Signup page crashes on a Pydantic 422
+# [P1.2] #501 — S3 failures return 422 with bucket and tenant UUIDs in the client-visible body
 
-## Root cause (confirmed, not hypothesised)
+Branch: `feature/issue-501-s3-failures-503`. Plan source: issue body ("Fix" section), adapted below.
 
-1. `UserRegister.full_name` is required, `min_length=1` (`apps/api/src/schemas/auth.py:18`).
-2. `tests/e2e/specs/01-auth.spec.ts:42` ("should show error for existing email") fills only
-   email + password, so the form posts `full_name: ""` → Pydantic rejects it with **422**, whose
-   `detail` is an **array** of `{msg, loc, type}`.
-3. `apps/web/src/app/signup/page.tsx:33` does `setError(data.detail || "Registration failed")`,
-   putting that array into a `string` state (untyped — `response.json()` is `any`, so tsc misses it).
-4. Line 102 renders `{error}` → React throws *"Objects are not valid as a React child"*.
-5. `apps/web/src` has **no error boundary at all**, so the throw escapes to Next's built-in root
-   handler and the route dies.
+## Findings that shape the plan
 
-The 422 is deterministic. What varies is only which crash surface appears — and the assertion
-`text=/error|already|exist/i` matches Next's own "Application **error**…" text, so the test
-*passed* whenever that page rendered. It never once asserted a real validation message.
+- `StorageService.upload_file` wraps boto `ClientError` in a bare `Exception("Failed to upload file to S3: <boto msg>")`
+  (`apps/api/src/services/storage_service.py:97`), so every S3 failure reaches the service catch as a plain `Exception`
+  carrying bucket/key/tenant text. Never an `OSError`.
+- `get_audio_duration` swallows its own errors and returns `None`, so the only non-HTTPException failures inside the
+  audio try block are the temp-file write (`OSError`) and the S3 upload.
+- Neither service module has a logger today. Add `logging.getLogger(__name__)` (repo convention, e.g. `episode_service.py:27`).
 
-With `full_name` filled, `create_user` returns **400 + `detail: "Email already registered"`**
-(a string) — the duplicate-email path the test was named for.
+## Steps
 
-## Plan
+1. **RED** — add 4 tests (2 per site) in `tests/test_audio_snippets.py` and `tests/test_content.py`:
+   - upload helper `side_effect=Exception("... AccessDenied ... bucket ... content/<tenant>/...")` → 503, fixed detail,
+     no bucket/key text in body, boto text present in caplog.
+   - upload helper `side_effect=OSError("disk full")` → 422, fixed detail, `"disk full"` not in body.
+2. **GREEN** — split the catch at `audio_snippet_service.py:123` and `content_service.py:198`:
+   `except (OSError, ValueError)` → 422 fixed message; `except Exception` → `logger.exception(...)` + 503
+   `"File storage is unavailable."`. Drop every `str(e)` interpolation at both sites.
+3. Full `pytest tests/` + ruff.
 
-### Step 1 — Fix the crash at its root (TDD)
-- RED: `apps/web/__tests__/app/signup/page.test.tsx` — add a case mocking an **array-shaped**
-  `detail` (`[{msg: "String should have at least 1 character", loc: [...], type: "..."}]`);
-  assert the joined message renders and the component does not throw.
-- GREEN: route line 33 through the existing `extractApiErrorDetail(body, fallback)` from
-  `apps/web/src/lib/api-error.ts` — the helper already handles both FastAPI shapes and is already
-  used by `AppleConnectDialog` / `WebhookConnectDialog`.
-- Files: `src/app/signup/page.tsx`, `__tests__/app/signup/page.test.tsx`
+## Acceptance criteria (from issue)
 
-### Step 2 — Same defect class, remaining callers
-`projects/[id]/distribution/page.tsx:144` and `:187` interpolate `${body.detail}` into a toast →
-`[object Object]` on a 422. Not fatal, same root cause; fixing only the caller the ticket names
-leaves siblings broken.
-- Route both through `extractApiErrorDetail`. Add/extend tests.
-- Files: `src/app/(auth)/projects/[id]/distribution/page.tsx` + its test
-- (`episodes/[id]/page.tsx:427` is already guarded with a `typeof detail === "string"` check —
-  leave it.)
+- [ ] A storage failure returns 503 with a fixed message; the boto detail is in the server log only
+- [ ] A genuine client fault (unwritable temp file, bad value) still returns 422
+- [ ] Tests cover both arms at both sites
+- [ ] No response body at either site interpolates `str(e)`
 
-### Step 3 — Stop a render throw from killing the route
-- Add `apps/web/src/app/error.tsx` (Next's native route error boundary) so any client render
-  throw degrades to recoverable in-app UI with a reset action instead of a dead page.
-- Scope: ONE root boundary. No per-route boundaries.
-- Files: `src/app/error.tsx`, `__tests__/app/error.test.tsx`
+## Autonomous decisions
 
-### Step 4 — Make the E2E test assert the right thing (issue criteria 1 & 2)
-- Fill the full-name field so the request is a genuine duplicate-email submission (400 + string
-  detail) rather than a request-shape rejection.
-- Assert against `#signup-error` specifically, so a dead page and a validation message can no
-  longer be confused.
-- Files: `tests/e2e/specs/01-auth.spec.ts`
-
-## Acceptance criteria (from the issue's "Suggested next steps")
-
-- [ ] 1. Test asserts a specific error element, not a broad text regex — a dead page and a
-      validation message are distinguishable.
-- [ ] 2. The test exercises the precise duplicate-email path (400 + string detail), not a
-      validation rejection it was passing on by accident.
-- [ ] 3. A 422 on `/auth/register` can no longer take the signup page down.
-
-## Autonomous decisions (no architectural fork)
-
-- **Reuse `extractApiErrorDetail`** rather than adding a guard per call site — one shared helper
-  already exists and already encodes this exact contract.
-- **One root `error.tsx`**, not a boundary per route — smallest change that closes criterion 3.
-- **Keep the pre-seeded E2E user** rather than making the test self-seeding: the issue offered
-  either, and self-seeding would add a registration call against a rate limit the spec is
-  explicitly designed to avoid.
-- **No backend change.** A 422 for a malformed body is correct REST; the defect is that the
-  frontend cannot render it.
+- Tests patch the module-scope upload helper (existing pattern at both sites) rather than boto — the helper is the
+  seam the issue names and the outage shape is identical either way.
+- 422 detail strings stay close to the old ones ("Failed to process audio file." / "Failed to store PDF.") so
+  nothing downstream that greps them changes meaning; only the `str(e)` suffix is gone.

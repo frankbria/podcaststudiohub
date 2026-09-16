@@ -185,7 +185,7 @@ async def upload_pdf_content_source(
 
     Raises:
         HTTPException: 404 if episode not found, 413 if file too large,
-            422 if the file is not a valid PDF.
+            422 if the file is not a valid PDF, 503 if file storage is unavailable.
     """
     content_source = await upload_pdf_content(
         db=db,

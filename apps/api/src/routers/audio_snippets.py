@@ -67,7 +67,7 @@ async def upload_audio_snippet_endpoint(
 		Created audio snippet with S3 URL and metadata
 
 	Raises:
-		HTTPException: 413 if file too large, 422 if invalid format
+		HTTPException: 413 if file too large, 422 if invalid format, 503 if file storage is unavailable
 	"""
 	snippet = await upload_audio_snippet(
 		db=db,

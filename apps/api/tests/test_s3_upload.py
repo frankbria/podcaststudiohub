@@ -144,11 +144,6 @@ class TestUploadToS3Task:
             patch("src.tasks.s3_upload.settings") as mock_settings,
             patch("src.tasks.s3_upload.boto3") as mock_boto,
             patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
-            patch.object(
-                upload_to_s3_task,
-                "retry",
-                side_effect=upload_to_s3_task.MaxRetriesExceededError(),
-            ),
         ):
             mock_settings.AWS_REGION = "us-east-1"
             mock_s3 = MagicMock()
@@ -830,11 +825,6 @@ class TestNonRetryableS3Errors:
             patch("src.tasks.s3_upload.settings") as mock_settings,
             patch("src.tasks.s3_upload.boto3") as mock_boto,
             patch("src.tasks.s3_upload.os.path.getsize", return_value=512),
-            patch.object(
-                upload_to_s3_task,
-                "retry",
-                side_effect=upload_to_s3_task.MaxRetriesExceededError(),
-            ),
         ):
             mock_settings.AWS_REGION = "us-east-1"
             mock_s3 = MagicMock()
@@ -1039,11 +1029,6 @@ class TestTempFileCleanup:
                 patch("src.tasks.s3_upload.settings") as mock_settings,
                 patch("src.tasks.s3_upload.boto3") as mock_boto,
                 patch("src.tasks.s3_upload.os.path.getsize", return_value=16),
-                patch.object(
-                    upload_to_s3_task,
-                    "retry",
-                    side_effect=upload_to_s3_task.MaxRetriesExceededError(),
-                ),
             ):
                 mock_settings.AWS_REGION = "us-east-1"
                 mock_s3 = MagicMock()

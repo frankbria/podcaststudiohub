@@ -36,10 +36,12 @@ Branch: `feature/issue-490-flaky-pagination-tiebreak`. Plan source: self-authore
 
 ## Acceptance criteria (issue DoD)
 
-- [ ] Root cause identified (order dependence vs non-deterministic ordering) — see findings above
-- [ ] Non-deterministic ordering → deterministic tiebreak in the list query (product fix)
-- [ ] Test made self-diagnosing / self-isolating (asserts uploads, proves paging)
-- [ ] Test passes across ≥20 consecutive runs of the full selection
+- [x] Root cause identified (order dependence vs non-deterministic ordering) — see findings above
+- [x] Non-deterministic ordering → deterministic tiebreak in the list query (product fix)
+- [x] Test made self-diagnosing / self-isolating (asserts uploads, proves paging)
+- [x] Test passes across ≥20 consecutive runs of the full selection — 20/20, `apps/api/docs/demos/issue490-deterministic-paging.md`
+
+PR #531. Follow-up sweep filed as #530.
 
 ## Autonomous decisions
 

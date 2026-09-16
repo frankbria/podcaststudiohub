@@ -498,3 +498,24 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **Background pollers (`gh pr checks --watch`, sleep loops) get killed under memory pressure** on this
   box (mongod holds ~2.7 GB); poll in the foreground with a bounded loop.
 - **The GLM review check can pass with an empty placeholder comment** — green ≠ reviewed (#497).
+
+## #490 / PR #531 (2026-09-16) — the "flaky" pagination test
+
+- **A flake report without the traceback is folklore.** #490 recorded only "failed once in ~6 runs";
+  the test's only failable assertions were two status codes, so the actual error was lost. When
+  filing an intermittent, paste the `--tb=long` output (or `cp` the log) before anything else — the
+  report from #486 also omitted that the machine was under memory pressure at the time.
+- **Before chasing order dependence, check whether leaked rows could even reach the test.** Every user
+  here is its own RLS tenant, so cross-test row leakage is structurally impossible for any list
+  endpoint; and a test that asserts `len <= N` cannot fail on a leak or an unstable sort. Read the
+  assertions first — they bound what the flake can be.
+- **A background pytest loop reads the working tree.** Two "failures" in the 42-run loop were my own
+  RED test running in the ~20 s window between editing the test and applying the fix. Either stop the
+  loop before editing, or timestamp every failure against the file mtimes before believing it.
+- **The `order_by(created_at.desc())`-with-no-tiebreak shape is repo-wide** (8 services, #530). Any
+  new paginated list gets the PK as the final sort key; the `test_list_pagination_page_size` shape
+  (force a tie via direct UPDATE on the shared session, page through, assert no dup/skip + order) is
+  the template.
+- **A subagent reviewer may not have Bash.** The internal reviewer confirmed diff scope via `grep`
+  instead of `git diff`; it still found the #530 sweep. Give reviewers the file list in the prompt so
+  a missing tool does not silently narrow the review.

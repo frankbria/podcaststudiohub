@@ -64,11 +64,16 @@ describe('POST /api/monitoring', () => {
 
   it('no-ops with 204 and sends nothing when SENTRY_DSN is unset', async () => {
     delete process.env.SENTRY_DSN
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {})
 
     const response = await POST(makeRequest({ message: 'boom' }))
 
     expect(response.status).toBe(204)
     expect(fetchMock).not.toHaveBeenCalled()
+    // Silent, not just 204: without the gate an unset DSN falls through to the
+    // "set but not parseable" branch, which also answers 204 but logs an error
+    // on every client crash. That is the mutation #493 found surviving.
+    expect(consoleError).not.toHaveBeenCalled()
   })
 
   it('no-ops with 204 when SENTRY_DSN is not a parseable DSN', async () => {

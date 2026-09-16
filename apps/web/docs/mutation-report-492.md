@@ -8,7 +8,7 @@ Re-run from `apps/web` in a clean worktree (it edits source files in place and
 restores them; nothing else may be editing the tree):
 
 ```sh
-node scripts/mutation-check-492.mjs        # exit 1 if any mutation survives
+node scripts/mutation-check-492.mjs        # exit 1 if any mutation survives, 2 if the baseline already fails
 node scripts/mutation-check-492.mjs route  # only mutations whose name contains "route"
 ```
 

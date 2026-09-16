@@ -61,9 +61,26 @@ const M = [
 ]
 
 const only = process.argv[2] // optional substring filter
+const selected = M.filter((m) => !only || m.id.includes(only))
+
+function jest(test) {
+  const r = spawnSync("npx", ["jest", test], { encoding: "utf8", env: { ...process.env, CI: "1" } })
+  return { status: r.status, text: r.stdout + r.stderr }
+}
+
+// Baseline first. A suite that already fails, or a jest that cannot start,
+// would otherwise count every mutation as KILLED and exit 0 — a false green,
+// which is the exact failure this script exists to catch.
+for (const test of new Set(selected.map((m) => m.test))) {
+  const r = jest(test)
+  if (r.status !== 0) {
+    console.error(`BASELINE FAILED for ${test} — not a mutation result, aborting.\n${r.text}`)
+    process.exit(2)
+  }
+}
+
 const rows = []
-for (const m of M) {
-  if (only && !m.id.includes(only)) continue
+for (const m of selected) {
   const original = readFileSync(m.file, "utf8")
   let mutated = original
   for (const [from, to] of m.edits) {
@@ -74,8 +91,7 @@ for (const m of M) {
   writeFileSync(m.file, mutated)
   let out
   try {
-    const r = spawnSync("npx", ["jest", m.test], { encoding: "utf8", env: { ...process.env, CI: "1" } })
-    out = { status: r.status, text: r.stdout + r.stderr }
+    out = jest(m.test)
   } finally {
     writeFileSync(m.file, original)
   }

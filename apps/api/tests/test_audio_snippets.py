@@ -536,28 +536,58 @@ async def test_list_search_by_name(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_list_pagination_page_size(client, auth_headers):
-	"""Test pagination with custom page size."""
+async def test_list_pagination_page_size(client, auth_headers, test_db):
+	"""Paging is exact and deterministic even when created_at ties (#490).
+
+	Every upload is asserted so a storage/DB fault surfaces at its source
+	instead of as a later status mismatch. All five rows are then given the
+	same created_at: with LIMIT/OFFSET, Postgres returns tied keys in
+	arbitrary order unless the query breaks the tie, so a paging client could
+	see duplicates or skips. The tiebreak is id desc.
+	"""
+	from datetime import datetime
+	from sqlalchemy import text
+
 	audio_bytes = make_audio_file()
+	uploaded_ids: list[str] = []
 
 	with patch("src.services.audio_snippet_service._upload_to_s3", new_callable=AsyncMock) as mock_s3:
 		mock_s3.return_value = None
 		with patch("src.services.audio_snippet_service.get_audio_duration", return_value=5.0):
 			for i in range(5):
-				await client.post(
+				response = await client.post(
 					"/audio-snippets/upload",
 					headers=auth_headers,
 					files={"file": (f"s{i}.mp3", io.BytesIO(audio_bytes), "audio/mpeg")},
 					data={"name": f"Snippet {i}", "snippet_type": "other"},
 				)
+				assert response.status_code == 201, response.text
+				uploaded_ids.append(response.json()["id"])
 
-	# Request page with size 2
-	response = await client.get("/audio-snippets?page=1&page_size=2", headers=auth_headers)
-	assert response.status_code == 200
-	data = response.json()
-	assert len(data["snippets"]) <= 2
-	assert data["page"] == 1
-	assert data["page_size"] == 2
+	# Force a full tie on the sort key. The shared test session keeps this
+	# user's RLS context armed across transactions, so the UPDATE sees the rows.
+	result = await test_db.execute(
+		text("UPDATE audio_snippets SET created_at = :ts"),
+		{"ts": datetime(2026, 1, 1, 12, 0, 0)},
+	)
+	assert result.rowcount == 5
+
+	pages = []
+	for page in (1, 2, 3):
+		response = await client.get(f"/audio-snippets?page={page}&page_size=2", headers=auth_headers)
+		assert response.status_code == 200, response.text
+		data = response.json()
+		assert data["page"] == page
+		assert data["page_size"] == 2
+		assert data["total"] == 5
+		assert data["total_pages"] == 3
+		pages.append([s["id"] for s in data["snippets"]])
+
+	assert [len(p) for p in pages] == [2, 2, 1]
+	seen = [sid for p in pages for sid in p]
+	assert len(set(seen)) == 5, f"duplicate or skipped rows across pages: {seen}"
+	assert set(seen) == set(uploaded_ids)
+	assert seen == sorted(uploaded_ids, reverse=True)
 
 
 # ============================================================================

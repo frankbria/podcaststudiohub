@@ -1,37 +1,51 @@
-# [P1.2] #501 — S3 failures return 422 with bucket and tenant UUIDs in the client-visible body
+# [P1.3] #520 — `except MaxRetriesExceededError` is dead code in 6 more tasks
 
-Branch: `feature/issue-501-s3-failures-503`. Plan source: issue body ("Fix" section), adapted below.
+Branch: `feature/issue-520-dead-maxretries-branches`. Plan source: issue body ("Done when" + "Suggested shape"), adapted below.
 
 ## Findings that shape the plan
 
-- `StorageService.upload_file` wraps boto `ClientError` in a bare `Exception("Failed to upload file to S3: <boto msg>")`
-  (`apps/api/src/services/storage_service.py:97`), so every S3 failure reaches the service catch as a plain `Exception`
-  carrying bucket/key/tenant text. Never an `OSError`.
-- `get_audio_duration` swallows its own errors and returns `None`, so the only non-HTTPException failures inside the
-  audio try block are the temp-file write (`OSError`) and the S3 upload.
-- Neither service module has a logger today. Add `logging.getLogger(__name__)` (repo convention, e.g. `episode_service.py:27`).
+- Celery `Task.retry(exc=e)` re-raises `e` on exhaustion; it never raises `MaxRetriesExceededError`. So today every
+  one of the six sites already fails with the original exception — the change makes that explicit and rescues
+  whatever was stranded in the dead branch.
+- Stranded per site (what "was supposed to happen and never did"):
+  - `content_extraction.py` ×2, `analytics.py`, `platform_distribution.py`: only a log line + an unread result dict.
+    All four are fire-and-forget (`.delay()` / chain with `link_error`), nobody reads the dict. Terminal = log + `raise`.
+  - `podcast_generation.py::generate_podcast_task`: the #294 `_update_episode(failed)` write AND
+    `release_generation_lock` — so today an exhausted generation **leaks the Redis lock until TTL**. Terminal =
+    log + failed write + release lock + `raise`. (`update_state(FAILURE)` dropped: raising is what sets FAILURE.)
+  - `podcast_generation.py::finalize_episode_generation_task`: the #311 rollback + `generation_status="failed"`
+    write. Finalize is dispatched via `.delay()` with **no link_error**, so today an exhausted finalize leaves the
+    episode stuck in-progress forever. Terminal = log + rollback + failed write + `raise`.
+- Distribution: `build_generation_workflow` attaches `link_error=on_workflow_failure` per distribution task, so
+  `raise` is the designed exhausted-transient path (permanent errors still return `{status: failed}` for
+  `on_distribution_complete`). Unchanged behaviour, now explicit.
+- Tests: 13 mock sites across 9 files force the dead branch with `side_effect=MaxRetriesExceededError()`.
+  `_make_celery_retry_exception` (test_task_retry.py) and `_make_celery_retry_exc` (test_platform_distribution_services.py,
+  zero callers) both go. Scheduled-retry tests switch to `_scheduled_retry` + `pytest.raises(Retry)`; exhaustion
+  tests become real-Celery tests (`push_request(retries=max_retries)`, no retry mock) per `TestRealRetryExhaustion`.
 
 ## Steps
 
-1. **RED** — add 4 tests (2 per site) in `tests/test_audio_snippets.py` and `tests/test_content.py`:
-   - upload helper `side_effect=Exception("... AccessDenied ... bucket ... content/<tenant>/...")` → 503, fixed detail,
-     no bucket/key text in body, boto text present in caplog.
-   - upload helper `side_effect=OSError("disk full")` → 422, fixed detail, `"disk full"` not in body.
-2. **GREEN** — split the catch at `audio_snippet_service.py:123` and `content_service.py:198`:
-   `except (OSError, ValueError)` → 422 fixed message; `except Exception` → `logger.exception(...)` + 503
-   `"File storage is unavailable."`. Drop every `str(e)` interpolation at both sites.
-3. Full `pytest tests/` + ruff.
+1. **Simple sites (4)** — `content_extraction.py` (2 sites), `analytics.py`, `platform_distribution.py`:
+   RED: real-exhaustion test per task in `test_content_extraction_task.py`, `test_url_reachability_task.py`,
+   `test_analytics_track_task.py`, `test_platform_distribution_metadata.py`; convert existing mocked tests to
+   `_scheduled_retry`. GREEN: `if self.request.retries >= self.max_retries: log; raise` before `self.retry`.
+   Delete `_make_celery_retry_exc` from `test_platform_distribution_services.py`.
+2. **podcast_generation sites (2)** — RED: real-exhaustion tests (generate: raises + failed write + lock released +
+   run_dir removed; finalize: raises + rollback + failed status committed) in `test_podcast_generation_task.py`,
+   `test_celery_workflow.py`, `test_task_retry.py`. GREEN: explicit terminal blocks. Delete
+   `_make_celery_retry_exception`; convert the generation/finalize/distribution scheduled tests in `test_task_retry.py`.
+3. Docstrings: drop "returns failed dict after retries" wording where the task now raises.
 
-## Acceptance criteria (from issue)
+## Acceptance criteria
 
-- [ ] A storage failure returns 503 with a fixed message; the boto detail is in the server log only
-- [ ] A genuine client fault (unwritable temp file, bad value) still returns 422
-- [ ] Tests cover both arms at both sites
-- [ ] No response body at either site interpolates `str(e)`
+- [ ] Each of the six sites decides terminality with `if self.request.retries >= self.max_retries:`
+- [ ] Stranded cleanup/status writes moved onto the path that runs (lock release, #294 write, #311 rollback+write)
+- [ ] `_make_celery_retry_exception` deleted; no test mocks `retry` with `MaxRetriesExceededError`
+- [ ] Every task has a terminal-behaviour test with no retry mock (real Celery decides)
 
 ## Autonomous decisions
 
-- Tests patch the module-scope upload helper (existing pattern at both sites) rather than boto — the helper is the
-  seam the issue names and the outage shape is identical either way.
-- 422 detail strings stay close to the old ones ("Failed to process audio file." / "Failed to store PDF.") so
-  nothing downstream that greps them changes meaning; only the `str(e)` suffix is gone.
+- Terminal behaviour = `raise` (issue's suggested shape; preserves today's observed behaviour). Distribution's
+  exhausted-transient path therefore still marks the whole episode `failed` via `on_workflow_failure`, whereas a
+  permanent error yields `distribution_failed`. Pre-existing; noted in PR Known Limitations, not changed here.

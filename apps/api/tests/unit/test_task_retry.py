@@ -37,18 +37,6 @@ def _mock_podcastfy_modules():
 # ============================================================================
 
 
-def _make_celery_retry_exception(task):
-	"""Return a MaxRetriesExceededError for the given task.
-
-	NOTE: this does not match real Celery when ``retry(exc=...)`` is given an
-	exception — it calls ``raise_with_context(exc)`` and re-raises the original
-	instead, so ``except MaxRetriesExceededError`` never fires. The tasks that
-	still rely on that dead branch are tracked in #520; the two fixed by #498
-	use ``_scheduled_retry`` below.
-	"""
-	return task.MaxRetriesExceededError()
-
-
 def _scheduled_retry(task=None):
 	"""What a real ``self.retry(exc=...)`` raises when it DOES schedule a retry."""
 	from celery.exceptions import Retry
@@ -362,22 +350,22 @@ class TestDistributeToPlatformTaskRetry:
 			patch.object(
 				distribute_to_platform_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(distribute_to_platform_task),
+				side_effect=_scheduled_retry(),
 			) as mock_retry,
 		):
 			mock_decrypt.return_value = {}
 			mock_spotify.side_effect = ConnectionError("Network error")
 			distribute_to_platform_task.request.update(retries=0)
 
-			result = distribute_to_platform_task.run(
-				episode_id="11111111-1111-1111-1111-111111111101",
-				platform="spotify",
-				platform_config={},
-				episode_metadata={},
-			)
+			with pytest.raises(Retry):
+				distribute_to_platform_task.run(
+					episode_id="11111111-1111-1111-1111-111111111101",
+					platform="spotify",
+					platform_config={},
+					episode_metadata={},
+				)
 
 		mock_retry.assert_called_once()
-		assert result["status"] == "failed"
 
 	def test_value_error_does_not_retry(self):
 		"""ValueError (unsupported platform) must not trigger retry."""
@@ -414,19 +402,20 @@ class TestDistributeToPlatformTaskRetry:
 			patch.object(
 				distribute_to_platform_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(distribute_to_platform_task),
+				side_effect=_scheduled_retry(),
 			) as mock_retry,
 		):
 			mock_decrypt.return_value = {}
 			mock_spotify.side_effect = ConnectionError("Network error")
 			distribute_to_platform_task.request.update(retries=0)
 
-			distribute_to_platform_task.run(
-				episode_id="11111111-1111-1111-1111-111111111103",
-				platform="spotify",
-				platform_config={},
-				episode_metadata={},
-			)
+			with pytest.raises(Retry):
+				distribute_to_platform_task.run(
+					episode_id="11111111-1111-1111-1111-111111111103",
+					platform="spotify",
+					platform_config={},
+					episode_metadata={},
+				)
 
 		assert mock_retry.call_args.kwargs["countdown"] == 5
 
@@ -456,18 +445,18 @@ class TestGeneratePodcastTaskRetry:
 			patch.object(
 				generate_podcast_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(generate_podcast_task),
+				side_effect=_scheduled_retry(),
 			) as mock_retry,
 		):
 			generate_podcast_task.request.update(retries=0)
 
-			result = generate_podcast_task.run(
-				episode_id="ep-gen-01",
-				urls=["https://example.com"],
-			)
+			with pytest.raises(Retry):
+				generate_podcast_task.run(
+					episode_id="ep-gen-01",
+					urls=["https://example.com"],
+				)
 
 		mock_retry.assert_called_once()
-		assert result["status"] == "failed"
 
 	def test_retry_countdown_on_first_attempt(self):
 		"""First retry countdown must be 5 seconds."""
@@ -482,47 +471,58 @@ class TestGeneratePodcastTaskRetry:
 			patch.object(
 				generate_podcast_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(generate_podcast_task),
+				side_effect=_scheduled_retry(),
 			) as mock_retry,
 		):
 			generate_podcast_task.request.update(retries=0)
 
-			generate_podcast_task.run(
-				episode_id="ep-gen-02",
-				urls=["https://example.com"],
-			)
+			with pytest.raises(Retry):
+				generate_podcast_task.run(
+					episode_id="ep-gen-02",
+					urls=["https://example.com"],
+				)
 
 		assert mock_retry.call_args.kwargs["countdown"] == 5
 
-	def test_failed_result_has_correct_shape(self):
-		"""After max retries, generate_podcast_task returns expected failure dict."""
+	def test_exhausted_retries_fail_the_task_and_release_the_lock(self):
+		"""The REAL exhaustion path, with Celery's own retry() rather than a mock.
+
+		Celery re-raises the original exception when retry(exc=...) is out of
+		attempts, so the task must decide terminality itself: persist 'failed'
+		(#294), release the generation lock, and let the exception propagate so
+		link_error fires. Both the status write and the lock release used to sit
+		inside an unreachable ``except MaxRetriesExceededError`` (#520).
+		"""
 		from src.tasks.podcast_generation import generate_podcast_task
 
 		mock_gen, mock_modules = _mock_podcastfy_modules()
 		mock_gen.side_effect = RuntimeError("Persistent failure")
 
-		with (
-			patch_modules(mock_modules),
-			patch.object(generate_podcast_task, "update_state"),
-			patch.object(
-				generate_podcast_task,
-				"retry",
-				side_effect=_make_celery_retry_exception(generate_podcast_task),
-			),
-		):
-			generate_podcast_task.request.update(retries=0)
+		generate_podcast_task.push_request(
+			retries=generate_podcast_task.max_retries,
+			called_directly=False,
+			id="gen-exhausted",
+		)
+		try:
+			with (
+				patch_modules(mock_modules),
+				patch.object(generate_podcast_task, "update_state"),
+				patch("src.tasks.podcast_generation._load_generation_status", return_value=None),
+				patch("src.tasks.podcast_generation.acquire_generation_lock", return_value=True),
+				patch("src.tasks.podcast_generation.release_generation_lock") as mock_release,
+				patch("src.tasks.podcast_generation._update_episode") as mock_upd,
+			):
+				with pytest.raises(RuntimeError, match="Persistent failure"):
+					generate_podcast_task.run(
+						episode_id="ep-gen-03",
+						urls=["https://example.com"],
+					)
+		finally:
+			generate_podcast_task.pop_request()
 
-			result = generate_podcast_task.run(
-				episode_id="ep-gen-03",
-				urls=["https://example.com"],
-			)
-
-		assert result["status"] == "failed"
-		assert result["audio_file_path"] is None
-		assert result["transcript_path"] is None
-		assert result["duration_seconds"] == 0
-		assert result["file_size_bytes"] == 0
-		assert "Persistent failure" in result["error"]
+		mock_release.assert_called_once_with("ep-gen-03", "gen-exhausted")
+		assert mock_upd.call_args.kwargs["updates"]["generation_status"] == "failed"
+		assert "Persistent failure" in mock_upd.call_args.kwargs["progress_updates"]["error_message"]
 
 
 # ============================================================================
@@ -564,22 +564,25 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 			patch.object(
 				finalize_episode_generation_task,
 				"retry",
-				side_effect=_make_celery_retry_exception(finalize_episode_generation_task),
+				side_effect=_scheduled_retry(),
 			) as mock_retry,
 		):
 			mock_settings.AWS_S3_BUCKET = None
 			finalize_episode_generation_task.request.update(retries=0)
 
-			result = finalize_episode_generation_task.run(
-				episode_id=episode_id,
-				generation_result=generation_result,
-			)
+			with pytest.raises(Retry):
+				finalize_episode_generation_task.run(
+					episode_id=episode_id,
+					generation_result=generation_result,
+				)
 
 		mock_retry.assert_called_once()
-		assert result["status"] == "failed"
 
 	def _run_with_broken_session(self, mock_db):
-		"""Run finalize with retries exhausted against the given mock session."""
+		"""Run finalize with retries REALLY exhausted (no retry mock) against the
+		given mock session. Celery re-raises the original exception on
+		exhaustion, so the terminal status write must run before it propagates
+		(#520); the original DB error is asserted by the caller."""
 		import uuid
 		from src.tasks.podcast_generation import finalize_episode_generation_task
 
@@ -592,22 +595,25 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 			"error": None,
 		}
 
-		with (
-			patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
-			patch("src.tasks.podcast_generation.settings") as mock_settings,
-			patch.object(finalize_episode_generation_task, "update_state"),
-			patch.object(
-				finalize_episode_generation_task,
-				"retry",
-				side_effect=_make_celery_retry_exception(finalize_episode_generation_task),
-			),
-		):
-			mock_settings.AWS_S3_BUCKET = None
-			finalize_episode_generation_task.request.update(retries=0)
-			return finalize_episode_generation_task.run(
-				episode_id=str(uuid.uuid4()),
-				generation_result=generation_result,
-			)
+		finalize_episode_generation_task.push_request(
+			retries=finalize_episode_generation_task.max_retries,
+			called_directly=False,
+			id="finalize-exhausted",
+		)
+		try:
+			with (
+				patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+				patch("src.tasks.podcast_generation.settings") as mock_settings,
+				patch.object(finalize_episode_generation_task, "update_state"),
+			):
+				mock_settings.AWS_S3_BUCKET = None
+				with pytest.raises(RuntimeError, match="Database connection lost"):
+					finalize_episode_generation_task.run(
+						episode_id=str(uuid.uuid4()),
+						generation_result=generation_result,
+					)
+		finally:
+			finalize_episode_generation_task.pop_request()
 
 	def test_cleanup_rolls_back_failed_transaction_before_marking_failed(self):
 		"""After retries are exhausted, the cleanup must rollback() the broken
@@ -623,7 +629,7 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 		mock_db.__enter__ = MagicMock(return_value=mock_db)
 		mock_db.__exit__ = MagicMock(return_value=False)
 
-		result = self._run_with_broken_session(mock_db)
+		self._run_with_broken_session(mock_db)
 
 		names = [name for name, _, _ in mock_db.mock_calls]
 		first_get = names.index("get")
@@ -634,11 +640,10 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 		)
 		assert episode.generation_status == "failed"
 		mock_db.commit.assert_called_once()
-		assert result["status"] == "failed"
 
 	def test_cleanup_degrades_gracefully_when_cleanup_commit_fails(self):
-		"""If even the post-rollback cleanup write fails, the task must log and
-		return a failed result dict instead of raising (issue #311)."""
+		"""If even the post-rollback cleanup write fails, the task must log it
+		and still fail with the ORIGINAL error, not the cleanup error (#311)."""
 		episode = MagicMock()
 		episode.generation_progress = {}
 
@@ -648,15 +653,14 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 		mock_db.__enter__ = MagicMock(return_value=mock_db)
 		mock_db.__exit__ = MagicMock(return_value=False)
 
-		result = self._run_with_broken_session(mock_db)
+		self._run_with_broken_session(mock_db)
 
-		assert result["status"] == "failed"
-		assert "Database connection lost" in result["error"]
+		mock_db.commit.assert_called_once()
 
 	def test_cleanup_proceeds_when_rollback_itself_fails(self):
 		"""A rollback failure is logged but must not abort the handler: the
-		cleanup write is still attempted and the task returns a failed result
-		instead of raising (issue #311)."""
+		cleanup write is still attempted and the task fails with the original
+		error (issue #311)."""
 		from sqlalchemy.exc import PendingRollbackError
 
 		mock_db = MagicMock()
@@ -670,9 +674,7 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 		mock_db.__enter__ = MagicMock(return_value=mock_db)
 		mock_db.__exit__ = MagicMock(return_value=False)
 
-		result = self._run_with_broken_session(mock_db)
+		self._run_with_broken_session(mock_db)
 
 		assert mock_db.get.call_count == 2, "cleanup get() must still be attempted"
 		mock_db.commit.assert_not_called()
-		assert result["status"] == "failed"
-		assert "Database connection lost" in result["error"]

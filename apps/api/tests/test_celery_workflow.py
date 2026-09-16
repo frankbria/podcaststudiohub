@@ -8,6 +8,8 @@ All database and external service interactions are mocked so no real
 infrastructure is required.
 """
 import uuid
+
+import pytest
 from unittest.mock import MagicMock, patch
 
 from tests.module_patching import patch_modules
@@ -659,25 +661,28 @@ class TestErrorHandling:
 
         from src.tasks.podcast_generation import generate_podcast_task
 
-        with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
-            patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
-            patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
-            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=_mock_session_with_episode()),
-            patch.object(
-                generate_podcast_task,
-                "retry",
-                side_effect=generate_podcast_task.MaxRetriesExceededError(),
-            ),
-        ):
-            result = _invoke_task(
-                generate_podcast_task,
-                episode_id=episode_id,
-                urls=["https://example.com"],
-                enable_composition=True,
-            )
+        # Retries at the limit and no retry mock: real Celery re-raises the
+        # engine error, and the workflow must never be built on that path (#520).
+        generate_podcast_task.push_request(
+            retries=generate_podcast_task.max_retries, called_directly=False, id="gen-fail",
+        )
+        try:
+            with (
+                patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+                patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
+                patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
+                patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=_mock_session_with_episode()),
+                patch.object(generate_podcast_task, "update_state", MagicMock()),
+            ):
+                with pytest.raises(RuntimeError, match="LLM API error"):
+                    generate_podcast_task.run(
+                        episode_id=episode_id,
+                        urls=["https://example.com"],
+                        enable_composition=True,
+                    )
+        finally:
+            generate_podcast_task.pop_request()
 
-        assert result["status"] == "failed"
         mock_builder.assert_not_called()
 
     def test_broker_error_during_workflow_dispatch_does_not_fail_generation(self):
@@ -956,16 +961,18 @@ class TestFailurePathsWriteDbStatus:
 
         ep_id = str(uuid.uuid4())
         task = pg.generate_podcast_task
-        task.request.update(id="retry-exh")
-        # Force retry() to signal exhaustion so we exercise the MaxRetriesExceeded
-        # branch directly (eager retry would otherwise re-invoke the task inline).
-        with patch("podcastfy.client.generate_podcast", side_effect=RuntimeError("boom")), \
-             patch.object(task, "update_state", MagicMock()), \
-             patch.object(task, "retry", side_effect=task.MaxRetriesExceededError()), \
-             patch("src.tasks.podcast_generation._update_episode") as mock_upd:
-            result = task.run(episode_id=ep_id)
+        # Retries at the limit and NO retry mock: real Celery re-raises the
+        # original error, so the 'failed' write must happen before it does (#520).
+        task.push_request(retries=task.max_retries, called_directly=False, id="retry-exh")
+        try:
+            with patch("podcastfy.client.generate_podcast", side_effect=RuntimeError("boom")), \
+                 patch.object(task, "update_state", MagicMock()), \
+                 patch("src.tasks.podcast_generation._update_episode") as mock_upd:
+                with pytest.raises(RuntimeError, match="boom"):
+                    task.run(episode_id=ep_id)
+        finally:
+            task.pop_request()
 
-        assert result["status"] == "failed"
         # Entry guard now writes 'generating' first (issue #295); the failure path
         # write is the last call, validated below.
         mock_upd.assert_called()

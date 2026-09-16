@@ -127,7 +127,9 @@ def validate_url_reachability_task(
 	(e.g. transient DB failures) retry.
 
 	Returns a dict with ``status`` ('reachable', 'failed', or 'skipped') and,
-	on failure, ``error_message``.
+	on failure, ``error_message``. An unexpected error that exhausts its
+	retry budget fails the task itself (the original exception propagates)
+	rather than returning a failed dict (#520).
 	"""
 	logger.info(f"Checking URL reachability for content source {content_source_id}")
 	try:
@@ -142,16 +144,20 @@ def validate_url_reachability_task(
 		logger.error(f"Reachability check error for {content_source_id}: {str(e)}")
 		return {"status": "failed", "error_message": str(e)}
 
-	except Exception as e:  # noqa: BLE001 — dispatched fire-and-forget off the create request, so anything not already classified must degrade to retry-then-permanent-failed rather than leave the task unacked
-		logger.error(f"Reachability check error for {content_source_id}: {str(e)}")
-		retry_countdown = 60 * (2 ** self.request.retries)
-		try:
-			raise self.retry(exc=e, countdown=retry_countdown)
-		except self.MaxRetriesExceededError:
-			return {
-				"status": "failed",
-				"error_message": f"Max retries exceeded: {str(e)}",
-			}
+	except Exception as e:  # noqa: BLE001 — dispatched fire-and-forget off the create request, so anything not already classified must degrade to retry-then-fail rather than leave the task unacked
+		logger.warning(
+			f"Reachability check error for {content_source_id}, "
+			f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {str(e)}"
+		)
+		# Celery re-raises the original exception when retry(exc=...) is out of
+		# attempts, so the `except MaxRetriesExceededError` this replaces never ran (#520).
+		if self.request.retries >= self.max_retries:
+			logger.error(
+				f"Reachability check failed after {self.max_retries} retries "
+				f"for {content_source_id}: {str(e)}"
+			)
+			raise
+		raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
 
 
 @celery_app.task(bind=True, name="extract_content", max_retries=3, time_limit=120)
@@ -177,6 +183,10 @@ def extract_content_task(
 		- status: 'complete' or 'failed'
 		- word_count: Number of words extracted (0 if failed)
 		- error_message: Error details (None if succeeded)
+
+		An unexpected (non-ValueError) error that exhausts its retry budget
+		fails the task itself (the original exception propagates) rather
+		than returning a failed dict (#520).
 	"""
 	logger.info(
 		f"Starting content extraction for source {content_source_id} "
@@ -199,14 +209,17 @@ def extract_content_task(
 			"error_message": str(e),
 		}
 
-	except Exception as e:  # noqa: BLE001 — the extractors' own errors are classified inside the service, so what reaches here is session or event-loop level and must still resolve to a status the polling caller can see
-		logger.error(f"Error extracting content for {content_source_id}: {str(e)}")
-		retry_countdown = 60 * (2 ** self.request.retries)
-		try:
-			raise self.retry(exc=e, countdown=retry_countdown)
-		except self.MaxRetriesExceededError:
-			return {
-				"status": "failed",
-				"word_count": 0,
-				"error_message": f"Max retries exceeded: {str(e)}",
-			}
+	except Exception as e:  # noqa: BLE001 — the extractors' own errors are classified inside the service, so what reaches here is session or event-loop level and must still resolve to a status the polling caller can see, or fail the task once retries are exhausted
+		logger.warning(
+			f"Error extracting content for {content_source_id}, "
+			f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {str(e)}"
+		)
+		# Celery re-raises the original exception when retry(exc=...) is out of
+		# attempts, so the `except MaxRetriesExceededError` this replaces never ran (#520).
+		if self.request.retries >= self.max_retries:
+			logger.error(
+				f"Content extraction failed after {self.max_retries} retries "
+				f"for {content_source_id}: {str(e)}"
+			)
+			raise
+		raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))

@@ -319,20 +319,17 @@ def distribute_to_platform_task(
             f"Transient error distributing to {platform} for episode {episode_id}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
         )
-        try:
-            raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
-        except self.MaxRetriesExceededError:
+        # Celery re-raises the original exception when retry(exc=...) is out of
+        # attempts, so the `except MaxRetriesExceededError` this replaces never ran (#520).
+        # Raising lets this task's link_error (on_workflow_failure) fire, which
+        # is the designed path for a distribution chain failure.
+        if self.request.retries >= self.max_retries:
             logger.error(
                 f"Distribution to {platform} failed after {self.max_retries} retries "
                 f"for episode {episode_id}: {e}"
             )
-            return {
-                "status": "failed",
-                "platform": platform,
-                "platform_episode_id": None,
-                "platform_url": None,
-                "error": str(e)
-            }
+            raise
+        raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
 
 
 def _distribute_to_spotify(episode_id: str, config: Dict, metadata: Dict, task: Task) -> Dict:

@@ -12,6 +12,8 @@ Tests cover:
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
+import pytest
+from celery.exceptions import Retry
 
 from src.tasks.content_extraction import extract_content_task
 
@@ -136,42 +138,50 @@ def test_task_returns_failed_on_value_error_no_retry():
 
 
 def test_task_retries_on_transient_error():
-	"""Task must attempt retry on non-ValueError exceptions."""
+	"""Task must attempt retry (Celery raises Retry to suspend the task) on non-ValueError exceptions."""
 	content_source_id = str(uuid4())
 
 	with patch('src.tasks.content_extraction._extract_content_async', MagicMock()), \
 		 patch('src.tasks.content_extraction.asyncio.run') as mock_run:
 		mock_run.side_effect = ConnectionError("Network error")
 		with patch.object(extract_content_task, 'update_state'), \
-			 patch.object(extract_content_task, 'retry', side_effect=extract_content_task.MaxRetriesExceededError()) as mock_retry:
-			result = extract_content_task.run(
-				content_source_id=content_source_id,
-				source_type='url',
-			)
+			 patch.object(extract_content_task, 'retry', side_effect=Retry("scheduled", None)) as mock_retry:
+			with pytest.raises(Retry):
+				extract_content_task.run(
+					content_source_id=content_source_id,
+					source_type='url',
+				)
 
-	# After max retries exceeded, should return failed
-	assert result["status"] == "failed"
-	assert result["word_count"] == 0
 	mock_retry.assert_called_once()
 
 
-def test_task_returns_failed_after_max_retries():
-	"""Task must return failed result after max retries exceeded."""
+def test_exhausted_retries_propagate_the_original_exception():
+	"""With retries at the limit the task fails, so link_error fires (#520).
+
+	Every other retry test in this file patches `retry` to raise
+	MaxRetriesExceededError. Celery never raises that when retry() is given
+	an `exc=` — it re-raises the original exception instead. This test uses
+	Celery's own retry() (no mock) so it pins the real behaviour.
+	"""
 	content_source_id = str(uuid4())
 
 	with patch('src.tasks.content_extraction._extract_content_async', MagicMock()), \
 		 patch('src.tasks.content_extraction.asyncio.run') as mock_run:
-		mock_run.side_effect = Exception("Persistent failure")
-		with patch.object(extract_content_task, 'update_state'), \
-			 patch.object(extract_content_task, 'retry', side_effect=extract_content_task.MaxRetriesExceededError()):
-			result = extract_content_task.run(
-				content_source_id=content_source_id,
-				source_type='url',
+		mock_run.side_effect = ConnectionError("Persistent failure")
+		with patch.object(extract_content_task, 'update_state'):
+			extract_content_task.push_request(
+				retries=extract_content_task.max_retries,
+				called_directly=False,
+				id="exhaust-extract",
 			)
-
-	assert result["status"] == "failed"
-	assert result["word_count"] == 0
-	assert result["error_message"] is not None
+			try:
+				with pytest.raises(ConnectionError, match="Persistent failure"):
+					extract_content_task.run(
+						content_source_id=content_source_id,
+						source_type='url',
+					)
+			finally:
+				extract_content_task.pop_request()
 
 
 # ============================================================================

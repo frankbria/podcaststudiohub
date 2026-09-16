@@ -446,3 +446,26 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **Local Postgres for the backend suite is gone with `api-postgres-1`.** An ephemeral
   `postgres:16` container with the `.env` credentials plus `alembic upgrade head` is a 90-second
   setup and runs the full 1917-test suite in ~3.5 min.
+
+## #520 / PR #525 (2026-09-15) — dead `except MaxRetriesExceededError` branches
+
+- **Celery task unit tests that do not patch `acquire_generation_lock` hit the real Redis.** Tests
+  with fixed episode ids (`ep-gen-01`) left `podcast_generation_lock:*` keys behind; once an earlier
+  file left a task id on the shared request context, `acquire()` saw a foreign owner and the task
+  returned `_skipped_result(...)` — an order-dependent failure that only shows in the full suite.
+  Patch `acquire_generation_lock`/`release_generation_lock` in unit tests, or use fresh uuids.
+- **A "real Celery decides" exhaustion test usually passes against the OLD code too**, because
+  `retry(exc=e)` already re-raised. The discriminating assertion is the *stranded side effect*
+  (lock released, status written, log line emitted via `caplog`) — RED comes from those, not from
+  `pytest.raises`. Mutation-check by replacing the terminal `raise` with a `return`.
+- **A subagent running `git diff` can leave a stale zero-byte `.git/index.lock`** that blocks the
+  orchestrator's commit; `pgrep -a git` empty + 0-byte lock = safe to `rm`. Retry once before
+  removing.
+- **`pkill -f "opencode run"` kills the shell that issued it** (its own command line matches).
+  Kill by process name: `pkill opencode`.
+- **opencode/GLM stalled for the fourth time** (zero output after 7 min on a 45 KB diff); codex
+  returned in ~4 min twice. Stop launching opencode for reviews in this repo.
+- **The `feature-dev:code-reviewer` subagent forked its own sub-reviewer** that messaged the
+  orchestrator directly with a duplicate verdict. Tell reviewer subagents explicitly not to spawn.
+- **Showboat grep evidence must anchor on the code form** (`except X:` with the colon); a
+  comment describing the removed pattern matched the bare name and muddied "no handler remains".

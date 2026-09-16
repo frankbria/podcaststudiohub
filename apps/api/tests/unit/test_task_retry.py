@@ -442,6 +442,10 @@ class TestGeneratePodcastTaskRetry:
 		with (
 			patch_modules(mock_modules),
 			patch.object(generate_podcast_task, "update_state"),
+			# The fixed episode id below would otherwise hit the real Redis
+			# lock and collide with a key left by an earlier run.
+			patch("src.tasks.podcast_generation.acquire_generation_lock", return_value=True),
+			patch("src.tasks.podcast_generation.release_generation_lock"),
 			patch.object(
 				generate_podcast_task,
 				"retry",
@@ -468,6 +472,8 @@ class TestGeneratePodcastTaskRetry:
 		with (
 			patch_modules(mock_modules),
 			patch.object(generate_podcast_task, "update_state"),
+			patch("src.tasks.podcast_generation.acquire_generation_lock", return_value=True),
+			patch("src.tasks.podcast_generation.release_generation_lock"),
 			patch.object(
 				generate_podcast_task,
 				"retry",

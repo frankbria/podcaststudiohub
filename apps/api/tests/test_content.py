@@ -1501,3 +1501,61 @@ async def test_get_extraction_status_computes_word_count(client, url_content_sou
     data = response.json()
     assert data["extraction_status"] == "complete"
     assert data["extracted_word_count"] == 5
+
+
+# ---------------------------------------------------------------------------
+# #501 — storage outages are 503 and never leak boto detail; client faults stay 422
+# ---------------------------------------------------------------------------
+
+BOTO_ACCESS_DENIED = (
+    "Failed to upload file to S3: An error occurred (AccessDenied) when calling the "
+    "PutObject operation on bucket my-secret-bucket key "
+    "content/11111111-2222-3333-4444-555555555555/66666666-7777-8888-9999-000000000000/x.pdf"
+)
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_s3_failure_returns_503_without_boto_detail(
+    client, episode_and_auth, caplog
+):
+    """An S3 failure is a 503 with a fixed message; the boto text goes to the log only."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ) as mock_s3:
+        mock_s3.side_effect = Exception(BOTO_ACCESS_DENIED)
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(),
+            data={"auto_extract": "false"},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "File storage is unavailable."
+    assert "my-secret-bucket" not in response.text
+    assert "11111111-2222" not in response.text
+    assert "AccessDenied" not in response.text
+    assert "my-secret-bucket" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_local_io_failure_stays_422_without_detail(client, episode_and_auth):
+    """A local OSError on this path is still reported as 422, with no str(e) in the body."""
+    episode_id, headers = episode_and_auth
+
+    with patch(
+        "src.services.content_service._upload_pdf_to_s3", new_callable=AsyncMock
+    ) as mock_s3:
+        mock_s3.side_effect = OSError("disk full at /tmp/secret-path")
+        response = await client.post(
+            f"/episodes/{episode_id}/content/upload",
+            headers=headers,
+            files=_pdf_upload_files(),
+            data={"auto_extract": "false"},
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Failed to store PDF."
+    assert "secret-path" not in response.text

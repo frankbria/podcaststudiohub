@@ -428,3 +428,21 @@ re-applying the exact inverse edit — never a whole-file checkout.
   token-verification failure, and narrowing it risks a 500 on an unanticipated malformed token.
   Adopting it needs a per-site review, which is why it was split out of #482 rather than bundled
   with the two unambiguous rules.
+
+## #501 / PR #523 (2026-09-15) — S3 failure status + disclosure
+
+- **`showboat exec` takes a language argument: `showboat exec <file> bash '<cmd>'`.** Without `bash`
+  it `fork/exec`s the whole string as a binary and every step silently records nothing. Also
+  export every variable the exec'd commands reference — showboat inherits the environment, not
+  shell locals.
+- **Do not wait on opencode/GLM for the cross-family review.** Third stall in a row (zero output
+  at 420s on a ~200-line diff). Start `codex review --base main` in parallel from the outset;
+  it returned in ~3 min. The memory note already said this; it was ignored and cost 7 minutes.
+- **The auto-mode classifier refuses to commit an edit to `security-audit.sh`'s ignore list
+  ("CI bypass").** That is the right instinct — extending the pip-audit ignore list is a policy
+  call — so the run has to stop and hand the commit to a human. #518 is the structural fix that
+  makes this stop recurring; until then, expect every PR that lands after a fresh litellm
+  advisory to need a human-committed unblock.
+- **Local Postgres for the backend suite is gone with `api-postgres-1`.** An ephemeral
+  `postgres:16` container with the `.env` credentials plus `alembic upgrade head` is a 90-second
+  setup and runs the full 1917-test suite in ~3.5 min.

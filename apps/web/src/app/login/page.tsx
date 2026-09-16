@@ -1,35 +1,34 @@
 "use client"
 
-import { useState, useEffect, useSyncExternalStore } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { signIn } from "next-auth/react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
-// useSyncExternalStore with a no-op subscription: false during SSR/hydration, true after.
-const subscribeNever = () => () => {}
-
 export default function LoginPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
-  // Signup redirects here with ?registered=true. Read window.location.search
-  // (not useSearchParams, which forces a build-time Suspense boundary — same
-  // pattern as the distribution page). The server render can't see the URL, so
-  // the banner is gated on hydration to keep the server and client trees
-  // identical; the effect then clears the param so a refresh doesn't re-show
-  // the banner (#323).
-  const [registered] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("registered") === "true"
-  )
-  const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false)
+  // Signup redirects here with ?registered=true. The param is read through the
+  // router (useSearchParams) rather than window.location: during a client-side
+  // navigation this page renders before the browser URL is updated, so a
+  // render-time read of window.location still sees the previous page. The
+  // flag is latched into state (set-during-render, the "adjusting state on a
+  // prop change" pattern) so the banner survives the effect below clearing the
+  // param, which keeps a refresh from re-showing it (#323). Every route is
+  // dynamically rendered (the root layout reads headers()), so no Suspense
+  // boundary is needed for useSearchParams.
+  const [registered, setRegistered] = useState(false)
+  if (!registered && searchParams.get("registered") === "true") {
+    setRegistered(true)
+  }
   useEffect(() => {
     if (registered) window.history.replaceState({}, "", window.location.pathname)
   }, [registered])
@@ -67,7 +66,7 @@ export default function LoginPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
-            {hydrated && registered && (
+            {registered && (
               <div role="status" className="rounded-md bg-muted p-2 text-sm text-foreground">
                 Account created. Please sign in.
               </div>

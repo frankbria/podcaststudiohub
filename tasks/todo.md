@@ -39,10 +39,10 @@ Branch: `feature/issue-520-dead-maxretries-branches`. Plan source: issue body ("
 
 ## Acceptance criteria
 
-- [ ] Each of the six sites decides terminality with `if self.request.retries >= self.max_retries:`
-- [ ] Stranded cleanup/status writes moved onto the path that runs (lock release, #294 write, #311 rollback+write)
-- [ ] `_make_celery_retry_exception` deleted; no test mocks `retry` with `MaxRetriesExceededError`
-- [ ] Every task has a terminal-behaviour test with no retry mock (real Celery decides)
+- [x] Each of the six sites decides terminality with `if self.request.retries >= self.max_retries:`
+- [x] Stranded cleanup/status writes moved onto the path that runs (lock release, #294 write, #311 rollback+write)
+- [x] `_make_celery_retry_exception` deleted; no test mocks `retry` with `MaxRetriesExceededError`
+- [x] Every task has a terminal-behaviour test with no retry mock (real Celery decides)
 
 ## Autonomous decisions
 

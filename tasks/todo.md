@@ -1,20 +1,28 @@
-# Issue #493 — Mutation-test the #492 error-boundary + relay tests
+# Issue #502 — Snippet deletion orphans S3 objects (bypasses StorageDeletionOutbox)
 
-Plan source: issue body (mutation list). No architectural fork; approved autonomously.
+Plan source: issue body ("Fix" section). No architectural fork — the design is prescribed
+(mirror `episode_service.delete_episode`, #366). Approved autonomously.
 
 ## Steps
-1. Worktree `../podcaststudiohub-wt-493`, branch `feature/issue-493-mutation-test-error-boundary` (issue process note: nothing else may edit the tree).
-2. Script applies each of the 17 mutations to the implementation in turn, runs only the matching jest file, records KILLED/SURVIVED, restores the file.
-3. For every SURVIVED mutation: add the smallest assertion that kills it, re-run the mutation, confirm KILLED.
-4. Commit the record (`apps/web/docs/mutation-report-492.md`) + test changes; full web jest + lint green.
-5. PR → review → demo (re-run script from the record) → CI → merge.
+1. Worktree `../worktrees/issue-502-snippet-delete-outbox`, branch `feature/issue-502-snippet-delete-outbox`.
+2. RED: tests in `apps/api/tests/test_audio_snippets.py`
+   - delete with s3_key → one outbox row (tenant_id = snippet tenant, file_path NULL), no synchronous `StorageService.delete_file`
+   - delete without s3_key → no outbox row for that tenant
+   - drain trigger called post-commit; broker failure only logs
+3. GREEN: `delete_audio_snippet` enqueues `StorageDeletionOutbox(tenant_id, s3_key)` before `db.delete`,
+   drops the try/except + direct `delete_file`, triggers `drain_storage_deletion_outbox.delay()` after commit
+   (same broker-failure guard as episode_service).
+4. Docstring update; deslop; quality gate (pytest+cov, diff-cover, ruff, opencode review, mutation check).
+5. PR → post-PR review comment → demo (Showboat, API-only) → docs sync → CI → merge → disposition.
 
-## Mutations (from issue)
-- route.ts ×9: DSN gate, header event_id mismatch, drop exception, drop str() slice, String() coercion, drop Content-Length pre-check, drop Sec-Fetch-Site gate, drop fingerprint, drop !ingest.ok
-- report-client-error.ts ×5: keepalive false, location.href, drop try/catch, drop truncation, change URL
-- global-error.tsx ×2: drop html/body wrapper, drop reportClientError
-- error.tsx ×1: drop reportClientError
+## Autonomous decisions
+- `snippet.file_path` is NOT enqueued: upload unlinks the temp file in `finally`, and `file_path` is set
+  to the S3 key (or a pseudo path) — there is never a local file to reclaim. Only `s3_key` is queued.
+- Outbox drain is triggered eagerly after commit (as episode does) so tenant-visible deletion is prompt
+  when the broker is up; beat covers the rest.
 
-## Acceptance
-- [x] every mutation applied, matching test file run, result recorded (17/17 killed; PR #535 merged d9184a0)
-- [x] an assertion added wherever no test failed (DSN gate survived run 1 as predicted; console.error-not-called assertion kills it)
+## Acceptance (PR #536 merged 79b0bf3; review fix: no phantom s3_key when S3 unconfigured; follow-up #537)
+- [x] Snippet deletion enqueues an outbox row inside the same transaction as the row delete
+- [x] The direct `delete_file` call and its blind catch are gone
+- [x] A test asserts an outbox row is created (mirroring `test_delete_episode_with_s3_key_queues_outbox_row`)
+- [x] GC drain picks up snippet keys — tenant_id/s3_key columns match what the drain expects

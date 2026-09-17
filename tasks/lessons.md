@@ -557,3 +557,12 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **Give a reviewer its own worktree when the demo rewrites source files.** The mutation demo edits
   and restores `src/` every few seconds; a reviewer reading the same tree can see a mutated file.
   A detached throwaway worktree in the scratchpad (`git worktree add … --detach`) is enough.
+- **Commit (or stash) before a mutation check.** The check ends with `git checkout -- <file>`, which
+  restores HEAD — on #502 that silently discarded an uncommitted review fix, and the "fix" commit
+  landed with only the tests in it (caught by re-reading `git show --stat`; amended before push).
+- **A mutation must still parse.** Deleting the only statement in an `if` leaves an empty block →
+  `IndentationError` → the test "fails" and the mutation is scored KILLED for the wrong reason.
+  Substitute `pass` instead of deleting the line, and `ast.parse` the file before running the test.
+- **A fresh `apps/api` worktree needs `uv venv --python /usr/bin/python3.12` before `uv sync`.**
+  With no `.python-version`, uv picks its newest interpreter (3.14); `levenshtein` (via podcastfy)
+  has no 3.14 wheel and its sdist build fails on scikit-build-core metadata. Copy `.env` in too.

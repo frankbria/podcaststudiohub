@@ -18,7 +18,9 @@ from sqlalchemy import select, func
 
 from ..models.audio_snippet import AudioSnippet
 from ..models.project import Project
+from ..models.storage_deletion_outbox import StorageDeletionOutbox
 from ..schemas.audio_snippet import AudioSnippetUpdate
+from ..tasks.maintenance import drain_storage_deletion_outbox
 from ..utils.audio_utils import (
 	validate_audio_format,
 	validate_file_size,
@@ -305,33 +307,30 @@ async def delete_audio_snippet(
 	snippet: AudioSnippet,
 ) -> None:
 	"""
-	Delete audio snippet from S3 and database.
+	Delete audio snippet from the database and queue its S3 object for deletion.
 
-	Removes the S3 object first, then deletes the database record.
-	S3 deletion errors are logged but do not block DB deletion.
+	The S3 key is written to the storage deletion outbox in the same transaction
+	as the row delete, so the object is reclaimed durably by the GC worker
+	(drain_storage_deletion_outbox) instead of being orphaned when a synchronous
+	S3 call fails (#502; design from #366). The temp file from upload is already
+	gone, so ``file_path`` holds nothing local to reclaim.
 
 	Args:
 		db: Database session
 		snippet: AudioSnippet instance to delete
 	"""
-	# Attempt to delete from S3 if configured
-	if snippet.s3_key:
-		try:
-			from ..config import settings
-			from ..services.storage_service import StorageService
-
-			bucket = getattr(settings, "AWS_S3_BUCKET", None)
-			if bucket:
-				storage = StorageService(bucket_name=bucket, region_name=settings.AWS_REGION)
-				await storage.delete_file(snippet.s3_key)
-		except Exception:  # noqa: BLE001 — the DB row is deleted either way, so a storage failure must not block the delete; it leaves an orphaned object, which is the lesser outcome
-			# Log but don't fail if S3 deletion fails
-			logger.warning(
-				"Failed to delete S3 object %s for snippet %s", snippet.s3_key, snippet.id
-			)
+	s3_key = snippet.s3_key
+	if s3_key:
+		db.add(StorageDeletionOutbox(tenant_id=snippet.tenant_id, s3_key=s3_key))
 
 	await db.delete(snippet)
 	await db.commit()
+
+	if s3_key:
+		try:
+			drain_storage_deletion_outbox.delay()
+		except Exception:  # noqa: BLE001 — the outbox row is already committed, so a broker failure only delays collection — beat drains the same row on its next tick (#366)
+			logger.warning("Failed to trigger storage deletion drain for snippet %s", snippet.id)
 
 
 async def generate_download_url(snippet: AudioSnippet, expiration: int = 3600) -> str:

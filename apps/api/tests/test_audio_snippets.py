@@ -791,6 +791,98 @@ async def test_delete_nonexistent_snippet(client, auth_headers):
 	assert response.status_code == 404
 
 
+async def _upload_snippet(client, headers) -> dict:
+	"""Upload a snippet with S3 mocked out; returns the response JSON (s3_key is set)."""
+	with patch("src.services.audio_snippet_service._upload_to_s3", new_callable=AsyncMock) as mock_s3:
+		mock_s3.return_value = "https://bucket.s3.amazonaws.com/key"
+		with patch("src.services.audio_snippet_service.get_audio_duration", return_value=5.0):
+			response = await client.post(
+				"/audio-snippets/upload",
+				headers=headers,
+				files={"file": ("outbox.mp3", io.BytesIO(make_audio_file()), "audio/mpeg")},
+				data={"name": "Outbox", "snippet_type": "other"},
+			)
+	assert response.status_code == 201
+	return response.json()
+
+
+@pytest.mark.asyncio
+async def test_delete_snippet_with_s3_key_queues_outbox_row(client, auth_headers, test_db):
+	"""Deleting a snippet queues a durable StorageDeletionOutbox row for its S3 key
+	instead of deleting from S3 synchronously and swallowing failures (#502; #366 design)."""
+	from sqlalchemy import select
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
+
+	snippet = await _upload_snippet(client, auth_headers)
+	assert snippet["s3_key"]
+
+	with (
+		patch("src.services.audio_snippet_service.drain_storage_deletion_outbox") as mock_drain,
+		patch("src.services.storage_service.StorageService.delete_file", new_callable=AsyncMock) as mock_delete,
+	):
+		response = await client.delete(f"/audio-snippets/{snippet['id']}", headers=auth_headers)
+
+	assert response.status_code == 204
+	mock_delete.assert_not_awaited()
+	mock_drain.delay.assert_called_once_with()
+
+	result = await test_db.execute(
+		select(StorageDeletionOutbox).where(StorageDeletionOutbox.s3_key == snippet["s3_key"])
+	)
+	row = result.scalar_one()
+	assert str(row.tenant_id) == snippet["tenant_id"]
+	assert row.file_path is None
+
+
+@pytest.mark.asyncio
+async def test_delete_snippet_without_s3_key_queues_no_outbox_row(client, auth_headers, test_db):
+	"""A snippet that never reached S3 has nothing to reclaim: no outbox row, no drain (#502)."""
+	from uuid import UUID
+	from sqlalchemy import select
+	from src.models.audio_snippet import AudioSnippet
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
+
+	snippet = await _upload_snippet(client, auth_headers)
+	row = await test_db.get(AudioSnippet, UUID(snippet["id"]))
+	row.s3_key = None
+	await test_db.commit()
+
+	with patch("src.services.audio_snippet_service.drain_storage_deletion_outbox") as mock_drain:
+		response = await client.delete(f"/audio-snippets/{snippet['id']}", headers=auth_headers)
+
+	assert response.status_code == 204
+	mock_drain.delay.assert_not_called()
+
+	# Scoped to this tenant: the outbox has no RLS, other tests' rows are visible.
+	result = await test_db.execute(
+		select(StorageDeletionOutbox).where(StorageDeletionOutbox.tenant_id == UUID(snippet["tenant_id"]))
+	)
+	assert result.scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_delete_snippet_succeeds_when_drain_delay_fails(client, auth_headers, test_db):
+	"""The post-commit drain trigger is best-effort: a broker-down failure neither
+	blocks the delete nor loses the already-committed outbox row (#502; #366)."""
+	from sqlalchemy import select
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
+
+	snippet = await _upload_snippet(client, auth_headers)
+
+	with patch("src.services.audio_snippet_service.drain_storage_deletion_outbox") as mock_drain:
+		mock_drain.delay.side_effect = Exception("broker unavailable")
+		response = await client.delete(f"/audio-snippets/{snippet['id']}", headers=auth_headers)
+
+	assert response.status_code == 204
+	get_response = await client.get(f"/audio-snippets/{snippet['id']}", headers=auth_headers)
+	assert get_response.status_code == 404
+
+	result = await test_db.execute(
+		select(StorageDeletionOutbox).where(StorageDeletionOutbox.s3_key == snippet["s3_key"])
+	)
+	assert result.scalar_one() is not None
+
+
 # ============================================================================
 # INTEGRATION TESTS - DOWNLOAD URL
 # ============================================================================

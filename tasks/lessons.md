@@ -539,3 +539,21 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **Sibling-file style beats the linter's opinion when the linter does not own the directory**:
   `deployment/tests/` is tab-indented and outside `apps/api`'s ruff format scope; `ruff check` there is
   still useful (it caught `subprocess.run` without `check=`), `ruff format --check` is not.
+
+## #493 / PR #535 (2026-09-17) — completing the abandoned #492 mutation pass
+
+- **`showboat exec` is `<file> <lang> [code]`, not `<file> '<shell command>'`.** With one argument it
+  execs that string as the interpreter and reads the code from stdin, so in a backgrounded shell it
+  hangs forever with no child process and no output. Always `showboat exec demo.md bash '…'`.
+- **Committing inside a git worktree needs `BEADS_DIR=<main-tree>/.beads`.** The beads pre-commit
+  hook (`.git/hooks/pre-commit.legacy`) runs in every worktree, the SQLite DB is gitignored and only
+  exists in the main tree, and the hook's "Failed to flush bd changes" aborts the commit. Point the
+  env var at the main tree's `.beads` for the commit; nothing else needs it.
+- **A symlinked `node_modules` in a worktree shows as untracked** — `.gitignore`'s `node_modules/`
+  matches directories only. Harmless, but never `git add -A` in that tree; add explicit paths.
+- **A mutation driver must run the baseline first.** "Any non-zero jest exit = KILLED" reports a
+  false "all killed" on a suite that is already red or a jest that cannot start — the exact failure
+  the tool exists to catch. Codex caught it; `mutation-check-492.mjs` now exits 2 on a red baseline.
+- **Give a reviewer its own worktree when the demo rewrites source files.** The mutation demo edits
+  and restores `src/` every few seconds; a reviewer reading the same tree can see a mutated file.
+  A detached throwaway worktree in the scratchpad (`git worktree add … --detach`) is enough.

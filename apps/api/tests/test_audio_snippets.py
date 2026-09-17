@@ -791,10 +791,10 @@ async def test_delete_nonexistent_snippet(client, auth_headers):
 	assert response.status_code == 404
 
 
-async def _upload_snippet(client, headers) -> dict:
-	"""Upload a snippet with S3 mocked out; returns the response JSON (s3_key is set)."""
+async def _upload_snippet(client, headers, s3_url="https://bucket.s3.amazonaws.com/key") -> dict:
+	"""Upload a snippet with the S3 call mocked to return ``s3_url`` (None = S3 unconfigured)."""
 	with patch("src.services.audio_snippet_service._upload_to_s3", new_callable=AsyncMock) as mock_s3:
-		mock_s3.return_value = "https://bucket.s3.amazonaws.com/key"
+		mock_s3.return_value = s3_url
 		with patch("src.services.audio_snippet_service.get_audio_duration", return_value=5.0):
 			response = await client.post(
 				"/audio-snippets/upload",
@@ -835,17 +835,23 @@ async def test_delete_snippet_with_s3_key_queues_outbox_row(client, auth_headers
 
 
 @pytest.mark.asyncio
+async def test_upload_without_s3_stores_no_s3_key(client, auth_headers):
+	"""With S3 unconfigured nothing is uploaded, so no key is persisted — otherwise
+	deletion would queue an object that never existed and the GC would retry it forever (#502)."""
+	snippet = await _upload_snippet(client, auth_headers, s3_url=None)
+	assert snippet["s3_key"] is None
+	assert snippet["s3_url"] is None
+	assert snippet["file_path"] == f"audio-snippets/{snippet['id']}.mp3"
+
+
+@pytest.mark.asyncio
 async def test_delete_snippet_without_s3_key_queues_no_outbox_row(client, auth_headers, test_db):
 	"""A snippet that never reached S3 has nothing to reclaim: no outbox row, no drain (#502)."""
 	from uuid import UUID
 	from sqlalchemy import select
-	from src.models.audio_snippet import AudioSnippet
 	from src.models.storage_deletion_outbox import StorageDeletionOutbox
 
-	snippet = await _upload_snippet(client, auth_headers)
-	row = await test_db.get(AudioSnippet, UUID(snippet["id"]))
-	row.s3_key = None
-	await test_db.commit()
+	snippet = await _upload_snippet(client, auth_headers, s3_url=None)
 
 	with patch("src.services.audio_snippet_service.drain_storage_deletion_outbox") as mock_drain:
 		response = await client.delete(f"/audio-snippets/{snippet['id']}", headers=auth_headers)
@@ -908,7 +914,7 @@ async def test_download_url_no_s3_config(client, auth_headers):
 	"""Test download URL when S3 not configured returns 503."""
 	audio_bytes = make_audio_file()
 
-	# Upload without S3 (s3_key will be set but no bucket configured)
+	# Upload without S3 (no object uploaded, so no s3_key is persisted — #502)
 	with patch("src.services.audio_snippet_service._upload_to_s3", new_callable=AsyncMock) as mock_s3:
 		mock_s3.return_value = None  # No S3 URL
 		with patch("src.services.audio_snippet_service.get_audio_duration", return_value=5.0):
@@ -921,7 +927,7 @@ async def test_download_url_no_s3_config(client, auth_headers):
 
 	snippet_id = create_response.json()["id"]
 
-	# Try to get download URL - s3_key is set but no bucket configured
+	# Try to get download URL with storage unconfigured
 	# Patch the name as bound in the router module (it's imported via
 	# `from ..services.audio_snippet_service import generate_download_url`),
 	# not the service module — patching the latter doesn't affect the

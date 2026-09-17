@@ -123,6 +123,10 @@ async def upload_audio_snippet(
 		# Upload to S3 if configured
 		s3_key = generate_s3_key(str(user_id), str(snippet_id), file_ext)
 		s3_url = await _upload_to_s3(temp_path, s3_key, file_ext)
+		if s3_url is None:
+			# S3 unconfigured: nothing was uploaded, so persisting the key would
+			# make deletion queue an object that never existed (#502).
+			s3_key = None
 
 	except HTTPException:
 		raise

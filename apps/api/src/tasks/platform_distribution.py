@@ -169,6 +169,32 @@ def distribute_to_platform_task(
     Returns:
         Dictionary with distribution results
     """
+    def _recorded(result: Dict[str, Any]) -> Dict[str, Any]:
+        # Record the outcome durably before returning. On the last platform the
+        # on_distribution_complete link and the chain's on_workflow_complete are
+        # dispatched as an unordered group, so the terminal status must not
+        # depend on the link having run first; the link re-merges the same entry
+        # as idempotent redundancy. For a success this also lets a redelivery hit
+        # the pre-check below instead of republishing (issue #312). A recording
+        # failure must NOT raise: retrying would repeat the platform side effect.
+        # If recording fails AND the worker dies before ack, the pre-check cannot
+        # catch the redelivery — the Idempotency-Key sent with the publish is the
+        # remaining (receiver-side) dedup layer.
+        try:
+            from src.tasks.callbacks import record_platform_distribution
+            record_platform_distribution(episode_id, platform, result)
+        except Exception as exc:  # noqa: BLE001 — see above: the task has already acted, so a recording error is logged and the link callback is left to retry the record
+            logger.error(
+                "Failed to record %s distribution %s for episode %s "
+                "in-task (callback will retry the record): %s",
+                platform,
+                result.get("status"),
+                episode_id,
+                exc,
+                exc_info=True,
+            )
+        return result
+
     try:
         self.update_state(
             state='PROGRESS',
@@ -250,13 +276,13 @@ def distribute_to_platform_task(
             platform_config = _decrypt_platform_config(platform_config, platform)
         except Exception as e:  # noqa: BLE001 — every exception from this path is a DBAPIError whose str() embeds the bound parameters (the ciphertext and settings.ENCRYPTION_KEY), so all of them must be reduced to type(e).__name__ before reaching the stored error message
             logger.error(f"Failed to decrypt credentials for {platform}: {e}")
-            return {
+            return _recorded({
                 "status": "failed",
                 "platform": platform,
                 "platform_episode_id": None,
                 "platform_url": None,
                 "error": f"Credential decryption failed: {type(e).__name__}"
-            }
+            })
 
         if platform == "spotify":
             result = _distribute_to_spotify(episode_id, platform_config, episode_metadata, self)
@@ -267,27 +293,7 @@ def distribute_to_platform_task(
         else:
             raise ValueError(f"Unsupported platform: {platform}")
 
-        # Record success durably before returning so a redelivery after this
-        # point hits the pre-check above instead of republishing (issue #312).
-        # The on_distribution_complete link callback re-merges the same entry
-        # as idempotent redundancy. A recording failure must NOT raise:
-        # retrying the task would repeat the platform side effect that just
-        # succeeded. If recording fails AND the worker dies before ack, the
-        # pre-check cannot catch the redelivery — the Idempotency-Key sent
-        # with the publish is the remaining (receiver-side) dedup layer.
-        if result.get("status") == "success":
-            try:
-                from src.tasks.callbacks import record_platform_distribution
-                record_platform_distribution(episode_id, platform, result)
-            except Exception as exc:
-                logger.error(
-                    "Failed to record %s distribution success for episode %s "
-                    "in-task (callback will retry the record): %s",
-                    platform,
-                    episode_id,
-                    exc,
-                    exc_info=True,
-                )
+        _recorded(result)
 
         self.update_state(
             state='SUCCESS',
@@ -307,13 +313,13 @@ def distribute_to_platform_task(
             logger.error(
                 f"Permanent error distributing to {platform} for episode {episode_id}: {e}"
             )
-            return {
+            return _recorded({
                 "status": "failed",
                 "platform": platform,
                 "platform_episode_id": None,
                 "platform_url": None,
                 "error": str(e)
-            }
+            })
         # Transient error — retry with exponential backoff
         logger.warning(
             f"Transient error distributing to {platform} for episode {episode_id}, "
@@ -328,13 +334,13 @@ def distribute_to_platform_task(
                 f"Distribution to {platform} failed after {self.max_retries} retries "
                 f"for episode {episode_id}: {e}"
             )
-            return {
+            return _recorded({
                 "status": "failed",
                 "platform": platform,
                 "platform_episode_id": None,
                 "platform_url": None,
                 "error": f"{e} (gave up after {self.max_retries} retries)",
-            }
+            })
         raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
 
 

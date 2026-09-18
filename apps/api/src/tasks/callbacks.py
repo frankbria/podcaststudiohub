@@ -319,8 +319,9 @@ def on_distribution_complete(
 	failed = result.get("status") != "success"
 	if failed:
 		# Failed distribution tasks (permanent, or retries exhausted — #526) return
-		# {status: failed} rather than raising (to keep per-platform distribution independent), so record the
-		# failure here instead of dropping it. The whole-episode generation_status
+		# {status: failed} rather than raising, to keep per-platform distribution
+		# independent. The task already recorded the failure in-task; this
+		# re-merge is idempotent redundancy. The whole-episode generation_status
 		# is left untouched — on_workflow_complete derives the terminal state from
 		# the recorded per-platform outcomes (issue #300).
 		logger.error(

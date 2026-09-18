@@ -119,3 +119,29 @@ def test_exhausted_wait_for_audio_still_fails_the_episode(uploaded_episode):
 	with SyncSessionLocal() as db:
 		episode = db.get(Episode, uuid.UUID(uploaded_episode))
 		assert episode.generation_status == "failed"
+
+
+def test_failure_is_recorded_before_the_task_returns(uploaded_episode):
+	"""On the last platform, on_distribution_complete and on_workflow_complete
+	are dispatched as an unordered group; if on_workflow_complete wins, it must
+	already see the failure, so the task records it in-task."""
+	result = _run_exhausted(
+		uploaded_episode,
+		"webhook",
+		MagicMock(side_effect=requests.ConnectionError("receiver down")),
+	)
+
+	with SyncSessionLocal() as db:
+		entry = db.get(Episode, uuid.UUID(uploaded_episode)).generation_progress[
+			"distribution"
+		]["webhook"]
+		assert entry["status"] == "failed"
+
+	# on_workflow_complete wins the race: on_distribution_complete has not run.
+	on_workflow_complete.run({}, episode_id=uploaded_episode)
+	with SyncSessionLocal() as db:
+		assert (
+			db.get(Episode, uuid.UUID(uploaded_episode)).generation_status
+			== "distribution_failed"
+		)
+	assert result["status"] == "failed"

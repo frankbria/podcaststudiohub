@@ -101,3 +101,19 @@ def test_skipped_dependency_fails_closed(tmp_path):
     )
     assert result.returncode == 1
     assert "mystery" in result.stdout
+
+
+def test_annotation_properties_carry_no_bare_comma(tmp_path):
+    """GitHub splits `::cmd k=v,k=v::` properties on a bare comma — one in a title truncates it."""
+    result, _ = _run(
+        tmp_path,
+        [
+            {"name": "litellm", "version": "1.80.0", "vulns": [_vuln("CVE-2099-0001")]},
+            {"name": "requests", "version": "2.0.0", "vulns": [_vuln("CVE-2099-0002")]},
+        ],
+    )
+    commands = [line for line in result.stdout.splitlines() if line.startswith("::")]
+    assert len(commands) == 2
+    for line in commands:
+        properties = line[2:].split("::", 1)[0]
+        assert "," not in properties, line

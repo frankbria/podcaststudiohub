@@ -60,7 +60,7 @@ def main(path: str) -> int:
     warned, failed = list(dict.fromkeys(warned)), list(dict.fromkeys(failed))
     if warned:
         print(
-            f"::warning title=litellm advisories (non-blocking, #518)::{len(warned)} — listed below"
+            f"::warning title=litellm advisories - non-blocking::{len(warned)} (#518) — listed below"
         )
         print("\n".join(f"  {line}" for line in warned))
     for line in failed:

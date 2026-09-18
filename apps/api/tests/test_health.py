@@ -90,6 +90,44 @@ async def test_ready_endpoint_reports_dependency_checks(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_ready_reports_rate_limiter_fail_opens(client: AsyncClient, monkeypatch):
+    """/ready exposes how often the login rate limiter has failed open (#503).
+
+    The Redis check already gates readiness, so this block is informational:
+    it is the durable, pollable evidence that the brute-force control was off
+    at some point since this process started — a blip between two probes would
+    otherwise leave nothing but a log line.
+    """
+    from src.services.rate_limiter import fail_open_stats
+
+    monkeypatch.setattr(fail_open_stats, "count", 0)
+    monkeypatch.setattr(fail_open_stats, "last_at", None)
+
+    response = await client.get("/ready")
+    assert response.status_code == 200
+    assert response.json()["rate_limiter"] == {"fail_open_count": 0, "last_fail_open_at": None}
+
+    fail_open_stats.record()
+    fail_open_stats.record()
+
+    data = (await client.get("/ready")).json()
+    assert data["rate_limiter"]["fail_open_count"] == 2
+    assert data["rate_limiter"]["last_fail_open_at"].endswith("+00:00")
+    # Informational only: a past fail-open must not fail the probe once Redis is back.
+    assert data["status"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_ready_reports_rate_limiter_block_when_not_ready(client: AsyncClient):
+    """The block is present on the 503 shape too, so an outage is fully described."""
+    with patch("src.main._check_redis", side_effect=OSError("connection refused")):
+        response = await client.get("/ready")
+
+    assert response.status_code == 503
+    assert "fail_open_count" in response.json()["rate_limiter"]
+
+
+@pytest.mark.asyncio
 async def test_ready_returns_503_when_database_is_down(client: AsyncClient):
     with patch("src.main._check_database", side_effect=OSError("connection refused")):
         response = await client.get("/ready")

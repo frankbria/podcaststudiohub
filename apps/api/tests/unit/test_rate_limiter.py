@@ -13,7 +13,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-unit-tests")
 import time
 from unittest.mock import MagicMock, patch
 
-from src.services.rate_limiter import RateLimiter, get_client_ip
+from src.services.rate_limiter import RateLimiter, fail_open_stats, get_client_ip
 
 
 # ---------------------------------------------------------------------------
@@ -116,15 +116,40 @@ class TestRateLimiterIsAllowed:
 		assert allowed_a is True
 		assert allowed_b is False
 
-	def test_fails_open_on_redis_exception(self):
-		"""When Redis raises an exception the limiter should allow the request."""
+	def test_fails_open_on_redis_exception(self, caplog):
+		"""When Redis raises the limiter allows the request, but loudly (#503).
+
+		The fail-open is deliberate; what must not be quiet is the disarm: one
+		ERROR record (alertable, structured ``event`` so a filter can key on it)
+		and an in-process count. The old ``remaining: -1`` sentinel is gone —
+		nothing consumed it, so ``remaining`` is simply absent.
+		"""
 		redis_mock = MagicMock()
 		redis_mock.pipeline.side_effect = Exception("connection refused")
 		limiter = _make_limiter(redis_mock)
+		count_before = fail_open_stats.count
 
-		allowed, info = limiter.is_allowed("login:1.2.3.4", max_requests=5, window_seconds=300)
+		with caplog.at_level("ERROR", logger="src.services.rate_limiter"):
+			allowed, info = limiter.is_allowed("login:1.2.3.4", max_requests=5, window_seconds=300)
 
 		assert allowed is True
+		assert "remaining" not in info
+		errors = [r for r in caplog.records if r.levelname == "ERROR"]
+		assert len(errors) == 1, "exactly one alertable record per fail-open"
+		assert errors[0].event == "rate_limit_fail_open"
+		assert errors[0].key == "login:1.2.3.4"
+		assert "connection refused" in errors[0].getMessage()
+		assert fail_open_stats.count == count_before + 1
+		assert fail_open_stats.last_at is not None and fail_open_stats.last_at <= time.time()
+
+	def test_normal_path_does_not_count_a_fail_open(self):
+		"""A healthy Redis round-trip must not touch the fail-open counter."""
+		limiter = _make_limiter(_make_redis_mock(card_return=0))
+		count_before = fail_open_stats.count
+
+		limiter.is_allowed("login:1.2.3.4", max_requests=5, window_seconds=300)
+
+		assert fail_open_stats.count == count_before
 
 	def test_records_request_when_allowed(self):
 		"""A successful check should call zadd and expire to record the request."""

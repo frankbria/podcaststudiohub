@@ -3,6 +3,7 @@ Main FastAPI application for Podcastfy GUI API
 """
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse
@@ -14,6 +15,7 @@ from src.logging_config import REQUEST_ID_HEADER, init_sentry, setup_logging
 from src.middleware.correlation import CorrelationIdMiddleware
 from src.middleware.cors import setup_cors
 from src.middleware.tenant import TenantContextMiddleware
+from src.services.rate_limiter import fail_open_stats
 
 # Structured logging + error tracking (issue #320). setup_logging replaces the
 # old basicConfig; init_sentry is a no-op unless SENTRY_DSN is set.
@@ -107,6 +109,21 @@ async def _check_redis() -> None:
         await client.aclose()
 
 
+def _rate_limiter_status() -> dict:
+    """How often the auth rate limiter has failed open since this process started.
+
+    Informational, not a readiness gate (the live Redis check is): it is the
+    durable evidence of a disarm that happened *between* two green probes (#503).
+    """
+    last = fail_open_stats.last_at
+    return {
+        "fail_open_count": fail_open_stats.count,
+        "last_fail_open_at": (
+            datetime.fromtimestamp(last, tz=timezone.utc).isoformat() if last else None
+        ),
+    }
+
+
 @app.get("/ready")
 async def readiness_check():
     """Readiness probe: can this process actually serve traffic?
@@ -131,13 +148,15 @@ async def readiness_check():
             logger.error("Readiness check failed for %s: %s", name, e, exc_info=True)
             checks[name] = "error"
 
+    body = {
+        "version": settings.APP_VERSION,
+        "checks": checks,
+        "rate_limiter": _rate_limiter_status(),
+    }
     if all(status == "ok" for status in checks.values()):
-        return {"status": "ready", "version": settings.APP_VERSION, "checks": checks}
+        return {"status": "ready", **body}
 
-    return JSONResponse(
-        status_code=503,
-        content={"status": "not_ready", "version": settings.APP_VERSION, "checks": checks},
-    )
+    return JSONResponse(status_code=503, content={"status": "not_ready", **body})
 
 
 @app.exception_handler(404)

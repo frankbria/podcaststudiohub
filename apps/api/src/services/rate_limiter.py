@@ -6,11 +6,31 @@ Fails open on Redis errors to preserve availability.
 """
 import logging
 import time
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from redis import Redis
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class FailOpenStats:
+	"""How often this process has let a request through unmetered.
+
+	ponytail: a process-local counter surfaced on ``/ready``; swap for a real
+	metrics backend if one ever lands. A Redis-backed counter would be absurd —
+	it is Redis being down that we are counting.
+	"""
+
+	count: int = 0
+	last_at: Optional[float] = None
+
+	def record(self) -> None:
+		self.count += 1
+		self.last_at = time.time()
+
+
+fail_open_stats = FailOpenStats()
 
 
 class RateLimiter:
@@ -50,7 +70,8 @@ class RateLimiter:
 		Returns:
 			A tuple ``(allowed, info)`` where *allowed* is ``True`` when the
 			request should proceed and *info* is a dict containing:
-			- ``remaining``: requests remaining in the current window
+			- ``remaining``: requests remaining in the current window (absent
+			  when Redis was unreachable and the request was allowed unmetered)
 			- ``retry_after``: seconds until the oldest request expires
 			  (only present when *allowed* is ``False``)
 		"""
@@ -82,9 +103,19 @@ class RateLimiter:
 				return False, {"remaining": 0, "retry_after": retry_after}
 
 		except Exception as exc:  # noqa: BLE001 — a rate limiter that fails closed turns a Redis outage into a total outage, so this one fails open by design (deliberately unlike the OAuth state check, which fails closed)
-			# Fail open: log the error but allow the request
-			logger.warning("Rate limiter Redis error (failing open): %s", exc)
-			return True, {"remaining": -1}
+			# Fail open, loudly: a brute-force control switching itself off is one
+			# ERROR (Sentry captures error-level records; one record, not one per
+			# layer, so an outage is one alert) carrying a structured event name a
+			# log filter can key on, and it is counted so /ready can show it
+			# happened even between two green probes (#503).
+			fail_open_stats.record()
+			logger.error(
+				"Rate limiter Redis error (failing open, request allowed unmetered): key=%s error=%s",
+				key,
+				exc,
+				extra={"event": "rate_limit_fail_open", "key": key},
+			)
+			return True, {}
 
 
 def get_client_ip(

@@ -10,7 +10,6 @@ platform services mocked.
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 def _episode(**overrides):
@@ -138,9 +137,9 @@ class TestDistributeTaskPopulatesMetadata:
 	def test_task_does_not_publish_without_uploaded_audio(self):
 		"""No s3_url (upload failed or not committed) must never publish.
 
-		The task retries until its budget is exhausted, then fails (the
-		original exception propagates — #520) — it must not call the
-		platform service with a non-existent audio URL (issue #211).
+		The task retries until its budget is exhausted, then returns a failed
+		result (#526) — it must not call the platform service with a
+		non-existent audio URL (issue #211).
 		"""
 		from src.tasks.platform_distribution import distribute_to_platform_task
 
@@ -170,15 +169,16 @@ class TestDistributeTaskPopulatesMetadata:
 				id="test-task-2",
 			)
 			try:
-				with pytest.raises(RuntimeError):
-					distribute_to_platform_task.run(
-						episode_id="00000000-0000-0000-0000-000000000002",
-						platform="webhook",
-						platform_config={"url": "https://hook.example.com/x"},
-						episode_metadata={},
-					)
+				result = distribute_to_platform_task.run(
+					episode_id="00000000-0000-0000-0000-000000000002",
+					platform="webhook",
+					platform_config={"url": "https://hook.example.com/x"},
+					episode_metadata={},
+				)
 			finally:
 				distribute_to_platform_task.pop_request()
 
 		# Missing audio → retried (then exhausted → failed); never published.
+		assert result["status"] == "failed"
+		assert "no uploaded audio URL" in result["error"]
 		webhook.assert_not_called()

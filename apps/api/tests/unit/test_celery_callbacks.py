@@ -742,9 +742,8 @@ class TestBuildGenerationWorkflow:
 	def test_stage_failure_records_the_failing_stage(self, reverse):
 		"""A failed stage's errbacks leave failed_task naming that stage (#519).
 
-		unchain_tasks() is the clone apply_async dispatches, with any chain-level
-		link_error copied onto every member — so these are exactly the errbacks
-		Celery fires. Order across errbacks is not guaranteed; both are tried.
+		unchain_tasks() copies any chain-level link_error onto every member, as
+		apply_async's prepare_steps does — so these are the errbacks Celery fires. Order across errbacks is not guaranteed; both are tried.
 		"""
 		from celery import signature
 		from celery.utils.functional import maybe_list

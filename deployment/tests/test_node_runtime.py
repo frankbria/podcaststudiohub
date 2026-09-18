@@ -73,7 +73,10 @@ def test_deploy_never_changes_the_system_node():
 	assert "nvm alias default" not in text
 
 
-def _run_prelude(tmp_path: Path, node_version: str | None, with_nvm: bool = True):
+STUB_NVM = 'nvm() {{ echo "nvm $*" >> "{log}"; }}\n'
+
+
+def _run_prelude(tmp_path: Path, node_version: str, nvm_stub: str | None = STUB_NVM):
 	"""Run the deploy's USE_NODE the way the workflow does: assigned by the runner's
 	shell, interpolated into a double-quoted ssh command, parsed by the remote shell.
 	`nvm` is a stub; `node` reports `node_version`."""
@@ -83,9 +86,9 @@ def _run_prelude(tmp_path: Path, node_version: str | None, with_nvm: bool = True
 	for d in (home, frontend, bindir):
 		d.mkdir()
 	(frontend / ".nvmrc").write_text(NVMRC.read_text())
-	if with_nvm:
+	if nvm_stub:
 		(home / ".nvm").mkdir()
-		(home / ".nvm" / "nvm.sh").write_text(f'nvm() {{ echo "nvm $*" >> "{tmp_path}/nvm.log"; }}\n')
+		(home / ".nvm" / "nvm.sh").write_text(nvm_stub.format(log=tmp_path / "nvm.log"))
 	node = bindir / "node"
 	node.write_text(f"#!/bin/sh\necho {node_version}\n")
 	node.chmod(0o755)
@@ -114,7 +117,7 @@ def test_prelude_fails_before_npm_on_a_mismatch(tmp_path, wrong):
 
 
 def test_prelude_fails_before_npm_without_nvm(tmp_path):
-	r = _run_prelude(tmp_path, f"v{_major()}.0.0", with_nvm=False)
+	r = _run_prelude(tmp_path, f"v{_major()}.0.0", nvm_stub=None)
 	assert r.returncode == 1
 	assert "nvm is not installed" in r.stdout
 	assert "NPM_RAN" not in r.stdout
@@ -123,3 +126,11 @@ def test_prelude_fails_before_npm_without_nvm(tmp_path):
 def test_a_runtime_bump_alone_redeploys():
 	triggers = DEPLOY.read_text().split("workflow_dispatch:")[0]
 	assert "- '.nvmrc'" in triggers
+
+
+def test_prelude_falls_back_to_an_installed_node_when_install_fails(tmp_path):
+	offline = 'nvm() {{ echo "nvm $*" >> "{log}"; [ "$1" != install ]; }}\n'
+	r = _run_prelude(tmp_path, f"v{_major()}.3.1", nvm_stub=offline)
+	assert r.returncode == 0, r.stderr
+	assert "NPM_RAN" in r.stdout
+	assert (tmp_path / "nvm.log").read_text().split("\n")[:2] == ["nvm install", "nvm use"]

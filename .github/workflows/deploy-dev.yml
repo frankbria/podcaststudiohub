@@ -406,10 +406,12 @@ jobs:
           # Every remote npm call runs this first (#522). Non-interactive SSH
           # never loads nvm, so npm would otherwise run on the box's system
           # node, which is shared with other tenants and must not be changed.
-          # This selects the .nvmrc major from the deploy user's own nvm
-          # (installing it on first use) and fails the deploy on a mismatch.
+          # This selects the .nvmrc major from the deploy user's own nvm and
+          # fails the deploy on a mismatch. nvm install fetches the newest
+          # patch of that major (security fixes land on the next deploy); if
+          # nodejs.org is unreachable, an already-installed one is used.
           # Single-quoted: it expands on the VPS, from $SERVER_PATH/frontend.
-          USE_NODE='export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] || { echo "nvm is not installed for $(whoami)"; exit 1; }; . "$NVM_DIR/nvm.sh"; nvm install >/dev/null || exit 1; case "$(node -v)" in "v$(cat .nvmrc)".*) echo "node -v: $(node -v) ($(command -v node))" ;; *) echo "wrong node: $(node -v), .nvmrc wants $(cat .nvmrc)"; exit 1 ;; esac'
+          USE_NODE='export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] || { echo "nvm is not installed for $(whoami)"; exit 1; }; . "$NVM_DIR/nvm.sh"; nvm install >/dev/null 2>&1 || nvm use >/dev/null || exit 1; case "$(node -v)" in "v$(cat .nvmrc)".*) echo "node -v: $(node -v) ($(command -v node))" ;; *) echo "wrong node: $(node -v), .nvmrc wants $(cat .nvmrc)"; exit 1 ;; esac'
 
           # Sync public files to server
           rsync -avz -e ssh \

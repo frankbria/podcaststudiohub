@@ -18,6 +18,7 @@ on:
       - 'apps/web/tailwind.config.ts'
       - 'deployment/**'
       - '.github/workflows/deploy-dev.yml'
+      - '.nvmrc'
 
   workflow_dispatch:
     inputs:

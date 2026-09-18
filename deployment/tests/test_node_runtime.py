@@ -118,3 +118,8 @@ def test_prelude_fails_before_npm_without_nvm(tmp_path):
 	assert r.returncode == 1
 	assert "nvm is not installed" in r.stdout
 	assert "NPM_RAN" not in r.stdout
+
+
+def test_a_runtime_bump_alone_redeploys():
+	triggers = DEPLOY.read_text().split("workflow_dispatch:")[0]
+	assert "- '.nvmrc'" in triggers

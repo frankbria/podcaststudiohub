@@ -36,6 +36,11 @@ uv export --format requirements-txt --no-hashes --no-emit-project -o "$reqs" -q
 # CVE-2025-0628). All four are litellm/proxy/* — same proxy-only class as below.
 # See #518 for why this list keeps growing by hand.
 #
+# Added 2026-09-18: CVE-2026-59823 / GHSA-hx8v-g79f-8w5f (SSRF via `user_config`
+# bypassing is_request_body_safe in litellm/proxy/auth/auth_utils.py, fixed in
+# 1.83.9). Reachable only by an authenticated LiteLLM Proxy caller with a virtual
+# key; we never run a proxy. Same proxy-only class as everything below.
+#
 # Added 2026-09-12: CVE-2026-12773 (improper authentication in
 # litellm/proxy/_experimental/mcp_server/auth/user_api_key_auth_mcp.py, MCP Proxy)
 # and CVE-2026-12795 (missing authentication in
@@ -72,6 +77,7 @@ uvx pip-audit -r "$reqs" --no-deps --disable-pip --strict \
   --ignore-vuln PYSEC-2026-1845 \
   --ignore-vuln PYSEC-2026-2193 \
   --ignore-vuln PYSEC-2026-2562 \
+  --ignore-vuln CVE-2026-59823 \
   --ignore-vuln CVE-2026-12771 \
   --ignore-vuln CVE-2026-12772 \
   --ignore-vuln CVE-2026-12773 \

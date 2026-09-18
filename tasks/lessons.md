@@ -612,3 +612,10 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **Make a new deploy precondition fail closed, before anything mutates.** The missing-nvm run
   failed before `npm install` and left the old frontend online. It was harmless, and it counted
   as real evidence for the failure path.
+
+## #526 / PR #565 (2026-09-18) — exhausted distribution = per-platform failure
+
+- **Eager `chain.apply()` lies about per-task links.** `Signature._merge` lets the chain's `link` replace each member's own `link`, so `on_distribution_complete` never fires in eager mode and per-platform outcomes silently vanish. Demo chain/callback behaviour with a real solo worker + `apply_async`, never eager.
+- **Two links on one task = unordered group.** The chain-level `.link()` lands on the last task beside its own link; `_dispatch_callbacks_and_chain` sends both as a `group`. Any state the terminal callback derives must be committed in-task before the task returns, not left to a sibling link.
+- **`gh pr checks` has no `--json` here.** A wait loop built on it fails silently and spins forever; parse the plain tab-separated output instead.
+- **`pkill -f` killed the tool shell again (exit 144)**, despite the #519 lesson. Stop background tool tasks with TaskStop, workers by pidfile.

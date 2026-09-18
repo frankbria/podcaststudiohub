@@ -587,3 +587,10 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **Showboat demos must not depend on files in /tmp.** A demo that passes `showboat verify` in
   session can still be unreproducible; write helper scripts inside the exec block (heredoc) and
   `rm` the temp file before verifying.
+
+## #519 / PR #559 (2026-09-18) — duplicate chain-level errback
+
+- **Kill a background worker by pidfile, not by pattern.** `pgrep -f`/`pkill -f` match the tool shell's own command line, and so does the `ps | grep '[c]elery …'` bracket trick whenever the *same* shell command also contains the pattern unbracketed (e.g. it started the worker a few lines earlier). Both killed the tool shell (exit 144). Start with `celery … worker --pidfile /tmp/x/worker.pid` and stop with `kill $(cat /tmp/x/worker.pid)`.
+- **A real-worker demo must consume every queue the chain can hit, including `celery`.** `merge_audio_snippets` / `distribute_to_platform` fall through to the default queue (#560), so `-Q audio_processing,callbacks` silently strands the stage. Check with `celery_app.amqp.router.route({}, name)` first.
+- **Chain-level `link_error` is appended to every member task** (`_chain.prepare_steps`); never add one to a chain whose stages already carry errbacks. In tests, a single errback is stored unwrapped, so iterate `maybe_list(sig.options["link_error"])` and rehydrate with `celery.signature()`.
+- **Cross-family review can be entirely unavailable** (codex usage cap + opencode stall on the same day). Disclose it in the PR body's Known Limitations and let the internal reviewer read library source for the load-bearing claim.

@@ -61,7 +61,19 @@ exit=1
 **Criterion 4: the compensating control can actually fail.** On our call path (model_name=None, which falls back to the configured gemini model), no litellm module loads. The same probe with a non-gemini model loads litellm, which is what `test_litellm_is_never_imported_by_the_generation_stack` would catch.
 
 ```bash
-cd apps/api && uv run --quiet python /tmp/probe518.py 2>/dev/null | tail -1; uv run --quiet python /tmp/probe518.py gpt-4o 2>/dev/null | tail -1; uv run pytest tests/test_dependency_reachability.py tests/test_pip_audit_gate.py -q -p no:cacheprovider --no-cov 2>&1 | tail -1 | sed -E "s/ in [0-9.]+s//"
+cd apps/api && cat > /tmp/probe518.py <<'EOF'
+import os, sys, tempfile
+model = sys.argv[1] if len(sys.argv) > 1 else None
+os.environ.setdefault("GEMINI_API_KEY", "x"); os.environ["OPENAI_API_KEY"] = "x"
+os.chdir(tempfile.mkdtemp())
+from podcastfy.content_generator import ContentGenerator
+from podcastfy.utils.config_conversation import load_conversation_config
+ContentGenerator(is_local=False, model_name=model, api_key_label="OPENAI_API_KEY" if model else None,
+                 conversation_config=load_conversation_config().to_dict())
+n = len([m for m in sys.modules if m == "litellm" or m.startswith("litellm.")])
+print(f"model_name={model!r} -> litellm modules loaded: {n}")
+EOF
+uv run --quiet python /tmp/probe518.py 2>/dev/null | tail -1; uv run --quiet python /tmp/probe518.py gpt-4o 2>/dev/null | tail -1; uv run pytest tests/test_dependency_reachability.py tests/test_pip_audit_gate.py -q -p no:cacheprovider --no-cov 2>&1 | tail -1 | sed -E 's/ in [0-9.]+s//'
 ```
 
 ```output

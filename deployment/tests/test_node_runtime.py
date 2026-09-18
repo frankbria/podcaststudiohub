@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NVMRC = REPO_ROOT / ".nvmrc"
@@ -52,11 +55,7 @@ def test_deploy_selects_node_before_every_remote_npm_call():
 	text = DEPLOY.read_text()
 	guard = re.search(r"USE_NODE='([^']+)'", text)
 	assert guard, "deploy-dev.yml must define the USE_NODE prelude"
-	prelude = guard.group(1)
-	assert '. "$NVM_DIR/nvm.sh"' in prelude
-	assert "nvm install" in prelude
-	assert '"v$(cat .nvmrc)".*)' in prelude and "exit 1" in prelude
-	assert 'node -v' in prelude
+	assert '. "$NVM_DIR/nvm.sh"' in guard.group(1)
 
 	remote_npm = [ln for ln in text.splitlines() if re.search(r"ssh .*\bnpm (install|run)\b", ln)]
 	assert len(remote_npm) == 2, remote_npm
@@ -72,3 +71,50 @@ def test_deploy_never_changes_the_system_node():
 	text = DEPLOY.read_text()
 	assert "/usr/local/bin/node" not in text
 	assert "nvm alias default" not in text
+
+
+def _run_prelude(tmp_path: Path, node_version: str | None, with_nvm: bool = True):
+	"""Run the deploy's USE_NODE the way the workflow does: assigned by the runner's
+	shell, interpolated into a double-quoted ssh command, parsed by the remote shell.
+	`nvm` is a stub; `node` reports `node_version`."""
+	home = tmp_path / "home"
+	frontend = tmp_path / "frontend"
+	bindir = tmp_path / "bin"
+	for d in (home, frontend, bindir):
+		d.mkdir()
+	(frontend / ".nvmrc").write_text(NVMRC.read_text())
+	if with_nvm:
+		(home / ".nvm").mkdir()
+		(home / ".nvm" / "nvm.sh").write_text(f'nvm() {{ echo "nvm $*" >> "{tmp_path}/nvm.log"; }}\n')
+	node = bindir / "node"
+	node.write_text(f"#!/bin/sh\necho {node_version}\n")
+	node.chmod(0o755)
+
+	assign = re.search(r"^\s*(USE_NODE='[^']+')$", DEPLOY.read_text(), re.M).group(1)
+	remote = f'{assign}; printf %s "cd {frontend} || exit 1; $USE_NODE; echo NPM_RAN"'
+	command = subprocess.run(["bash", "-c", remote], capture_output=True, text=True, check=True).stdout
+	env = {"HOME": str(home), "PATH": f"{bindir}:/usr/bin:/bin"}
+	return subprocess.run(["bash", "-c", command], capture_output=True, text=True, env=env)
+
+
+def test_prelude_runs_npm_on_the_nvmrc_major_and_logs_it(tmp_path):
+	r = _run_prelude(tmp_path, f"v{_major()}.3.1")
+	assert r.returncode == 0, r.stderr
+	assert f"node -v: v{_major()}.3.1" in r.stdout
+	assert "NPM_RAN" in r.stdout
+	assert (tmp_path / "nvm.log").read_text().strip() == "nvm install"
+
+
+@pytest.mark.parametrize("wrong", ["v20.19.0", f"v{_major()}0.0.0", "v2.0.0"])
+def test_prelude_fails_before_npm_on_a_mismatch(tmp_path, wrong):
+	r = _run_prelude(tmp_path, wrong)
+	assert r.returncode == 1
+	assert f"wrong node: {wrong}" in r.stdout
+	assert "NPM_RAN" not in r.stdout
+
+
+def test_prelude_fails_before_npm_without_nvm(tmp_path):
+	r = _run_prelude(tmp_path, f"v{_major()}.0.0", with_nvm=False)
+	assert r.returncode == 1
+	assert "nvm is not installed" in r.stdout
+	assert "NPM_RAN" not in r.stdout

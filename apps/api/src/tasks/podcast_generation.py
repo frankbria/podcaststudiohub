@@ -990,10 +990,10 @@ def build_generation_workflow(
 			)
 			workflow_tasks.append(dist_sig)
 
+	# No chain-level link_error: Celery copies it onto every member task, and each
+	# stage above already has its own. It fired a second, generic errback that
+	# could overwrite the precise failed_task with "workflow" (issue #519).
 	workflow = chain(*workflow_tasks)
 	workflow.link(on_workflow_complete.s(episode_id=episode_id))
-	workflow.link_error(
-		on_workflow_failure.s(episode_id=episode_id, task_name="workflow")
-	)
 
 	return workflow

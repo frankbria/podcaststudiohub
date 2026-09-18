@@ -13,7 +13,7 @@ os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-for-unit-tests")
 import time
 from unittest.mock import MagicMock, patch
 
-from src.services.rate_limiter import FAIL_OPEN_REMAINING, RateLimiter, fail_open_stats, get_client_ip
+from src.services.rate_limiter import RateLimiter, fail_open_stats, get_client_ip
 
 
 # ---------------------------------------------------------------------------
@@ -119,9 +119,10 @@ class TestRateLimiterIsAllowed:
 	def test_fails_open_on_redis_exception(self, caplog):
 		"""When Redis raises the limiter allows the request, but loudly (#503).
 
-		The fail-open is deliberate; what must not be quiet is the disarm: it is
-		logged at ERROR (alertable), counted in-process, and flagged in ``info``
-		with the named sentinel rather than an anonymous ``-1``.
+		The fail-open is deliberate; what must not be quiet is the disarm: one
+		ERROR record (alertable, structured ``event`` so a filter can key on it)
+		and an in-process count. The old ``remaining: -1`` sentinel is gone —
+		nothing consumed it, so ``remaining`` is simply absent.
 		"""
 		redis_mock = MagicMock()
 		redis_mock.pipeline.side_effect = Exception("connection refused")
@@ -132,9 +133,12 @@ class TestRateLimiterIsAllowed:
 			allowed, info = limiter.is_allowed("login:1.2.3.4", max_requests=5, window_seconds=300)
 
 		assert allowed is True
-		assert info["remaining"] == FAIL_OPEN_REMAINING
+		assert "remaining" not in info
 		errors = [r for r in caplog.records if r.levelname == "ERROR"]
-		assert errors and "failing open" in errors[0].getMessage()
+		assert len(errors) == 1, "exactly one alertable record per fail-open"
+		assert errors[0].event == "rate_limit_fail_open"
+		assert errors[0].key == "login:1.2.3.4"
+		assert "connection refused" in errors[0].getMessage()
 		assert fail_open_stats.count == count_before + 1
 		assert fail_open_stats.last_at is not None and fail_open_stats.last_at <= time.time()
 

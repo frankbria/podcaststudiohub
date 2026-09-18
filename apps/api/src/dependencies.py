@@ -94,7 +94,7 @@ def create_rate_limit_dependency(key_prefix: str, max_requests: int, window_minu
 	"""
 	async def _rate_limit_dependency(request: Request) -> None:
 		from src.config import settings
-		from src.services.rate_limiter import RateLimiter, get_client_ip
+		from src.services.rate_limiter import FAIL_OPEN_REMAINING, RateLimiter, get_client_ip
 
 		if not settings.RATE_LIMIT_ENABLED:
 			return
@@ -113,6 +113,16 @@ def create_rate_limit_dependency(key_prefix: str, max_requests: int, window_minu
 			max_requests=max_requests,
 			window_seconds=window_minutes * 60,
 		)
+
+		if info.get("remaining") == FAIL_OPEN_REMAINING:
+			# The only brute-force control is currently off. Distinct, structured
+			# event so a log filter or Sentry rule can alert on it (#503).
+			logger.error(
+				"Rate limiting disabled (Redis unreachable): endpoint=%s ip=%s allowed unmetered",
+				key_prefix,
+				client_ip,
+				extra={"event": "rate_limit_fail_open", "endpoint": key_prefix},
+			)
 
 		if not allowed:
 			retry_after = info.get("retry_after", window_minutes * 60)

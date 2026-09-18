@@ -117,6 +117,63 @@ class TestCreateRateLimitDependency:
 		mock_limiter_instance.is_allowed.assert_called_once()
 
 	@pytest.mark.asyncio
+	async def test_fail_open_is_allowed_but_emits_distinct_error_event(self, caplog):
+		"""A fail-open lets the request through AND logs an alertable event (#503).
+
+		The limiter's ``remaining == FAIL_OPEN_REMAINING`` sentinel is consumed
+		here: it becomes an ERROR record whose ``event`` field is
+		``rate_limit_fail_open`` and which names the endpoint, so a log filter
+		or Sentry rule can alert on "the brute-force control is currently off".
+		"""
+		from src.dependencies import create_rate_limit_dependency
+		from src.services.rate_limiter import FAIL_OPEN_REMAINING
+		dep = create_rate_limit_dependency("login", 5, 1)
+		request = MockRequest(client_host="10.0.0.1")
+
+		mock_settings = MagicMock()
+		mock_settings.RATE_LIMIT_ENABLED = True
+		mock_settings.REDIS_URL = "redis://localhost:6379"
+		mock_settings.RATE_LIMIT_TRUST_PROXY = False
+		mock_settings.RATE_LIMIT_PROXY_COUNT = 1
+
+		mock_limiter_instance = MagicMock()
+		mock_limiter_instance.is_allowed.return_value = (True, {"remaining": FAIL_OPEN_REMAINING})
+
+		with patch("src.config.settings", mock_settings):
+			with patch("src.services.rate_limiter.RateLimiter", return_value=mock_limiter_instance):
+				with caplog.at_level("ERROR", logger="src.dependencies"):
+					await dep(request)  # must not raise
+
+		events = [r for r in caplog.records if getattr(r, "event", None) == "rate_limit_fail_open"]
+		assert len(events) == 1
+		assert events[0].levelname == "ERROR"
+		assert events[0].endpoint == "login"
+		assert "10.0.0.1" in events[0].getMessage()
+
+	@pytest.mark.asyncio
+	async def test_metered_request_emits_no_fail_open_event(self, caplog):
+		"""The event fires only on the sentinel, never on an ordinary allow."""
+		from src.dependencies import create_rate_limit_dependency
+		dep = create_rate_limit_dependency("login", 5, 1)
+		request = MockRequest(client_host="10.0.0.1")
+
+		mock_settings = MagicMock()
+		mock_settings.RATE_LIMIT_ENABLED = True
+		mock_settings.REDIS_URL = "redis://localhost:6379"
+		mock_settings.RATE_LIMIT_TRUST_PROXY = False
+		mock_settings.RATE_LIMIT_PROXY_COUNT = 1
+
+		mock_limiter_instance = MagicMock()
+		mock_limiter_instance.is_allowed.return_value = (True, {"remaining": 0})
+
+		with patch("src.config.settings", mock_settings):
+			with patch("src.services.rate_limiter.RateLimiter", return_value=mock_limiter_instance):
+				with caplog.at_level("ERROR", logger="src.dependencies"):
+					await dep(request)
+
+		assert not [r for r in caplog.records if getattr(r, "event", None) == "rate_limit_fail_open"]
+
+	@pytest.mark.asyncio
 	async def test_blocked_request_raises_429(self):
 		"""When limiter.is_allowed returns (False, ...), HTTP 429 is raised."""
 		from src.dependencies import create_rate_limit_dependency

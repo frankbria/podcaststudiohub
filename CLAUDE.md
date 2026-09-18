@@ -77,7 +77,9 @@ proxy). The exception is GHSA-3644 — podcastfy's `hub.pull()` fetches prompts 
 the generation path, so **every episode makes an outbound call to a third-party Hub account**.
 Accepted (pulls are commit-pinned). See `apps/api/docs/podcastfy-advisory-reachability.md`; the claims
 are enforced by `apps/api/tests/test_dependency_reachability.py`, so adding an image source type or
-importing litellm directly will fail CI by design. Fork costing lives in
+importing litellm directly will fail CI by design. That test is also why **litellm advisories never
+block the audit gate** (#518): `apps/api/scripts/pip_audit_gate.py` reports them as one non-blocking
+warning and fails only on unlisted advisories in other packages. Do not add litellm IDs to `TRIAGED`. Fork costing lives in
 `apps/api/docs/podcastfy-fork-effort-review.md` (langchain is confined to one file; Stage 2 ≈ 3–5 days).
 
 Engine capabilities (provided by the dependency): multi-modal input (websites, YouTube, PDFs, images,

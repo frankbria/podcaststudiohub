@@ -2,10 +2,41 @@
 
 **Date:** 2026-08-13 (updated 2026-09-09) · **Issue:** #446 · **Companion:** [podcastfy-fork-effort-review.md](./podcastfy-fork-effort-review.md)
 
-`scripts/security-audit.sh` ignores 25 advisory IDs because `podcastfy==0.4.1` caps the
-whole langchain/litellm tree (see [podcastfy-0.4.3-evaluation.md](./podcastfy-0.4.3-evaluation.md)
-and #363). Ignoring an advisory is only defensible if the vulnerable code is genuinely
-unreachable from our call paths. This document records that assessment.
+`scripts/security-audit.sh` lets these advisories through the pip-audit gate because
+`podcastfy==0.4.1` caps the whole langchain/litellm tree (see
+[podcastfy-0.4.3-evaluation.md](./podcastfy-0.4.3-evaluation.md) and #363). Letting an
+advisory through is only defensible if the vulnerable code is genuinely unreachable from our
+call paths. This document records that assessment.
+
+## Gate policy (#518, 2026-09-18)
+
+`scripts/security-audit.sh` writes a pip-audit JSON report and `scripts/pip_audit_gate.py`
+classifies it:
+
+| Finding | Gate |
+|---|---|
+| Any **litellm** advisory | Non-blocking: one warning annotation, every advisory listed in the job log and step summary |
+| An ID or alias in `TRIAGED` (the non-litellm advisories below) | Ignored |
+| Anything else | **Fails** the job, one error annotation each |
+| Report missing/unparseable, or a package pip-audit could not audit | **Fails** (closed) |
+
+**Why litellm is exempted by package, not by ID.** litellm published advisories in batches
+faster than we could list them: the ID list was hand-patched six times (#440, #487, #500,
+#517, #523, #557), and each new batch turned the audit red on every open PR until someone
+landed a patch. The ID list added no safety. It only recorded that someone had checked the
+advisory was in `litellm/proxy/*`. A red gate that always meant "add another litellm ID"
+also trained people to wave it through, which is the #497 failure mode.
+
+**The compensating control is `tests/test_dependency_reachability.py`, not a list.**
+`test_litellm_is_never_imported_by_the_generation_stack` loads the engine and builds the LLM
+backend the way podcastfy's `process_content` does for our call, then asserts that **no**
+`litellm` module has loaded, proxy or core. `test_no_caller_selects_a_non_default_llm`
+makes sure no code of ours passes a model name that would route podcastfy to `ChatLiteLLM`
+or imports litellm itself. While both tests are green, every litellm advisory is unreachable,
+whether or not it is proxy-only. If either test fails, the premise is gone: move `litellm` out
+of `WARN_ONLY_PACKAGES` in the gate and triage its advisories one by one.
+
+The exemption ends when litellm leaves the tree with the engine replacement (#538 / #543).
 
 **Headline: 30 of 31 open Dependabot alerts are unreachable. One is reachable.**
 
@@ -147,8 +178,9 @@ Re-run this assessment when any of these change:
 
 - podcastfy is bumped or forked → the whole cap disappears; redo from scratch
 - an **image** source type is added → GHSA-2g6r goes live (tests will fail)
-- litellm is imported directly, or a litellm proxy is deployed → 12 advisories go live
-  (test will fail)
+- litellm is imported directly, a non-gemini LLM is selected, or a litellm proxy is
+  deployed → every litellm advisory goes live, and the gate's litellm exemption with it
+  (tests will fail)
 - LangSmith tracing is enabled (`LANGCHAIN_TRACING_V2`, `LANGSMITH_API_KEY`) → 2 langsmith
   advisories go live
 - Vertex AI / `aiplatform` is adopted → 2 advisories go live

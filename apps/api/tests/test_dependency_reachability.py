@@ -1,7 +1,8 @@
 """Reachability guards for advisories in the podcastfy dependency closure (#446).
 
-`scripts/security-audit.sh` ignores 25 advisory IDs that no bump can clear, because
-`podcastfy==0.4.1` caps the whole langchain/litellm tree. Ignoring them is only
+`scripts/pip_audit_gate.py` lets through advisories that no bump can clear, because
+`podcastfy==0.4.1` caps the whole langchain/litellm tree: all litellm advisories (as
+non-blocking warnings) and an enumerated list of the rest. Letting them through is only
 defensible while the vulnerable code is genuinely unreachable from our call paths.
 
 That "unreachable" claim is a property of the import graph and the API surface, both
@@ -40,31 +41,73 @@ def _run_probe(source: str) -> str:
     return result.stdout
 
 
-def test_litellm_proxy_is_not_reachable_from_the_generation_stack():
-    """12 of the ignored advisories — including both criticals — are LiteLLM *proxy*
-    issues (auth bypass, proxy config endpoints, /user/update, MCP test endpoints).
+def test_litellm_is_never_imported_by_the_generation_stack():
+    """The compensating control for every litellm advisory (#446, #518).
 
-    They require running litellm as a proxy server. We import podcastfy's engine and
-    never start a proxy, so the vulnerable modules must never even load. podcastfy
-    reaches litellm only via langchain_community's ChatLiteLLM, which imports it
-    lazily — so in practice litellm itself stays unimported too.
+    scripts/pip_audit_gate.py reports litellm advisories without blocking, because
+    litellm is capped by podcastfy and never runs here. That is only true while this
+    test is green: podcastfy reaches litellm solely through langchain_community's
+    ChatLiteLLM, which imports it lazily and is only built for a non-gemini model.
+
+    So the probe goes past import and builds the LLM backend exactly as podcastfy's
+    process_content does for our call (model_name=None -> config's gemini model ->
+    ChatGoogleGenerativeAI). If any litellm module — proxy or core — loads, the
+    advisories are no longer inert and this fails.
     """
     output = _run_probe(
         """
-        import sys
+        import os, sys, tempfile
+        os.environ.setdefault("GEMINI_API_KEY", "probe-not-a-real-key")
+        os.chdir(tempfile.mkdtemp())  # ContentGenerator creates ./data/transcripts
+
         # The real generation entry points used by src/tasks/podcast_generation.py
         from podcastfy.client import generate_podcast          # noqa: F401
-        from podcastfy.content_generator import ContentGenerator  # noqa: F401
+        from podcastfy.content_generator import ContentGenerator
+        from podcastfy.utils.config_conversation import load_conversation_config
 
-        proxy = sorted(m for m in sys.modules if m.startswith("litellm.proxy"))
-        print("PROXY_MODULES=" + (",".join(proxy) if proxy else "NONE"))
+        # Mirrors podcastfy.client.process_content: we never pass a model name.
+        ContentGenerator(
+            is_local=False,
+            model_name=None,
+            api_key_label=None,
+            conversation_config=load_conversation_config().to_dict(),
+        )
+
+        loaded = sorted(
+            m for m in sys.modules if m == "litellm" or m.startswith("litellm.")
+        )
+        print("LITELLM_MODULES=" + (",".join(loaded) if loaded else "NONE"))
         """
     )
-    assert "PROXY_MODULES=NONE" in output, (
-        "litellm.proxy is now reachable from the generation stack. The proxy-only "
-        "advisories ignored in scripts/security-audit.sh (incl. GHSA-4xpc-pv4p-pm3w "
-        "and GHSA-jjhc-v7c2-5hh6, both critical) can no longer be treated as inert. "
-        f"Probe output: {output!r}"
+    assert "LITELLM_MODULES=NONE" in output, (
+        "litellm now loads with the generation stack. scripts/pip_audit_gate.py "
+        "treats litellm advisories as non-blocking on the premise that it never "
+        "runs — that premise is gone. Move litellm out of WARN_ONLY_PACKAGES and "
+        f"triage its advisories. Probe output: {output!r}"
+    )
+
+
+def test_no_caller_selects_a_non_default_llm():
+    """Second half of the guard above: a model name routes podcastfy to ChatLiteLLM.
+
+    LLMBackend builds ChatLiteLLM for any non-gemini model_name. We never pass one
+    (`llm_model_name` to generate_podcast), and nothing of ours imports litellm.
+    """
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "src"
+    scanned = list(src.rglob("*.py"))
+    assert len(scanned) > 50, f"expected to scan {src}, found {len(scanned)} files"
+
+    offenders = [
+        f"{path.relative_to(src)}:{i}"
+        for path in scanned
+        for i, line in enumerate(path.read_text().splitlines(), 1)
+        if "llm_model_name" in line or "litellm" in line.lower()
+    ]
+    assert not offenders, (
+        "Our source now selects an LLM model or touches litellm directly, which can "
+        "make litellm reachable (see scripts/pip_audit_gate.py): " + str(offenders)
     )
 
 
@@ -80,8 +123,8 @@ def test_no_image_source_type_keeps_the_image_url_path_unreachable():
 
     assert "image" not in get_args(SourceType), (
         "An image source type was added. podcastfy's image_url path (and therefore "
-        "GHSA-2g6r) may now be reachable — re-check the ignore list in "
-        "scripts/security-audit.sh before shipping."
+        "GHSA-2g6r) may now be reachable — re-check TRIAGED in "
+        "scripts/pip_audit_gate.py before shipping."
     )
 
 

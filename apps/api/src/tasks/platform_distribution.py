@@ -319,16 +319,22 @@ def distribute_to_platform_task(
             f"Transient error distributing to {platform} for episode {episode_id}, "
             f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
         )
-        # Celery re-raises the original exception when retry(exc=...) is out of
-        # attempts, so the `except MaxRetriesExceededError` this replaces never ran (#520).
-        # Raising lets this task's link_error (on_workflow_failure) fire, which
-        # is the designed path for a distribution chain failure.
+        # Exhausted retries end like a permanent error: a per-platform failure
+        # that on_distribution_complete records, so the chain continues to later
+        # platforms and the episode ends 'distribution_failed' (#526). Celery's
+        # retry(exc=...) would re-raise instead, so it is not called here (#520).
         if self.request.retries >= self.max_retries:
             logger.error(
                 f"Distribution to {platform} failed after {self.max_retries} retries "
                 f"for episode {episode_id}: {e}"
             )
-            raise
+            return {
+                "status": "failed",
+                "platform": platform,
+                "platform_episode_id": None,
+                "platform_url": None,
+                "error": f"{e} (gave up after {self.max_retries} retries)",
+            }
         raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
 
 

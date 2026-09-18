@@ -261,6 +261,12 @@ def record_platform_distribution(
 	in-task success recording (issue #312) so both writes produce an identical
 	entry shape — the second write is an idempotent re-merge of the first.
 
+	A distribution that fails — permanently, or transiently after exhausting its
+	retries (#526) — is recorded here as a per-platform ``failed`` entry rather
+	than failing the whole episode: the audio is already uploaded and playable,
+	later platforms in the chain still run, and on_workflow_complete derives
+	``distribution_failed``. Only a missing upload makes the episode ``failed``.
+
 	Returns:
 		True if the episode was found and updated, False otherwise.
 	"""
@@ -312,8 +318,8 @@ def on_distribution_complete(
 	"""
 	failed = result.get("status") != "success"
 	if failed:
-		# Permanently-failed distribution tasks return {status: failed} rather than
-		# raising (to keep per-platform distribution independent), so record the
+		# Failed distribution tasks (permanent, or retries exhausted — #526) return
+		# {status: failed} rather than raising (to keep per-platform distribution independent), so record the
 		# failure here instead of dropping it. The whole-episode generation_status
 		# is left untouched — on_workflow_complete derives the terminal state from
 		# the recorded per-platform outcomes (issue #300).
@@ -369,10 +375,10 @@ def on_workflow_complete(self: Task, result: Dict[str, Any], episode_id: str) ->
 			# play and it must never reach 'complete' (#498). Every workflow
 			# includes the upload stage (build_generation_workflow always appends
 			# it), so reaching here without one means a stage failed without
-			# failing the chain. The tasks now raise on retry exhaustion, which
-			# stops the chain before this callback runs; this is the second line
-			# of defence, so a future stage that returns a failure dict instead of
-			# raising cannot silently resurrect the bug.
+			# failing the chain. Upload/composition raise on retry exhaustion, which
+			# stops the chain before this callback runs. Distribution returns a
+			# failure dict instead (#526), so a distribution that gave up waiting
+			# for s3_url lands here and is marked failed by this check.
 			if not episode.s3_url:
 				episode.generation_status = "failed"
 				current_progress["status"] = "failed"

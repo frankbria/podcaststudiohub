@@ -566,3 +566,12 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **A fresh `apps/api` worktree needs `uv venv --python /usr/bin/python3.12` before `uv sync`.**
   With no `.python-version`, uv picks its newest interpreter (3.14); `levenshtein` (via podcastfy)
   has no 3.14 wheel and its sdist build fails on scikit-build-core metadata. Copy `.env` in too.
+- **`pkill -f <pattern>` / `pgrep -f … | xargs kill` from a Bash tool call kills the tool's own
+  shell** when the pattern appears in that shell's command line (exit 144, #503). Stop a server by
+  port instead: `fuser -k 8018/tcp`. For a background watcher, just let it be stopped via its task.
+- **This box's `gh` has no `--json` on `gh pr checks`.** A poll loop gated on it spins forever with
+  no output. Parse the tab-separated plain output (`awk -F'\t' '{print $2}'`) and exit on any
+  state that is not pending.
+- **A local `uv lock --upgrade-package X` rewrites unrelated markers** (uv 0.9.30 vs Dependabot's
+  uv reformatted the Sphinx block). For a single-package security bump, apply Dependabot's lock
+  hunk verbatim (`gh pr diff N | git apply`) and confirm with `uv lock --check`.

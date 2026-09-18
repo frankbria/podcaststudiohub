@@ -273,6 +273,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Before the PR checkout: .nvmrc is read from the default branch, so a
+      # PR branch that predates it (#522) still gets the current runtime.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
       - name: Checkout PR branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -282,13 +291,6 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
 
       - name: Install uv
         run: pip install uv

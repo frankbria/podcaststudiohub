@@ -120,7 +120,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version-file: '.nvmrc'
 
       - name: Install API dependencies
         working-directory: apps/api
@@ -402,6 +402,14 @@ jobs:
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
           SENTRY_ENVIRONMENT: ${{ vars.SENTRY_ENVIRONMENT }}
         run: |
+          # Every remote npm call runs this first (#522). Non-interactive SSH
+          # never loads nvm, so npm would otherwise run on the box's system
+          # node, which is shared with other tenants and must not be changed.
+          # This selects the .nvmrc major from the deploy user's own nvm
+          # (installing it on first use) and fails the deploy on a mismatch.
+          # Single-quoted: it expands on the VPS, from $SERVER_PATH/frontend.
+          USE_NODE='export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] || { echo "nvm is not installed for $(whoami)"; exit 1; }; . "$NVM_DIR/nvm.sh"; nvm install >/dev/null || exit 1; case "$(node -v)" in "v$(cat .nvmrc)".*) echo "node -v: $(node -v) ($(command -v node))" ;; *) echo "wrong node: $(node -v), .nvmrc wants $(cat .nvmrc)"; exit 1 ;; esac'
+
           # Sync public files to server
           rsync -avz -e ssh \
             apps/web/public/ \
@@ -419,13 +427,14 @@ jobs:
             apps/web/tsconfig.json \
             apps/web/tailwind.config.ts \
             apps/web/postcss.config.mjs \
+            .nvmrc \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/
 
           # Install dependencies on server
           # Uses npm install (not npm ci) because the VPS has only the frontend
           # directory, not the full monorepo. The workspace-scoped lockfile at
           # the repo root can't be used in isolation.
-          ssh $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && npm install"
+          ssh $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend || exit 1; $USE_NODE; npm install"
 
           # Create .env.production with runtime environment variables (needed for build)
           ssh $SSH_USER@$SSH_HOST "echo 'NEXT_PUBLIC_API_URL=$API_URL' > $SERVER_PATH/frontend/.env.production"
@@ -446,14 +455,15 @@ jobs:
           echo "Runtime environment variables configured"
 
           # Rebuild Next.js on server with server's node_modules
-          ssh $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend && npm run build"
+          ssh $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend || exit 1; $USE_NODE; npm run build"
 
           # Update runtime config on server
           ssh $SSH_USER@$SSH_HOST "echo \"window.__ENV__ = { API_URL: '$API_URL' };\" > $SERVER_PATH/frontend/public/config.js"
 
           # Restart frontend service (delete and recreate to ensure fresh start)
           ssh $SSH_USER@$SSH_HOST << EOF
-            cd $SERVER_PATH/frontend
+            cd $SERVER_PATH/frontend || exit 1
+            $USE_NODE
 
             if pm2 describe podcaststudiohub-frontend > /dev/null 2>&1; then
               echo "Stopping existing frontend service..."
@@ -463,10 +473,13 @@ jobs:
             echo "Starting frontend service on port ${FRONTEND_PORT:-3000}..."
             # NEXTAUTH_SECRET is intentionally NOT passed on the command line (it would
             # be visible via ps/proc). Next.js loads it from .env.production at runtime.
+            # The PM2 daemon keeps the node it was started under (the system
+            # one), so name the interpreter or next would run on that instead.
             PORT=${FRONTEND_PORT:-3000} \
             NEXT_PUBLIC_API_URL='$API_URL' \
             NEXTAUTH_URL='$NEXTAUTH_URL' \
             pm2 start npm \
+              --interpreter "\$(command -v node)" \
               --name podcaststudiohub-frontend \
               --cwd $SERVER_PATH/frontend \
               -- start

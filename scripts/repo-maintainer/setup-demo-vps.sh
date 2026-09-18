@@ -65,13 +65,13 @@ if sudo -u "$DEMO_USER" bash -c 'export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm
 		command -v pm2 &>/dev/null || npm install -g pm2
 	'
 else
-	echo "Installing Node.js 20 via nvm..."
+	echo "Installing Node.js 24 via nvm..."
 	sudo -u "$DEMO_USER" bash -c '
 		curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
 		export NVM_DIR="$HOME/.nvm"
 		[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-		nvm install 20
-		nvm alias default 20
+		nvm install 24
+		nvm alias default 24
 		npm install -g pm2
 	'
 fi

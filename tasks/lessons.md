@@ -440,9 +440,8 @@ re-applying the exact inverse edit — never a whole-file checkout.
   it returned in ~3 min. The memory note already said this; it was ignored and cost 7 minutes.
 - **The auto-mode classifier refuses to commit an edit to `security-audit.sh`'s ignore list
   ("CI bypass").** That is the right instinct — extending the pip-audit ignore list is a policy
-  call — so the run has to stop and hand the commit to a human. #518 is the structural fix that
-  makes this stop recurring; until then, expect every PR that lands after a fresh litellm
-  advisory to need a human-committed unblock.
+  call. Resolved structurally by #518 / PR #558: litellm advisories no longer need an entry at
+  all; a new non-litellm advisory still needs a human-committed `TRIAGED` entry.
 - **Local Postgres for the backend suite is gone with `api-postgres-1`.** An ephemeral
   `postgres:16` container with the `.env` credentials plus `alembic upgrade head` is a 90-second
   setup and runs the full 1917-test suite in ~3.5 min.
@@ -575,3 +574,16 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **A local `uv lock --upgrade-package X` rewrites unrelated markers** (uv 0.9.30 vs Dependabot's
   uv reformatted the Sphinx block). For a single-package security bump, apply Dependabot's lock
   hunk verbatim (`gh pr diff N | git apply`) and confirm with `uv lock --check`.
+
+## #518 / PR #558 (2026-09-18) — audit gate: litellm warns, reachability test is the control
+
+- **Hand-emitted GitHub workflow commands must not contain a bare comma in a property.** The
+  runner splits `::warning title=a, b::msg` properties on `,` before unescaping, so the title is
+  truncated and the remainder silently dropped. `core.warning()` escapes this (`%2C`); a raw
+  `print()` does not. Caught only by the internal reviewer; now guarded by a test.
+- **Both cross-family reviewers can be down at once.** codex hit its usage quota and opencode
+  stalled (180s, no bytes) in the same run. Start both in parallel from the outset and fall back to
+  a Claude subagent reviewer immediately rather than serially retrying.
+- **Showboat demos must not depend on files in /tmp.** A demo that passes `showboat verify` in
+  session can still be unreproducible; write helper scripts inside the exec block (heredoc) and
+  `rm` the temp file before verifying.

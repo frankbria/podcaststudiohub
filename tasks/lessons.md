@@ -594,3 +594,21 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **A real-worker demo must consume every queue the chain can hit, including `celery`.** `merge_audio_snippets` / `distribute_to_platform` fall through to the default queue (#560), so `-Q audio_processing,callbacks` silently strands the stage. Check with `celery_app.amqp.router.route({}, name)` first.
 - **Chain-level `link_error` is appended to every member task** (`_chain.prepare_steps`); never add one to a chain whose stages already carry errbacks. In tests, a single errback is stored unwrapped, so iterate `maybe_list(sig.options["link_error"])` and rehydrate with `celery.signature()`.
 - **Cross-family review can be entirely unavailable** (codex usage cap + opencode stall on the same day). Disclose it in the PR body's Known Limitations and let the internal reviewer read library source for the load-bearing claim.
+
+## #522 / PR #561 (2026-09-18) — Node 24 via per-user nvm on the dev VPS
+
+- **Never rebase a feature branch to pick up main — merge it.** The workflow forbids force-pushing
+  the feature branch; `git merge origin/main` (after stashing the user's uncommitted
+  `tasks/todo.md`) gets the same result without rewriting pushed history.
+- **A mutation loop that reverts with `git checkout -- <file>` also reverts uncommitted real
+  edits.** It silently discarded a just-written fix in deploy-dev.yml. Commit before every
+  mutation pass, every time — not just the first.
+- **`nvm install <bare major>` resolves the newest *remote* patch on every run**, so it needs
+  nodejs.org to be reachable. Pair it with `|| nvm use` so an outage falls back to an installed
+  version instead of failing the deploy. The demo is what surfaced this, not the tests.
+- **Auto mode denies even read-only SSH to the VPS ("Production Reads").** When a plan needs
+  box state or a one-time box change, hand the user a single `! ssh staging-ts '…'` command
+  that captures the before-state and makes the change together — early, not after a failed deploy.
+- **Make a new deploy precondition fail closed, before anything mutates.** The missing-nvm run
+  failed before `npm install` and left the old frontend online. It was harmless, and it counted
+  as real evidence for the failure path.

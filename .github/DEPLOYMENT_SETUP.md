@@ -91,7 +91,7 @@ You can manually trigger deployment:
 When triggered, the workflow will:
 
 1. ✅ **Checkout code** - Get latest code from repository
-2. ✅ **Setup environments** - Python 3.12 + Node.js 20
+2. ✅ **Setup environments** - Python 3.12 + Node.js from `.nvmrc` (24)
 3. ✅ **Install dependencies** - API (uv + pip) and frontend (npm)
 4. ✅ **Run tests** - API tests (if not skipped)
 5. ✅ **Build frontend** - Next.js production build

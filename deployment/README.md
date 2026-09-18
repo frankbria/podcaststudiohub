@@ -266,6 +266,25 @@ cd /root/podcaststudiohub && sudo DOMAIN=dev.podcaststudiohub.me \
 > Do **not** run provisioning from `$SERVER_PATH/deployment` — that path is
 > writable by the deploy account and must never be a source of root-run code.
 
+## Node runtime — issue #522
+
+The frontend runs on the Node major in the repo's `.nvmrc` (24), taken from the deploy
+user's own nvm — never the box's system `node`, which other tenants share. The deploy
+rsyncs `.nvmrc`, runs `nvm install` before every `npm` call and before `pm2 start npm`
+(installing the version on first use), logs `node -v`, and fails on a mismatch.
+`pm2 start` names that node with `--interpreter`, because the PM2 daemon keeps whatever
+node it was started under.
+
+One-time prerequisite: nvm itself must exist for the deploy user. If the deploy fails with
+`nvm is not installed for <user>`, install it as that user (not root, not globally):
+
+```bash
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+```
+
+To move to a new major, change `.nvmrc`, `engines.node`, `@types/node`, and the
+Dependabot comment together; `deployment/tests/test_node_runtime.py` fails until they agree.
+
 ## PM2 Processes
 
 **View all processes:**

@@ -80,7 +80,7 @@ podcaststudiohub/
 ### Prerequisites
 
 - Python 3.11 or higher
-- Node.js 20 or higher
+- Node.js 24 (the version in `.nvmrc`; `nvm use` picks it up)
 - PostgreSQL 15+
 - Redis 7+
 - FFmpeg (for audio processing)

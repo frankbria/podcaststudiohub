@@ -57,7 +57,7 @@ the code path ever runs) as our own dependency to patch an upstream packaging bu
 - **PYSEC-2026-2562 / CVE-2026-26013** (SSRF in `ChatOpenAI.get_num_tokens_from_messages`,
   fixed only in langchain-core 1.2.11; method not called by podcastfy or us) — still unreachable
 
-The pip-audit ignore list in `scripts/security-audit.sh` is capped to podcastfy's
+The pip-audit ignore list (now `TRIAGED` in `scripts/pip_audit_gate.py`, #518) is capped to podcastfy's
 requirement set and stays exactly as-is while we remain on 0.4.1.
 
 ## Decision

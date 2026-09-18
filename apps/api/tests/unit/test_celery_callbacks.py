@@ -738,6 +738,59 @@ class TestBuildGenerationWorkflow:
 		task_names = [t.task for t in workflow.tasks]
 		assert "upload_to_s3" in task_names
 
+	@pytest.mark.parametrize("reverse", [False, True], ids=["in-order", "reversed"])
+	def test_stage_failure_records_the_failing_stage(self, reverse):
+		"""A failed stage's errbacks leave failed_task naming that stage (#519).
+
+		unchain_tasks() is the clone apply_async dispatches, with any chain-level
+		link_error copied onto every member — so these are exactly the errbacks
+		Celery fires. Order across errbacks is not guaranteed; both are tried.
+		"""
+		from celery import signature
+		from celery.utils.functional import maybe_list
+		from src.tasks.callbacks import on_workflow_failure
+		from src.tasks.podcast_generation import build_generation_workflow
+
+		episode_id = str(uuid.uuid4())
+		with patch("src.tasks.podcast_generation.settings") as mock_settings:
+			mock_settings.AWS_S3_BUCKET = "bucket"
+			workflow = build_generation_workflow(
+				user_id="test-user-id",
+				episode_id=episode_id,
+				audio_file_path="/tmp/a.mp3",
+				enable_composition=True,
+				composition_timeline=[],
+				enable_distribution=True,
+				platforms={"spotify": {}},
+			)
+
+		expected = {
+			"merge_audio_snippets": "merge_audio_snippets",
+			"upload_to_s3": "upload_to_s3",
+			"distribute_to_platform": "distribute_to_platform:spotify",
+		}
+		stages = workflow.unchain_tasks()
+		assert [s.task for s in stages] == list(expected)
+
+		for stage in stages:
+			episode = _mock_episode(episode_id)
+			mock_ctx, _ = _make_sync_session(episode)
+			errbacks = [signature(e) for e in maybe_list(stage.options["link_error"])]
+			if reverse:
+				errbacks.reverse()
+			with patch("src.tasks.callbacks.SyncSessionLocal", return_value=mock_ctx):
+				for errback in errbacks:
+					assert errback.task == "on_workflow_failure"
+					_invoke_task(
+						on_workflow_failure,
+						task_id="t",
+						exc=RuntimeError("boom"),
+						**errback.kwargs,
+					)
+
+			assert episode.generation_status == "failed"
+			assert episode.generation_progress["failed_task"] == expected[stage.task]
+
 	def test_composition_task_included_when_enabled(self):
 		"""merge_audio_snippets task is in the chain when enable_composition=True."""
 		from src.tasks.podcast_generation import build_generation_workflow

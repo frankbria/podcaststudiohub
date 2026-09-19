@@ -345,7 +345,7 @@ class RSSGenerationService:
 				Episode.project_id == project_id,
 				Episode.generation_status == "complete",
 			)
-			.order_by(Episode.created_at.desc())
+			.order_by(Episode.created_at.desc(), Episode.id.desc())
 		)
 		return list(result.scalars().all())
 

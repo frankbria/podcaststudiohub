@@ -12,6 +12,7 @@ from uuid import uuid4
 from src.routers.rss_feed import _fetch_rss_from_s3, get_rss_service
 from src.services.rss_generation_service import RSSGenerationService
 from src.utils.datetime_utils import utcnow
+from tests.pagination_tiebreak import force_created_at_tie
 
 
 # ============================================================================
@@ -717,3 +718,32 @@ async def test_public_audio_supports_head(client):
 
 	assert response.status_code == 302
 	assert response.headers["location"] == "https://s3.example.com/presigned?sig=abc"
+
+
+@pytest.mark.asyncio
+async def test_completed_episodes_order_stable_under_created_at_tie(
+	client, test_db, project_with_metadata, set_system_fields
+):
+	"""Feed item order is identical across renders when created_at ties (#530)."""
+	from uuid import UUID
+
+	project_id, headers = project_with_metadata
+	ids = []
+	for i in range(1, 6):
+		response = await client.post("/episodes", headers=headers, json={
+			"project_id": project_id,
+			"episode_number": i,
+			"episode_metadata": {"title": f"Tie {i}", "description": "D"},
+		})
+		assert response.status_code == 201, response.text
+		ids.append(response.json()["id"])
+		await set_system_fields(ids[-1], generation_status="complete")
+
+	await force_created_at_tie(test_db, "episodes", ids)
+
+	service = RSSGenerationService(storage=MagicMock())
+	renders = [
+		[str(e.id) for e in await service._get_completed_episodes(test_db, UUID(project_id))]
+		for _ in range(2)
+	]
+	assert renders[0] == renders[1] == sorted(ids, reverse=True)

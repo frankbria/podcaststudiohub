@@ -79,7 +79,9 @@ async def get_conversation_templates(
 	total = total_result.scalar()
 
 	# Get paginated results, ordered by most recent first
-	query = query.offset(skip).limit(limit).order_by(ConversationTemplate.created_at.desc())
+	query = query.offset(skip).limit(limit).order_by(
+		ConversationTemplate.created_at.desc(), ConversationTemplate.id.desc()
+	)
 	result = await db.execute(query)
 	templates = result.scalars().all()
 

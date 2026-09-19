@@ -315,7 +315,7 @@ async def get_distribution_targets(
 
 	# Get paginated results, newest first
 	query = query.offset(skip).limit(limit).order_by(
-		DistributionTarget.created_at.desc()
+		DistributionTarget.created_at.desc(), DistributionTarget.id.desc()
 	)
 	result = await db.execute(query)
 	targets = result.scalars().all()
@@ -360,7 +360,7 @@ async def get_active_distribution_targets_for_project(
 			),
 			DistributionTarget.is_active.is_(True),
 		)
-		.order_by(DistributionTarget.created_at.desc())
+		.order_by(DistributionTarget.created_at.desc(), DistributionTarget.id.desc())
 	)
 	return list(result.scalars().all())
 

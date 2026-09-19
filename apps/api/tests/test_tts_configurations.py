@@ -7,6 +7,7 @@ and authentication for TTS configurations.
 
 import pytest
 from uuid import uuid4
+from tests.pagination_tiebreak import assert_tied_pages_stable
 
 
 # ---------------------------------------------------------------------------
@@ -671,3 +672,18 @@ async def test_validation_extra_fields_accepted(client, auth_headers):
 	}
 	response = await client.post("/tts-configs", headers=auth_headers, json=payload)
 	assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_list_tts_configs_stable_under_created_at_tie(client, test_db, auth_headers):
+	"""Tied created_at pages deterministically, id desc as tiebreak (#530)."""
+	ids = []
+	for i in range(5):
+		response = await _create_config(client, auth_headers, {**OPENAI_CONFIG, "name": f"Tie {i}"})
+		assert response.status_code == 201, response.text
+		ids.append(response.json()["id"])
+
+	await assert_tied_pages_stable(
+		client, test_db, auth_headers,
+		table="tts_configurations", url="/tts-configs", key="configs", ids=ids,
+	)

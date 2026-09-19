@@ -10,6 +10,7 @@ from uuid import uuid4
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from src.utils.datetime_utils import utcnow
+from tests.pagination_tiebreak import force_created_at_tie
 
 
 # ---------------------------------------------------------------------------
@@ -533,3 +534,23 @@ async def test_remove_member(client):
 	# Member count back to 1 (just owner)
 	team_resp = await client.get(f"/teams/{team_id}", headers=owner_headers)
 	assert team_resp.json()["member_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_list_teams_stable_under_created_at_tie(client, test_db):
+	"""Tied created_at pages deterministically, id asc as tiebreak (#530)."""
+	headers = await register_and_login(client)
+	ids = []
+	for i in range(5):
+		response = await client.post("/teams", headers=headers, json={"name": f"Tie {i}"})
+		assert response.status_code == 201, response.text
+		ids.append(response.json()["id"])
+
+	await force_created_at_tie(test_db, "teams", ids)
+
+	seen = []
+	for offset in (0, 2, 4):
+		response = await client.get(f"/teams?limit=2&offset={offset}", headers=headers)
+		assert response.status_code == 200, response.text
+		seen += [team["id"] for team in response.json()["teams"]]
+	assert seen == sorted(ids)

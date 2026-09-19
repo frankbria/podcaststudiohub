@@ -77,7 +77,9 @@ async def get_tts_configurations(
 	total = total_result.scalar()
 
 	# Get paginated results, ordered by most recent first
-	query = query.offset(skip).limit(limit).order_by(TTSConfiguration.created_at.desc())
+	query = query.offset(skip).limit(limit).order_by(
+		TTSConfiguration.created_at.desc(), TTSConfiguration.id.desc()
+	)
 	result = await db.execute(query)
 	configs = result.scalars().all()
 

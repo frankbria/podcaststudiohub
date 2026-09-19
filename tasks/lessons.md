@@ -619,3 +619,16 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **Two links on one task = unordered group.** The chain-level `.link()` lands on the last task beside its own link; `_dispatch_callbacks_and_chain` sends both as a `group`. Any state the terminal callback derives must be committed in-task before the task returns, not left to a sibling link.
 - **`gh pr checks` has no `--json` here.** A wait loop built on it fails silently and spins forever; parse the plain tab-separated output instead.
 - **`pkill -f` killed the tool shell again (exit 144)**, despite the #519 lesson. Stop background tool tasks with TaskStop, workers by pidfile.
+
+## #530 / PR #566 (2026-09-18) — id tiebreak on every paginated list
+
+- **Why `pkill -f` keeps killing the tool shell (third time, exit 144):** the tool runs the whole
+  command line as one `bash -c '…'`, so a `pkill -f "opencode run"` anywhere in that line matches
+  its *own* parent shell's argv. It is not about background tasks. Never put `pkill -f <pattern>`
+  in a command whose text contains `<pattern>`; use `pgrep -f '[o]pencode run'` (bracket trick) or TaskStop.
+- **Cross-family chain here: codex hit its usage limit and opencode/GLM stalled again (180s), but
+  opencode/Kimi (`-m kimi-code-plan-global/kimi-for-coding`) finished a full review in ~2 min.**
+  When GLM stalls in this repo, go straight to Kimi instead of retrying GLM.
+- **The `-p` plugin trick gives cheap outcome evidence for query-shape fixes:** a throwaway pytest
+  plugin that hooks SQLAlchemy `before_cursor_execute` prints the SQL each test actually emits,
+  with no repo change (see the #530 demo).

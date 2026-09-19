@@ -9,6 +9,7 @@ import pytest
 from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import patch, AsyncMock, MagicMock
+from tests.pagination_tiebreak import assert_tied_pages_stable
 
 
 class _FakeOAuthRedis:
@@ -1246,3 +1247,22 @@ async def test_webhook_test_connection_get_method_also_pinned():
 	assert call.args[0] == "https://93.184.216.34/hook"
 	assert call.kwargs["headers"]["Host"] == "hooks.example.com"
 	assert call.kwargs["extensions"] == {"sni_hostname": "hooks.example.com"}
+
+
+@pytest.mark.asyncio
+async def test_list_distribution_targets_stable_under_created_at_tie(client, test_db, auth_headers):
+	"""Tied created_at pages deterministically, id desc as tiebreak (#530)."""
+	ids = []
+	for i in range(5):
+		response = await client.post("/distribution-targets/webhook", headers=auth_headers, json={
+			"name": f"Tie {i}",
+			"url": f"https://hooks.example.com/tie-{i}",
+			"method": "POST",
+		})
+		assert response.status_code == 201, response.text
+		ids.append(response.json()["id"])
+
+	await assert_tied_pages_stable(
+		client, test_db, auth_headers,
+		table="distribution_targets", url="/distribution-targets", key="targets", ids=ids,
+	)

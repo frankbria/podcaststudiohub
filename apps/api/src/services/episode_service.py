@@ -210,10 +210,11 @@ async def get_episodes(
 		"duration_seconds": Episode.duration_seconds,
 	}.get(sort_by, Episode.episode_number)
 
+	# id breaks ties on any sort column so LIMIT/OFFSET pages stay stable (#530)
 	if sort_order == "desc":
-		query = query.order_by(sort_column.desc())
+		query = query.order_by(sort_column.desc(), Episode.id.desc())
 	else:
-		query = query.order_by(sort_column.asc())
+		query = query.order_by(sort_column.asc(), Episode.id.asc())
 
 	# Apply pagination
 	query = query.offset(skip).limit(limit)

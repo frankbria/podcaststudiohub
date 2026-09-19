@@ -265,7 +265,7 @@ async def get_content_sources(
 
     # Get paginated results, ordered by created_at
     query = query.offset(skip).limit(limit).order_by(
-        ContentSource.created_at.asc()
+        ContentSource.created_at.asc(), ContentSource.id.asc()
     )
     result = await db.execute(query)
     content_sources = result.scalars().all()

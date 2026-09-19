@@ -17,6 +17,7 @@ import io
 import pytest
 from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
+from tests.pagination_tiebreak import assert_tied_pages_stable
 
 
 
@@ -1559,3 +1560,35 @@ async def test_upload_pdf_local_io_failure_stays_422_without_detail(client, epis
     assert response.status_code == 422
     assert response.json()["detail"] == "Failed to store PDF."
     assert "secret-path" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_list_content_sources_stable_under_created_at_tie(client, test_db, episode_and_auth):
+    """Tied created_at pages deterministically, id asc as tiebreak (#530)."""
+    episode_id, headers = episode_and_auth
+    ids = []
+    with patch(
+        "src.services.source_validator_service.httpx.AsyncClient",
+        return_value=_mock_http_200(),
+    ):
+        for i in range(5):
+            response = await client.post(
+                f"/episodes/{episode_id}/content",
+                headers=headers,
+                json={
+                    "episode_id": episode_id,
+                    "source_type": "url",
+                    "source_data": {"url": f"https://tie{i}.example.com", "title": f"Tie {i}"},
+                },
+            )
+            assert response.status_code == 201, response.text
+            ids.append(response.json()["id"])
+
+    await assert_tied_pages_stable(
+        client, test_db, headers,
+        table="content_sources",
+        url=f"/episodes/{episode_id}/content",
+        key="content_sources",
+        ids=ids,
+        descending=False,
+    )

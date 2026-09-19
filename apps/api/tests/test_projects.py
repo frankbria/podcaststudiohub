@@ -7,6 +7,7 @@ and soft delete functionality for projects.
 
 import pytest
 from uuid import uuid4
+from tests.pagination_tiebreak import assert_tied_pages_stable
 
 
 @pytest.fixture
@@ -781,3 +782,20 @@ async def test_delete_project_requires_auth(client):
 	response = await client.delete(f"/projects/{fake_id}")
 	# Auth middleware returns 403 Forbidden when no valid token provided
 	assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_pagination_stable_under_created_at_tie(client, test_db, auth_headers):
+	"""Tied created_at pages deterministically, id desc as tiebreak (#530)."""
+	ids = []
+	for i in range(5):
+		response = await client.post("/projects", headers=auth_headers, json={
+			"name": f"Tie {i}",
+			"podcast_metadata": {"show_title": f"Show {i}", "author": "A", "description": "D"},
+		})
+		assert response.status_code == 201, response.text
+		ids.append(response.json()["id"])
+
+	await assert_tied_pages_stable(
+		client, test_db, auth_headers, table="projects", url="/projects", key="projects", ids=ids
+	)

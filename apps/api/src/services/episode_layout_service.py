@@ -180,7 +180,7 @@ async def get_episode_layouts(
 
 	# Get paginated results ordered by created_at desc
 	query = query.offset(skip).limit(limit).order_by(
-		EpisodeLayout.created_at.desc()
+		EpisodeLayout.created_at.desc(), EpisodeLayout.id.desc()
 	)
 	result = await db.execute(query)
 	layouts = result.scalars().all()

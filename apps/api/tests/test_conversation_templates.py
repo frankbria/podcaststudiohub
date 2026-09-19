@@ -7,6 +7,7 @@ and authentication for conversation templates.
 
 import pytest
 from uuid import uuid4
+from tests.pagination_tiebreak import assert_tied_pages_stable
 
 
 # ---------------------------------------------------------------------------
@@ -609,3 +610,18 @@ async def test_validation_missing_required_config_fields(client, auth_headers):
 		"config": incomplete_config,
 	})
 	assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_templates_stable_under_created_at_tie(client, test_db, auth_headers):
+	"""Tied created_at pages deterministically, id desc as tiebreak (#530)."""
+	ids = []
+	for i in range(5):
+		response = await _create_template(client, auth_headers, name=f"Tie {i}")
+		assert response.status_code == 201, response.text
+		ids.append(response.json()["id"])
+
+	await assert_tied_pages_stable(
+		client, test_db, auth_headers,
+		table="conversation_templates", url="/conversation-templates", key="templates", ids=ids,
+	)

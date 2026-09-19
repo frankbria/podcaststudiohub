@@ -8,6 +8,7 @@ status filtering, and tenant isolation for episodes.
 import pytest
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
+from tests.pagination_tiebreak import assert_tied_pages_stable
 
 from src.models.billing_subscription import BillingSubscription
 from src.services.auth_service import verify_jwt_token
@@ -2160,3 +2161,28 @@ async def test_download_local_file_range_206(
 	assert response.headers["content-range"] == f"bytes {range_start}-{range_end}/{total_size}"
 	assert int(response.headers["content-length"]) == 100
 	assert response.content == audio[range_start:range_end + 1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sort_order", ["asc", "desc"])
+async def test_pagination_stable_under_created_at_tie(client, test_db, project_and_auth, sort_order):
+	"""The id tiebreak follows the caller's sort_order on any sort column (#530)."""
+	project_id, headers = project_and_auth
+	ids = []
+	for i in range(1, 6):
+		response = await client.post("/episodes", headers=headers, json={
+			"project_id": project_id,
+			"episode_number": i,
+			"episode_metadata": {"title": f"Tie {i}", "description": "D"},
+		})
+		assert response.status_code == 201, response.text
+		ids.append(response.json()["id"])
+
+	await assert_tied_pages_stable(
+		client, test_db, headers,
+		table="episodes",
+		url=f"/episodes?project_id={project_id}&sort_by=created_at&sort_order={sort_order}",
+		key="episodes",
+		ids=ids,
+		descending=sort_order == "desc",
+	)

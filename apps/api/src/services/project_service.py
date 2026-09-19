@@ -100,7 +100,7 @@ async def get_projects(
 	total = total_result.scalar() or 0
 
 	# Get paginated results, ordered by most recent first
-	query = query.offset(skip).limit(limit).order_by(Project.created_at.desc())
+	query = query.offset(skip).limit(limit).order_by(Project.created_at.desc(), Project.id.desc())
 	result = await db.execute(query)
 	projects = result.scalars().all()
 

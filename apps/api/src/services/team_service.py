@@ -88,7 +88,7 @@ async def get_teams_for_user(
 		select(Team)
 		.join(TeamMember, TeamMember.team_id == Team.id)
 		.where(TeamMember.user_id == user_id, TeamMember.status == "active")
-		.order_by(Team.created_at)
+		.order_by(Team.created_at, Team.id)
 	)
 	if offset:
 		query = query.offset(offset)

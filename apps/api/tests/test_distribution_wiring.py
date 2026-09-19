@@ -17,6 +17,7 @@ from httpx import AsyncClient
 
 from src.routers import generation as generation_router
 from src.database import set_tenant_context
+from tests.pagination_tiebreak import force_created_at_tie
 from src.services.distribution_target_service import (
     get_active_distribution_targets_for_project,
 )
@@ -119,6 +120,25 @@ async def test_active_targets_returns_only_active_for_project(client, test_db):
     assert active["id"] in returned_ids
     assert inactive["id"] not in returned_ids
     assert all(t.is_active for t in targets)
+
+
+@pytest.mark.asyncio
+async def test_active_targets_order_stable_under_created_at_tie(client, test_db):
+    """Newest-first order decides which same-type target the router keeps, so a
+    created_at tie must not make that choice arbitrary (#530): id desc breaks it."""
+    headers = await _register(client)
+    project_id = await _create_project(client, headers)
+    targets = [
+        await _create_webhook_target(client, headers, project_id, f"https://hook.example.com/tie-{i}")
+        for i in range(5)
+    ]
+    ids = [t["id"] for t in targets]
+    await force_created_at_tie(test_db, "distribution_targets", ids)
+
+    await set_tenant_context(test_db, targets[0]["tenant_id"])
+    returned = await get_active_distribution_targets_for_project(test_db, project_id)
+
+    assert [str(t.id) for t in returned] == sorted(ids, reverse=True)
 
 
 @pytest.mark.asyncio

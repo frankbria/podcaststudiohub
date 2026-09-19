@@ -7,6 +7,7 @@ default layout management, referential integrity, and tenant isolation.
 
 import pytest
 from uuid import uuid4
+from tests.pagination_tiebreak import assert_tied_pages_stable
 
 
 # ============================================================================
@@ -701,3 +702,24 @@ async def test_tenant_isolation_skip(client):
 	# RLS is tested by the existing test_tenant_isolation.py test suite.
 	# Transaction isolation in test fixtures makes direct cross-tenant tests difficult.
 	pass
+
+
+@pytest.mark.asyncio
+async def test_pagination_stable_under_created_at_tie(client, test_db, auth_and_project):
+	"""Tied created_at pages deterministically, id desc as tiebreak (#530)."""
+	project_id, headers = auth_and_project
+	ids = []
+	for i in range(5):
+		data = simple_layout_data(project_id)
+		data["name"] = f"Tie {i}"
+		response = await client.post("/episode-layouts", headers=headers, json=data)
+		assert response.status_code == 201, response.text
+		ids.append(response.json()["id"])
+
+	await assert_tied_pages_stable(
+		client, test_db, headers,
+		table="episode_layouts",
+		url=f"/episode-layouts?project_id={project_id}",
+		key="layouts",
+		ids=ids,
+	)

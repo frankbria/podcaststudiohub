@@ -29,7 +29,6 @@ async def lifespan(app: FastAPI):
     """Verify critical dependencies are available at startup"""
     try:
         from podcastfy.client import generate_podcast  # noqa: F401
-        from podcastfy.content_generator import ContentGenerator  # noqa: F401
         from podcastfy.content_parser.website_extractor import WebsiteExtractor  # noqa: F401
         from podcastfy.content_parser.pdf_extractor import PDFExtractor  # noqa: F401
         logger.info("Podcastfy dependencies verified")

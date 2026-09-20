@@ -632,3 +632,27 @@ re-applying the exact inverse edit — never a whole-file checkout.
 - **The `-p` plugin trick gives cheap outcome evidence for query-shape fixes:** a throwaway pytest
   plugin that hooks SQLAlchemy `before_cursor_execute` prints the SQL each test actually emits,
   with no repo change (see the #530 demo).
+
+## #539 / PR #567 (2026-09-19) — delete the dead ScriptGenerationService
+
+- **`cmd; echo "EXIT=$?"; tail log` reports the wrong exit code.** The tool's exit status is the
+  *last* command's (`tail`), so a pytest run that died in conftest collection was reported as
+  exit 0. The `EXIT=` echo also captured `$?` from the redirect, not what I thought. Always read
+  the log tail before believing a green exit on a compound command.
+- **`ENCRYPTION_KEY` must be ≥32 chars, and `test-encryption-key-32-chars-ok` is 31.** The name
+  lies. `Settings()` rejects it at import time, so every test errors in conftest with a message
+  that looks nothing like "your env var is one char short". Use `…-chars-okay`.
+- **For a "symbol is gone" acceptance criterion, use `git grep`, not `grep -rn`.** A plain
+  recursive grep matched stale `__pycache__/*.pyc` and an old HTML coverage report still sitting
+  in the working tree, making a genuinely-clean deletion look incomplete. `git grep` searches
+  tracked files only, which is the intended scope.
+- **Deleting a line from a startup guard needs both directions demoed.** Showing the app still
+  boots proves nothing about whether the guard still guards. Boot it once normally (success line
+  logged), then once with the dependency made unimportable (must still raise).
+- **Deleting a well-tested dead file lowers total coverage.** The removed file was 97.31% covered
+  against a 94.88% repo mean, so the ratio dipped to 94.86%. Project the new ratio from
+  `coverage.xml` before running anything — it is arithmetic, not a 4-minute test run.
+- **Showboat captures your env-var prefix verbatim, so gitleaks blocks the demo commit.** Inline
+  `DATABASE_URL=… ENCRYPTION_KEY=… JWT_SECRET_KEY=… pytest` lands in the document as literal
+  credentials. Keep test creds in an untracked env file and invoke `env $(cat ~/.podcastfy-test-env)`
+  so the capture is clean the first time — no prior demo in this repo contains an env var.

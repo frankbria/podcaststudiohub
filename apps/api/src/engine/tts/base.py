@@ -13,7 +13,7 @@ under, and hands back the one file it produced. Nothing else is negotiable.
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.engine.llm import EngineError
 from src.engine.models import Script
@@ -73,6 +73,11 @@ class VoiceConfig(BaseModel):
     # Provider-specific extras kept verbatim: speed (openai), stability and
     # similarity_boost (elevenlabs), rate and volume (edge).
     options: Dict[str, Any] = Field(default_factory=dict)
+    # True when the voices below came from the Gemini-TTS fallback rather than
+    # the stored row. The single-speaker Google backend needs to know: those
+    # fallback speakers only exist on a Gemini-TTS model, so defaulting the
+    # voice obliges it to default the model too.
+    used_default_voices: bool = False
 
     @classmethod
     def from_tts_config(
@@ -102,11 +107,13 @@ class VoiceConfig(BaseModel):
                 host, guest = raw.get(host_key), raw.get(guest_key)
                 break
 
+        defaulted = False
         if (not host or not guest) and provider in _VOICE_OPTIONAL_PROVIDERS:
             from src.config import settings
 
             host = host or settings.ENGINE_GEMINI_HOST_VOICE
             guest = guest or settings.ENGINE_GEMINI_GUEST_VOICE
+            defaulted = True
 
         if not host or not guest:
             raise TTSError(
@@ -115,13 +122,21 @@ class VoiceConfig(BaseModel):
                 f"{sorted(raw)}"
             )
 
-        return cls(
-            host_voice=host,
-            guest_voice=guest,
-            model=raw.get("model"),
-            language_code=raw.get("language_code", "en-US"),
-            options={k: v for k, v in raw.items() if k not in _NAMED_KEYS},
-        )
+        try:
+            return cls(
+                host_voice=host,
+                guest_voice=guest,
+                model=raw.get("model"),
+                language_code=raw.get("language_code", "en-US"),
+                options={k: v for k, v in raw.items() if k not in _NAMED_KEYS},
+                used_default_voices=defaulted,
+            )
+        except ValidationError as exc:
+            # Write-time validation only checks that the keys are present, not
+            # their types, so a numeric voice name or model reaches us intact.
+            # That is a misconfigured episode, not a bug in this code, and the
+            # Celery task has to be able to tell those apart.
+            raise TTSError(f"TTS config has an unusable value: {exc}") from exc
 
     def voice_for(self, speaker: str) -> str:
         """The voice id/name this speaker is read in."""

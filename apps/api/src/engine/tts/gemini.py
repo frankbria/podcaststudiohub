@@ -82,16 +82,20 @@ class GeminiTTS:
 
         def render(turn) -> bytes:
             _, speaker, text = turn
-            # model_name is sent only when the stored value is a Gemini-TTS
-            # model id. Classic prebuilt voices take no model, and the app
-            # still stores a Studio *voice name* in that field, which the API
-            # would reject as a model.
+            # model_name is sent when the stored value is a Gemini-TTS model
+            # id -- or when the voices themselves were defaulted, because those
+            # fallback speakers exist only on a Gemini-TTS model. Suppressing
+            # it in that case pairs a Gemini-TTS-only voice with no Gemini-TTS
+            # model, which is exactly the shape every voiceless legacy row
+            # produces. Classic prebuilt voices, chosen explicitly, still take
+            # no model: the app stores a Studio *voice name* in that field and
+            # the API would reject it as a model id.
             params = {
                 "language_code": voices.language_code,
                 "name": voices.voice_for(speaker),
             }
-            if _is_gemini_tts_model(voices.model):
-                params["model_name"] = voices.model
+            if _is_gemini_tts_model(voices.model) or voices.used_default_voices:
+                params["model_name"] = _gemini_tts_model(voices.model)
             voice_params = texttospeech.VoiceSelectionParams(**params)
             try:
                 response = client.synthesize_speech(

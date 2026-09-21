@@ -53,8 +53,11 @@ class OpenAITTS:
             _, speaker, text = turn
             # `speed` is bounded 0.25-4.0 at write time, which is exactly the
             # speech API's own range -- the field exists to be forwarded.
+            # Coerced: write validation compares `float(speed)` but stores the
+            # value as given, so a numeric *string* passes and would otherwise
+            # be sent as a JSON string and rejected with a 400.
             extra = (
-                {"speed": voices.options["speed"]}
+                {"speed": float(voices.options["speed"])}
                 if "speed" in voices.options
                 else {}
             )

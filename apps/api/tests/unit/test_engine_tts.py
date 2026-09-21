@@ -951,3 +951,101 @@ def test_speed_is_omitted_when_not_configured(workdir):
         "speed" not in c.kwargs
         for c in client.audio.speech.create.call_args_list
     )
+
+
+# --------------------------------------------------------------------------
+# The voiceless legacy row — where the two earlier fixes compose
+# --------------------------------------------------------------------------
+
+def test_a_voiceless_legacy_gemini_row_gets_both_fallbacks_or_neither(workdir):
+    """This is the row the app actually wrote: no voices, and a Studio voice
+    name in the model field.
+
+    The voice fallback supplies Gemini-TTS prebuilt speakers; the model gate
+    suppresses `model_name` because the stored value is not a model id. Applied
+    independently they compose into a request pairing a Gemini-TTS-only voice
+    with no Gemini-TTS model — coherent in neither mode.
+    """
+    client = fake_google_client()
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini", SCRIPT, LEGACY_GEMINI, workdir)
+
+    for call in client.synthesize_speech.call_args_list:
+        voice = call.kwargs["voice"]
+        assert voice.name in (
+            settings.ENGINE_GEMINI_HOST_VOICE,
+            settings.ENGINE_GEMINI_GUEST_VOICE,
+        )
+        assert voice.model_name == settings.ENGINE_GEMINI_TTS_MODEL
+
+
+def test_the_two_google_backends_agree_on_the_same_legacy_row(workdir):
+    """`gemini` and `gemini_multi` receive identical stored rows; resolving the
+    model differently between them is a bug in one of the two."""
+    single, multi = fake_google_client(), fake_google_client()
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=single
+    ):
+        synthesise("gemini", SCRIPT, LEGACY_GEMINI, workdir)
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=multi
+    ):
+        synthesise("gemini_multi", SCRIPT, LEGACY_GEMINI, workdir)
+
+    assert (
+        single.synthesize_speech.call_args.kwargs["voice"].model_name
+        == multi.synthesize_speech.call_args.kwargs["voice"].model_name
+    )
+
+
+def test_explicitly_chosen_classic_voices_still_take_no_model(workdir):
+    """A user who picked real prebuilt voices must not have a Gemini-TTS model
+    forced on them — the API would reject the pairing."""
+    client = fake_google_client()
+    classic = {"model": "en-US-Studio-MultiSpeaker", "language_code": "en-US",
+               "voice_1": "en-US-Journey-F", "voice_2": "en-US-Journey-D"}
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini", SCRIPT, classic, workdir)
+
+    assert not client.synthesize_speech.call_args.kwargs["voice"].model_name
+
+
+# --------------------------------------------------------------------------
+# Type-invalid stored values
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"model": "gpt-4o-mini-tts", "voice_1": 42, "voice_2": "echo"},
+        {"model": 7, "voice_1": "alloy", "voice_2": "echo"},
+        {"model": "m", "voice_1": "alloy", "voice_2": "echo", "language_code": 9},
+    ],
+    ids=["numeric-voice", "numeric-model", "numeric-language"],
+)
+def test_a_type_invalid_stored_value_is_a_config_error_not_a_pydantic_one(config):
+    """Write-time validation checks key *presence*, not type, so these rows
+    exist. The Celery task has to tell a misconfigured episode apart from a bug
+    in this code, and a raw `ValidationError` says the wrong one."""
+    with pytest.raises(TTSError, match="unusable value"):
+        VoiceConfig.from_tts_config(config, "openai")
+
+
+def test_a_numeric_string_speed_is_coerced_before_sending(workdir):
+    """`0.25 <= float("1.5") <= 4.0` passes write validation, and the value is
+    stored as given — sent unconverted it is a JSON string and a 400."""
+    client = fake_openai_client()
+
+    with patch("src.engine.tts.openai.openai.OpenAI", return_value=client):
+        synthesise("openai", SCRIPT, {**OPENAI_CONFIG, "speed": "1.5"}, workdir)
+
+    speeds = [c.kwargs["speed"] for c in client.audio.speech.create.call_args_list]
+    assert speeds == [1.5] * len(SCRIPT.turns)
+    assert all(isinstance(s, float) for s in speeds)

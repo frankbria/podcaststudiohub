@@ -11,13 +11,31 @@ beside the audio under the same tenant prefix. #543 wires the returned path into
 """
 import logging
 import os
+import uuid
 
 import boto3
 
 from src.config import settings
+from src.engine.llm import EngineError
 from src.engine.models import Script
 
 logger = logging.getLogger(__name__)
+
+
+def _checked_id(label: str, value: str) -> str:
+    """Reject anything that is not a UUID before it reaches a path.
+
+    Both ids come from UUID primary keys, so this is cheap. It matters because
+    the local-storage branch below is a real filesystem join, where ``..`` is
+    honoured and an absolute second component replaces the first — unlike the
+    S3 key, where neither has any meaning. Validating here keeps a future
+    caller from turning the no-S3 dev path (#292) into an arbitrary write.
+    """
+    try:
+        uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError) as exc:
+        raise EngineError(f"{label} is not a valid UUID: {value!r}") from exc
+    return str(value)
 
 
 def build_transcript_s3_key(user_id: str, episode_id: str) -> str:
@@ -27,7 +45,10 @@ def build_transcript_s3_key(user_id: str, episode_id: str) -> str:
     lands under the ``podcasts/user-*/`` prefix that bucket policy, IAM and
     lifecycle rules scope on (#215).
     """
-    return f"podcasts/user-{user_id}/episode-{episode_id}.transcript.json"
+    return (
+        f"podcasts/user-{_checked_id('user_id', user_id)}"
+        f"/episode-{_checked_id('episode_id', episode_id)}.transcript.json"
+    )
 
 
 def persist_transcript(script: Script, user_id: str, episode_id: str) -> str:
@@ -37,6 +58,8 @@ def persist_transcript(script: Script, user_id: str, episode_id: str) -> str:
     Mirrors the audio path's no-S3 fallback (#292), so a dev or single-box
     deployment keeps its transcripts instead of writing them to /tmp.
     """
+    user_id = _checked_id("user_id", user_id)
+    episode_id = _checked_id("episode_id", episode_id)
     body = script.model_dump_json(indent=2)
 
     if settings.AWS_S3_BUCKET:

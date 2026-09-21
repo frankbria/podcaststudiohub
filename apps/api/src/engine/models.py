@@ -51,7 +51,11 @@ class ConversationConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    word_count: int = 2000
+    # Bounds mirror ConversationTemplateConfig, which already enforces them
+    # at write time. Repeated here because creativity flows straight into the
+    # provider's temperature: an out-of-range value should be a clean
+    # validation error, not a 400 from the vendor mid-generation.
+    word_count: int = Field(default=2000, ge=100, le=5000)
     conversation_style: List[str] = Field(
         default_factory=lambda: ["engaging", "fast-paced", "enthusiastic"]
     )
@@ -63,7 +67,7 @@ class ConversationConfig(BaseModel):
     podcast_name: str = "PODCASTIFY"
     podcast_tagline: str = "Your Personal Generative AI Podcast"
     output_language: str = "English"
-    creativity: float = 1.0
+    creativity: float = Field(default=1.0, ge=0.0, le=1.0)
     engagement_techniques: List[str] = Field(
         default_factory=lambda: [
             "rhetorical questions",

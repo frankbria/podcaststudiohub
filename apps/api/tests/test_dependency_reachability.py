@@ -221,7 +221,40 @@ def test_importing_the_engine_pulls_in_neither_langchain_nor_litellm():
         os.environ.setdefault("JWT_SECRET_KEY", "y" * 32)
 
         import src.engine  # noqa: F401
-        from src.engine import generate_script  # noqa: F401
+        from src.engine import ConversationConfig, generate_script
+
+        # Importing is not enough: a lazy `import langchain_community` inside a
+        # provider function would load only when that function runs, i.e. after
+        # an import-only snapshot was taken. So drive the real call path with a
+        # stand-in client, exactly as the litellm probe above constructs a real
+        # ContentGenerator rather than just importing one.
+        import json
+        from unittest.mock import MagicMock, patch
+
+        from google.genai import types
+
+        reply = types.GenerateContentResponse(
+            candidates=[types.Candidate(content=types.Content(parts=[
+                types.Part(text=json.dumps({{
+                    "title": "t", "summary": "s",
+                    "turns": [
+                        {{"speaker": "host", "text": "word " * 60}},
+                        {{"speaker": "guest", "text": "word " * 60}},
+                        {{"speaker": "host", "text": "word " * 60}},
+                        {{"speaker": "guest", "text": "word " * 60}},
+                    ],
+                }}))
+            ]))]
+        )
+        client = MagicMock()
+        client.models.generate_content.return_value = reply
+
+        from src.config import settings as _settings
+        with patch("src.engine.llm.genai.Client", return_value=client), \
+                patch.object(_settings, "GEMINI_API_KEY", "probe-key"), \
+                patch.object(_settings, "ENGINE_LLM_PROVIDER", "gemini"):
+            script = generate_script(["Body text to discuss."], ConversationConfig())
+        assert len(script.turns) == 4, script
 
         found = sorted(
             {{m.split(".")[0] for m in sys.modules

@@ -8,7 +8,7 @@ Nothing under this package may import the dependency tree podcastfy pulled in â€
 that is the point of owning it. ``tests/test_dependency_reachability.py`` holds
 the exact banned list and enforces it at both source and import-graph level.
 """
-from src.engine.llm import EngineError, ScriptSchemaError
+from src.engine.llm import EngineError, ProviderError, ScriptSchemaError
 from src.engine.models import ConversationConfig, Script, Turn
 from src.engine.script import ScriptValidationError, generate_script
 from src.engine.transcript import build_transcript_s3_key, persist_transcript
@@ -16,6 +16,7 @@ from src.engine.transcript import build_transcript_s3_key, persist_transcript
 __all__ = [
     "ConversationConfig",
     "EngineError",
+    "ProviderError",
     "Script",
     "ScriptSchemaError",
     "ScriptValidationError",

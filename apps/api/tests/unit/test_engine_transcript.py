@@ -101,3 +101,38 @@ def test_s3_failure_propagates_rather_than_silently_losing_the_transcript():
     ):
         with pytest.raises(RuntimeError, match="bucket is on fire"):
             persist_transcript(SCRIPT, USER_ID, EPISODE_ID)
+
+
+@pytest.mark.parametrize(
+    "user_id,episode_id",
+    [
+        (USER_ID, "../../../../etc/cron.d/pwned"),
+        ("../../..", EPISODE_ID),
+        (USER_ID, "/absolute/elsewhere"),
+        (USER_ID, "not-a-uuid"),
+        (USER_ID, None),
+    ],
+)
+def test_non_uuid_ids_are_rejected_before_anything_is_written(
+    user_id, episode_id, tmp_path
+):
+    """The local branch is a real filesystem join, where ".." is honoured and an
+    absolute second component replaces the first — unlike the S3 key, where
+    neither means anything. Both ids come from UUID columns, so this is free.
+    """
+    from src.engine.llm import EngineError
+
+    with patch.object(settings, "AWS_S3_BUCKET", None), patch.object(
+        settings, "LOCAL_AUDIO_STORAGE_PATH", str(tmp_path)
+    ):
+        with pytest.raises(EngineError, match="not a valid UUID"):
+            persist_transcript(SCRIPT, user_id, episode_id)
+
+    assert list(tmp_path.iterdir()) == [], "a file was written despite the bad id"
+
+
+def test_traversal_in_an_id_cannot_escape_the_tenant_prefix_in_the_s3_key():
+    from src.engine.llm import EngineError
+
+    with pytest.raises(EngineError, match="not a valid UUID"):
+        build_transcript_s3_key(USER_ID, "../../other-tenant/episode")

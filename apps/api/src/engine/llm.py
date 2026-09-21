@@ -16,6 +16,7 @@ from typing import Type, TypeVar
 
 import openai
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
@@ -34,6 +35,18 @@ class ScriptSchemaError(EngineError):
     """The provider replied, but not with the schema it was asked for."""
 
 
+class ProviderError(EngineError):
+    """The provider call itself failed — auth, rate limit, timeout, 5xx.
+
+    Normalising these matters because the caller's response differs by kind: a
+    schema failure is retried once here (the same input rarely parses on the
+    third try), while a provider failure is somebody else's outage and belongs
+    to the Celery task's existing backoff. Leaking
+    ``openai.RateLimitError`` / ``google.genai.errors.ClientError`` would make
+    #543 import both SDKs just to tell those two cases apart.
+    """
+
+
 def generate_json(
     *,
     system: str,
@@ -43,8 +56,9 @@ def generate_json(
 ) -> T:
     """Ask the configured provider for a single JSON object matching ``schema``.
 
-    Raises ``EngineError`` if the engine is misconfigured and
-    ``ScriptSchemaError`` if the reply cannot be validated.
+    Raises ``EngineError`` if the engine is misconfigured, ``ProviderError`` if
+    the provider call fails, and ``ScriptSchemaError`` if the reply cannot be
+    validated. No provider-specific exception escapes this module.
     """
     provider = settings.ENGINE_LLM_PROVIDER
     if provider == "gemini":
@@ -66,23 +80,29 @@ def _generate_gemini(
     if not settings.GEMINI_API_KEY:
         raise EngineError("GEMINI_API_KEY is not set; cannot generate a script")
 
+    # Built per call rather than cached at module scope. Construction opens no
+    # connection, and a module-global client captures the API key at import
+    # time — exactly the defect #542 is fixing in podcastfy's OpenAI provider.
     client = genai.Client(
         api_key=settings.GEMINI_API_KEY,
         # HttpOptions.timeout is MILLISECONDS; GEMINI_API_TIMEOUT is seconds.
         # Passing the seconds value through would time out after 120ms.
         http_options=types.HttpOptions(timeout=settings.GEMINI_API_TIMEOUT * 1000),
     )
-    response = client.models.generate_content(
-        model=settings.ENGINE_GEMINI_MODEL,
-        contents=user,
-        config=types.GenerateContentConfig(
-            system_instruction=system,
-            temperature=creativity,
-            max_output_tokens=settings.ENGINE_MAX_OUTPUT_TOKENS,
-            response_mime_type="application/json",
-            response_schema=schema,
-        ),
-    )
+    try:
+        response = client.models.generate_content(
+            model=settings.ENGINE_GEMINI_MODEL,
+            contents=user,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                temperature=creativity,
+                max_output_tokens=settings.ENGINE_MAX_OUTPUT_TOKENS,
+                response_mime_type="application/json",
+                response_schema=schema,
+            ),
+        )
+    except genai_errors.APIError as exc:
+        raise ProviderError(f"Gemini call failed: {exc}") from exc
 
     text = response.text
     if not text:
@@ -106,15 +126,18 @@ def _generate_openai(
     # `creativity` is deliberately not forwarded: GPT-5-family models reject any
     # non-default `temperature` with `unsupported_value`, so sending it would
     # fail every call. It still applies on the Gemini path.
-    completion = client.chat.completions.parse(
-        model=settings.ENGINE_OPENAI_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        max_completion_tokens=settings.ENGINE_MAX_OUTPUT_TOKENS,
-        response_format=schema,
-    )
+    try:
+        completion = client.chat.completions.parse(
+            model=settings.ENGINE_OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            max_completion_tokens=settings.ENGINE_MAX_OUTPUT_TOKENS,
+            response_format=schema,
+        )
+    except openai.OpenAIError as exc:
+        raise ProviderError(f"OpenAI call failed: {exc}") from exc
 
     message = completion.choices[0].message
     if message.parsed is None:

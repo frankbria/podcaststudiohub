@@ -167,6 +167,13 @@ class Settings(BaseSettings):
     # Provider defaults were checked against the live model catalogues on
     # 2026-09-21; podcastfy's own default, gemini-1.5-pro-latest, is a
     # deprecated alias. Both are settings so #543 can retune without a deploy.
+    # Sources, because these names post-date most training data and read as
+    # typos otherwise: ai.google.dev/gemini-api/docs/models lists
+    # "gemini-3.5-flash" (GA, no -preview suffix), and
+    # developers.openai.com/api/docs/models lists "GPT-5.6 Terra" as the
+    # "balances intelligence and cost" tier, model id "gpt-5.6-terra".
+    # No test can catch a wrong id here — every test fakes the SDK boundary —
+    # so changing one needs a live smoke test, not just a green suite.
     ENGINE_LLM_PROVIDER: str = "gemini"  # gemini | openai
     ENGINE_GEMINI_MODEL: str = "gemini-3.5-flash"
     ENGINE_OPENAI_MODEL: str = "gpt-5.6-terra"

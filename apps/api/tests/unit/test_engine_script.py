@@ -777,3 +777,34 @@ def test_a_template_stored_with_nulls_generates_a_script_end_to_end():
         script = generate_script(SOURCES, stored)
 
     assert len(script.turns) == 12
+
+
+def test_a_non_text_gemini_part_is_a_schema_failure_not_a_raw_valueerror():
+    """`GenerateContentResponse.text` raises ValueError when any part carries a
+    non-text field — a safety block, a function call, inline data. That is a
+    property access, not the API call, so it sits outside the APIError handler
+    and would otherwise escape the module's taxonomy entirely.
+    """
+    from google.genai import types
+
+    blocked = types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(
+                    parts=[types.Part(function_call=types.FunctionCall(name="f", args={}))]
+                )
+            )
+        ]
+    )
+    # Guard the premise: this really does raise in the installed SDK.
+    with pytest.raises(ValueError):
+        _ = blocked.text
+
+    client = MagicMock()
+    client.models.generate_content = create_autospec(
+        _real_gemini_generate_content(), side_effect=[blocked, blocked]
+    )
+
+    with patch("src.engine.llm.genai.Client", return_value=client):
+        with pytest.raises(ScriptSchemaError, match="non-text response"):
+            generate_script(SOURCES, ConversationConfig())

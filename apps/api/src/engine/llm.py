@@ -104,7 +104,15 @@ def _generate_gemini(
     except genai_errors.APIError as exc:
         raise ProviderError(f"Gemini call failed: {exc}") from exc
 
-    text = response.text
+    try:
+        text = response.text
+    except ValueError as exc:
+        # `.text` raises when any part carries a non-text field — a safety
+        # block, a function call, inline data. It sits outside the APIError
+        # handler above because it is a property access, not the call, so
+        # without this the one contentless shape Gemini actually produces
+        # escapes as a raw ValueError past the empty-response branch below.
+        raise ScriptSchemaError(f"Gemini returned a non-text response: {exc}") from exc
     if not text:
         raise ScriptSchemaError("Gemini returned an empty response")
     try:

@@ -19,19 +19,54 @@ finished audio and never touches ElevenLabs. But the clause is load-bearing for
 the premium tier and is the kind that gets enforced inconsistently, so the read
 needs to be theirs in writing, not ours.
 
+All of these sit in **section 9**, "Do not use our Services in any manner
+contrary to ElevenLabs' policies, purpose or mission" — the reselling clause is
+9(b). Two further clauses in the same section bear on this, both easy to miss:
+
+- **(q)**, the embedding clause, covers "framing, mirroring, or otherwise
+  embedding any part of the Services, including **trademarks, names, logos**, or
+  any portion of the Services, within another website, mobile application, or
+  service" without express prior written consent. Naming ElevenLabs in our voice
+  picker is their *name* in our web app, so question 2 below is squarely on this
+  clause rather than a stretch reading of it.
+- **(i)** bars "developing or using any applications or software that interact
+  with our Services without our prior written authorization (such as through our
+  APIs)." Read literally that covers every API customer they have, so it is
+  plainly not enforced as written — but it is the same inconsistently-enforced
+  hazard as the reselling clause, and costs nothing to clear in the same email.
+
+Not in scope but worth knowing: **(c)** separately bars commercially exploiting
+Sound Effects output on a standalone basis. We generate dialogue via
+Text-to-Dialogue, not Sound Effects, so this does not bite — it would if we ever
+shipped generated stings or beds as separable assets.
+
 Also in scope: commercial use requires a paid plan (the free tier is
 non-commercial and requires attribution), and API tiers are priced separately
 from the consumer plans.
 
-## The three questions asked
+## The questions asked
 
 1. Is generating finished podcast audio for our paying customers, using our
    platform API key, permitted use of Output?
-2. Does offering ElevenLabs as a selectable voice option in our UI constitute
-   embedding the Service?
-3. Which API tier is recommended for our expected character volume?
+2. Does offering ElevenLabs as a selectable voice option in our UI — named as
+   such — constitute embedding the Service under (q)?
+3. Does (i) require written authorization for our API integration as such?
+4. Which API tier is recommended for our expected character volume?
 
 The email as sent is in [Appendix: email sent](#appendix-email-sent).
+
+## Where to send it
+
+Nothing in this repo held a contact address; these were confirmed 2026-09-21.
+
+| Route | Address | Notes |
+|---|---|---|
+| **Enterprise sales** | https://elevenlabs.io/enterprise → "Contact sales" | **Primary.** Form only, no public email. Reaches people who can give a binding answer and who want the deal — we are also asking which tier to buy. |
+| **General support** | **team@elevenlabs.io** | **Send in parallel.** Named in their help centre and in the Terms of Use as the address for "a question or complaint regarding the Services". Support may not answer a licensing question itself, but this is what produces the written ticket reference recorded above. |
+| Policy ticket form | https://help.elevenlabs.io/hc/en-us/requests/new | The route the Prohibited Use Policy itself names for authorization requests and appeals. Use if the other two stall. |
+
+Email from a company address, not a personal one, and keep the reply — the
+point of this exercise is a written record, not a verbal assurance.
 
 ## Vendor answer
 
@@ -113,18 +148,25 @@ and ticket reference above.
 > interface or credential — they choose a voice from a short list we present and
 > receive the resulting audio.
 >
-> We would like written confirmation on three points before we make ElevenLabs
+> We would like written confirmation on four points before we make ElevenLabs
 > our default premium voice option:
 >
 > 1. Is this permitted use of Output under the Prohibited Use Policy — that is,
 >    does generating finished audio for paying customers with our own API key
 >    fall under "your use of Output in accordance with the applicable terms and
->    conditions" rather than under selling or sub-licensing the Services?
-> 2. Does presenting ElevenLabs as a selectable voice option in our UI (named as
->    ElevenLabs, with the synthesis happening server-side on our key) constitute
->    embedding "any part of the Services" in another service, which the policy
->    requires written consent for?
-> 3. Which API tier would you recommend for our expected volume, and is a
+>    conditions" rather than under selling or sub-licensing the Services
+>    (section 9(b))?
+> 2. Section 9(q) covers embedding "any part of the Services, including
+>    trademarks, names, logos" in another service without written consent. We
+>    present ElevenLabs by name as one selectable voice option in our interface,
+>    with all synthesis server-side on our key. Does naming you in that way
+>    require consent under 9(q), and if so, may we have it? We are happy to
+>    follow any attribution or brand guidelines you prefer.
+> 3. Section 9(i) refers to "developing or using any applications or software
+>    that interact with our Services without our prior written authorization
+>    (such as through our APIs)". We assume holding a paid API account is that
+>    authorization, but would like it confirmed rather than assumed.
+> 4. Which API tier would you recommend for our expected volume, and is a
 >    reseller or enterprise agreement required for this model?
 >
 > Happy to provide more detail on the architecture or volume estimates if that

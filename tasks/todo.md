@@ -1,4 +1,4 @@
-# [P2.18] #541 — Engine step 1: in-repo script generation
+# [P2.18] #541 — Engine step 1: in-repo script generation — ✅ MERGED (PR #573, bc0c188)
 
 Epic #538, step 1 of 3. Depends on #539 (done). Blocks #542, #543.
 
@@ -8,10 +8,10 @@ Celery task does **not** call this yet.
 
 ## Acceptance criteria
 
-- [ ] `generate_script` returns a validated `Script` for url/text/pdf-extracted input, short and long-form
-- [ ] No runtime network call other than the LLM provider
-- [ ] Prompts in-repo; a test asserts no `langchain`/`litellm` import under `src/engine`
-- [ ] Transcript persistence helper exists and is covered
+- [x] `generate_script` returns a validated `Script` for url/text/pdf-extracted input, short and long-form
+- [x] No runtime network call other than the LLM provider
+- [x] Prompts in-repo; a test asserts no `langchain`/`litellm` import under `src/engine`
+- [x] Transcript persistence helper exists and is covered
 
 ## Files
 
@@ -127,3 +127,21 @@ apps/api/tests/test_dependency_reachability.py  + engine import guards
   ignore with a comment if so (precedent: the `google.generativeai` FutureWarning entry).
 - `google-genai` is pinned low (1.2.0) by the current closure; `response_schema` is
   verified present at that version.
+
+
+---
+
+## Outcome
+
+Merged 2026-09-21 as PR #573 (`bc0c188`), 7 commits squashed. 1863 backend tests
+passing (baseline 1802), `src/engine` at 98–100% per file, 16/16 mutations caught,
+all 13 CI checks green, GLM bot verdict "no defects found".
+
+Deferred, filed rather than dropped: #574 (long-form loses paid chunks on a
+transient provider failure), #575 (`_persist_local_audio` path join), #576
+(output-side injection screening).
+
+Demo: `apps/api/docs/demos/issue541-engine-script-generation.md`.
+
+Open operational item: the dev `GEMINI_API_KEY` is rejected by Google, so nothing
+here has been exercised against a live provider.

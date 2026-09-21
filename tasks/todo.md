@@ -51,9 +51,14 @@ no docs/nginx/e2e reference the prefix. So every `/quality-metrics/*` response i
   (main: 64 OpenAPI paths, 3 quality routes answering 401 → branch: 61 paths, 0 quality routes,
   404). Suite 1899 → 1802 passed (= the 97 collected tests in the 3 deleted files), 0 failures,
   coverage 94.93% → 94.74%.
-- Loose ends found while verifying, filed separately: 9 tracked sample transcripts under
-  `apps/api/data/transcripts/` (#309 leftovers, nothing reads them now) and
-  `episode_service.py:459 update_generation_status` (zero callers).
+- Loose end found while verifying, filed separately: `episode_service.py:459
+  update_generation_status` has zero callers and takes a caller-supplied `generation_progress`
+  dict — the mass-assignment shape #271 removed elsewhere. Filed as #571 `[P3.13]`.
+- Retracted: I also filed the tracked sample transcripts as dead weight (#572) and closed it on
+  verifying — they are at repo root `data/transcripts/`, not `apps/api/`, `.gitignore` documents
+  keeping them on purpose, and podcastfy still creates that directory at runtime. Lesson: the
+  path a grep prints is relative to the grep's cwd; confirm with `git ls-files <abs path>` before
+  filing.
 
 # Epic — Replace the podcastfy engine with a thin in-house generation engine
 

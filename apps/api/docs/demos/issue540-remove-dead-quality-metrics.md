@@ -228,4 +228,6 @@ The follow-up records the exact `git show ea56d28^:…` commands to recover `Qua
 
 - It does not revive the feature — that needs #541 first.
 - It does not touch `Episode.transcript_path` (the column), which is still read by `offboarding_service.py` and `episode_service.py`.
-- It leaves two unrelated pieces of rot found while verifying — the 9 tracked sample transcripts under `apps/api/data/transcripts/`, and `episode_service.py:459 update_generation_status`, which has zero callers. Both are filed separately rather than widening this diff.
+- It leaves one unrelated piece of rot found while verifying — `episode_service.py:459 update_generation_status`, which has zero callers and assigns a caller-supplied dict straight into `generation_progress`. Filed as #571 rather than widening this diff.
+
+> Correction: I also filed the tracked sample transcripts as dead weight (#572) and closed it after checking. They live at repo root `data/transcripts/`, not under `apps/api/`; `.gitignore` documents keeping the already-committed samples on purpose; and podcastfy still creates that directory at runtime. The grep that misled me printed paths relative to its own cwd.

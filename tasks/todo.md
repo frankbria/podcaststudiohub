@@ -1,147 +1,103 @@
-# [P2.18] #541 — Engine step 1: in-repo script generation — ✅ MERGED (PR #573, bc0c188)
+# [P2.19] #542 — Engine step 2: in-repo TTS layer
 
-Epic #538, step 1 of 3. Depends on #539 (done). Blocks #542, #543.
+Epic #538, step 2 of 3. Depends on #541 (`Script`/`Turn`, merged as PR #573).
+Blocks #543. Previous plan for #541 is in git history at `5b43ab1`.
 
-**Scope guard (from the issue):** this lands the module + unit tests with recorded
-provider responses. TTS is #542. Cut-over + dependency removal is #543. The live
-Celery task does **not** call this yet.
+**Scope guard (from the issue):** five backends behind one interface, unit tests with
+recorded responses plus opt-in live tests. **No cut-over** — `generate_podcast_task`
+still calls podcastfy until #543.
 
 ## Acceptance criteria
 
-- [x] `generate_script` returns a validated `Script` for url/text/pdf-extracted input, short and long-form
-- [x] No runtime network call other than the LLM provider
-- [x] Prompts in-repo; a test asserts no `langchain`/`litellm` import under `src/engine`
-- [x] Transcript persistence helper exists and is covered
+- [ ] Five backends behind one interface; all temp files under `workdir`
+- [ ] No module-global API keys; a test asserts `openai.api_key` is untouched after synthesis
+- [ ] ElevenLabs backend uses Text-to-Dialogue on `eleven_v3` and respects the per-request character cap
+- [ ] Concurrent per-turn synthesis where the backend is single-speaker
+
+## Decisions taken before writing code
+
+**1. Override podcastfy's `elevenlabs<2` cap — approved by the user.**
+`text_to_dialogue` exists only in elevenlabs 2.x, and 2.x removed `.generate()`, which is
+exactly what podcastfy's provider calls (`tts/providers/elevenlabs.py:21`). Verified by
+installing 2.68.0 into a throwaway venv: `text_to_dialogue` present, `generate` absent.
+So `[tool.uv] override-dependencies` gains `elevenlabs>=2.68.0`, the same mechanism
+already used there for setuptools/wheel.
+
+Consequence, accepted: **podcastfy's ElevenLabs path breaks between this PR and #543.**
+To keep that legible rather than mysterious, `generate_podcast_task` gets a guard that
+fails fast with a message naming #543, instead of surfacing
+`AttributeError: 'ElevenLabs' object has no attribute 'generate'`.
+
+**2. Three corrections to the issue's design, from checking live provider docs.**
+Each would otherwise have shipped a defect:
+
+| Issue says | Actually |
+|---|---|
+| chunk to stay under 5,000 chars/request | Text-to-Dialogue's documented cap is **2,000 chars per request** across all inputs. 5,000 is Eleven v3's *single-voice TTS* limit — a different endpoint. |
+| gemini multi-speaker on `en-US-Studio-MultiSpeaker` | That Studio voice is restricted/deprecated. The supported path is **Gemini-TTS** (`gemini-2.5-flash-tts` / `gemini-2.5-pro-tts`, both GA), with a *different* request shape: `MultiSpeakerVoiceConfig` carrying `speaker_alias`/`speaker_id`, not bare `Turn.speaker` strings. |
+| (openai) podcastfy's `tts-1-hd` | `gpt-4o-mini-tts` is current and is the only model honouring `instructions`. `tts-1-hd` still works, so it stays selectable. |
+
+**3. Live tests gate on an explicit opt-in flag, not key presence.**
+All three provider keys in `apps/api/.env` are present, well-formed, and **revoked** (401),
+and CI has no provider secrets at all. Gating on "is the key set?" would turn a stale
+`.env` into red tests. Gate on `RUN_LIVE_TTS_TESTS=1`; register the marker in `pytest.ini`
+(`--strict-markers` is on, so an unregistered marker fails collection outright).
+
+**4. `factory.py` holds flat `if provider == ...` dispatch**, matching `llm.py`, rather than
+a registry. The issue asks for a factory module; the engine's established style is flat
+dispatch. Both satisfied.
+
+**5. Audio is mp3 @ 192k**, matching `audio_composition.py`. podcastfy was inconsistent
+(320k multi-speaker, library default single-speaker).
+
+**6. Bounded `ThreadPoolExecutor` for per-turn backends.** No precedent in `src/`, but
+Celery runs prefork, so threads inside a worker process are safe, and the issue asks for
+it. The bound is a setting, not a literal.
 
 ## Files
 
 ```
-apps/api/src/engine/__init__.py            public API re-exports
-apps/api/src/engine/models.py              Turn, Script, ConversationConfig
-apps/api/src/engine/llm.py                 provider clients (gemini + openai), structured JSON
-apps/api/src/engine/script.py              generate_script, chunking, rolling summary, validation
-apps/api/src/engine/transcript.py          persist_transcript helper
-apps/api/src/engine/prompts/short_form.md
-apps/api/src/engine/prompts/long_form.md
-apps/api/src/config.py                     engine settings (revive the orphaned validation block)
-apps/api/pyproject.toml                    add openai + google-genai as direct deps
-apps/api/tests/unit/test_engine_script.py
-apps/api/tests/unit/test_engine_transcript.py
-apps/api/tests/unit/fixtures/engine/*.json recorded provider payloads
-apps/api/tests/test_dependency_reachability.py  + engine import guards
+apps/api/src/engine/tts/__init__.py     public surface
+apps/api/src/engine/tts/base.py         TTSBackend protocol, VoiceConfig, TTSError/TTSProviderError
+apps/api/src/engine/tts/audio.py        concat + export helper, workdir discipline
+apps/api/src/engine/tts/factory.py      flat provider dispatch
+apps/api/src/engine/tts/elevenlabs.py   Text-to-Dialogue, eleven_v3, char-capped batching
+apps/api/src/engine/tts/gemini.py       gemini (single) + gemini_multi (Gemini-TTS markup)
+apps/api/src/engine/tts/openai.py       scoped client, concurrent per-turn
+apps/api/src/engine/tts/edge.py         asyncio.run per call, concurrent, no nest_asyncio
+apps/api/src/config.py                  ENGINE_TTS_* settings
+apps/api/pyproject.toml                 direct deps + the elevenlabs override
+apps/api/src/tasks/podcast_generation.py  fail-fast guard for the ElevenLabs window
+apps/api/tests/unit/test_engine_tts.py
+apps/api/tests/unit/fixtures/engine/tts/
+apps/api/pytest.ini                     register the live marker
 ```
 
-## Steps (TDD — test first at each step)
+## Steps (TDD — test first)
 
-1. **`models.py`** — `Turn(speaker: Literal["host","guest"], text: str)`,
-   `Script(title, summary, turns: list[Turn])`, `ConversationConfig` with a default for
-   every field and `extra="ignore"` so a `conversation_templates.config` dict (which also
-   carries podcastfy-only keys like `text_to_speech`) maps straight in.
-   Tests: unknown keys dropped, `None`/partial config yields defaults, speaker literal enforced.
+1. **`base.py`** — `VoiceConfig.from_tts_config(provider, config)` mapping the flat stored
+   dict (`voice_1`/`voice_2`, `voice_1_id`/`voice_2_id`, `model`, `language_code`, plus
+   provider extras like `speed`/`stability`/`rate`). `TTSBackend` Protocol with
+   `synthesise(script, voices, workdir) -> Path`. `TTSError(EngineError)` /
+   `TTSProviderError(TTSError)` mirroring `llm.py`'s taxonomy.
+2. **`audio.py`** — concatenate per-turn MP3 blobs into one MP3 under `workdir` at 192k via
+   pydub. Tests patch `pydub.AudioSegment` (CI has no ffmpeg).
+3. **`openai.py`** — scoped `OpenAI(api_key=…)`, `audio.speech.create`, per-turn, bounded
+   pool. A test asserts `openai.api_key` is still unset afterwards.
+4. **`edge.py`** — `edge_tts.Communicate(...).save()` inside one `asyncio.run` per call, no
+   `nest_asyncio`, output into `workdir`.
+5. **`gemini.py`** — single-speaker per-turn, and multi-speaker via `MultiSpeakerMarkup` +
+   `MultiSpeakerVoiceConfig` on a Gemini-TTS model from settings.
+6. **`elevenlabs.py`** — `client.text_to_dialogue.convert(inputs=[DialogueInput(...)])`,
+   batching turns under the char cap, concatenating batches. Audio tags pass through.
+7. **`factory.py`** + `__init__.py`, settings, deps, the podcastfy guard, marker registration.
 
-2. **`llm.py`** — `generate_json(prompt, system, config, schema) -> BaseModel`.
-   - Gemini: `genai.Client(api_key=...).models.generate_content(model=…, contents=…,
-     config=types.GenerateContentConfig(system_instruction=…, temperature=…,
-     max_output_tokens=…, response_mime_type="application/json", response_schema=Schema))`
-   - OpenAI: `client.chat.completions.parse(model=…, messages=…, response_format=Schema)`
-   - Timeout/retries come from the client constructor, not a hand-rolled loop.
-   - Raises `EngineError` on a missing API key or an unparseable payload.
-   Tests: both providers called with the right kwargs (autospec against the real SDK
-   signature, per `tests/unit/test_podcast_generation_task.py`); missing key raises.
+## Risks
 
-3. **Prompts** — `prompts/short_form.md`, `prompts/long_form.md`, loaded with
-   `importlib.resources` and `str.format`-rendered from `ConversationConfig`.
-   Substance ported from the four pinned Hub prompts (fetched once at dev time from the
-   commit hashes in `docs/podcastfy-advisory-reachability.md:151-154`): persona roles,
-   conversation style, dialogue structure, engagement techniques, word count, language,
-   the "discuss the provided input, do not invent a topic" guardrail, and the long-form
-   part-index instructions (open on part 0, wrap up on the last, alternate speakers
-   across the seam). Output-format instructions are **not** ported — podcastfy's ask for
-   `<Person1>` free text; ours asks for the JSON schema.
-   Test: both prompt files ship in the wheel and render with no unreplaced placeholder.
-
-4. **`script.py` — `generate_script(sources, config, longform=False, on_progress=None)`**
-   - Short form: one call, validate, one retry on schema-or-validation failure.
-   - Long form: chunk on sentence boundaries (`ENGINE_MAX_CHUNKS`, `ENGINE_MIN_CHUNK_CHARS`
-     — same 8/600 defaults podcastfy used), then per chunk pass **only** the accumulated
-     per-chunk summaries plus the last two turns as context. Each chunk call already
-     returns a `summary` field, so the rolling summary costs no extra LLM call. This is
-     the fix for the O(n²) full-transcript resend.
-   - `on_progress(stage, percent)` fires per chunk — the seam #543 needs for real
-     extracting → scripting → synthesising progress.
-   - Validation (ported from the deleted `ScriptGenerationService._validate_transcript`):
-     both speakers present with non-empty text, ≥ `MIN_TRANSCRIPT_WORDS` combined,
-     ≥ `MIN_CONVERSATION_TURNS` speaker transitions, neither speaker above
-     `MAX_SPEAKER_IMBALANCE_PERCENT` of total words, no `AI_ARTIFACT_PATTERNS` hit.
-   Tests: short form happy path; long form stitches N chunks and never passes a prior
-   chunk's turns as context; each validation rule rejects; retry succeeds on the second
-   response and gives up on the second failure; `on_progress` called once per chunk.
-
-5. **`transcript.py` — `persist_transcript(script, user_id, episode_id)`** → S3 key
-   `podcasts/user-{user_id}/episode-{episode_id}.transcript.json` via the existing
-   `build_podcast_s3_key` sibling convention, with the `LOCAL_AUDIO_STORAGE_PATH`
-   fallback mirroring `_persist_local_audio`. Returns the path/key to write into
-   `episode.transcript_path` (today always `None` — #309).
-   Tests: S3 path and local-fallback path, JSON round-trips back into `Script`.
-
-6. **`config.py`** — add `ENGINE_LLM_PROVIDER` (`gemini` default, matching today's live
-   behaviour), `ENGINE_GEMINI_MODEL`, `ENGINE_OPENAI_MODEL`, `ENGINE_MAX_OUTPUT_TOKENS`,
-   `ENGINE_MAX_CHUNKS`, `ENGINE_MIN_CHUNK_CHARS`, `OPENAI_API_TIMEOUT`,
-   `OPENAI_API_MAX_RETRIES`. Update `.env.example`.
-
-7. **`test_dependency_reachability.py`** — add the two guards, matching the file's
-   existing Pattern A/B: a source grep over `src/engine/**.py` for `langchain`/`litellm`
-   with a floor-count assertion, and a subprocess probe that imports the engine and
-   asserts neither appears in `sys.modules`.
-
-8. **`pyproject.toml`** — `openai` and `google-genai` become direct deps (both are
-   already in the closure transitively; `openai` stays under podcastfy's `<2` ceiling
-   until #543 removes the pin).
-
-## Decisions made autonomously (no architectural fork)
-
-- **Model defaults verified against live provider docs today, not memory:**
-  `gemini-3.5-flash` (GA, balances cost/quality; podcastfy's `gemini-1.5-pro-latest` is a
-  deprecated alias) and `gpt-5.6-terra` (OpenAI's current "balances intelligence and
-  cost" tier). Both are settings, so #543 can retune without a code change.
-- **`generate_script` is synchronous.** Celery tasks here are sync, and `asyncio.run`
-  inside a Celery worker is a known trap in this repo.
-- **Rolling summary is reused from the `Script.summary` the model already returns**
-  per chunk, rather than a separate summarisation call. No extra spend.
-- **Reused `MAX_SPEAKER_IMBALANCE_PERCENT` (80%) instead of adding a ratio knob.**
-  The issue says "within a ratio"; an 80%-of-total cap is that constraint, and the
-  setting already exists in `config.py` (orphaned since #539 deleted its only consumer).
-  Same for `MIN_TRANSCRIPT_WORDS`, `MIN_CONVERSATION_TURNS`, `AI_ARTIFACT_PATTERNS`.
-- **Tightened the `AI_ARTIFACT_PATTERNS` default.** The inherited list contains
-  `"based on the"` and `"according to my"`, which match ordinary podcast speech and would
-  reject good scripts. The setting has had no consumer since #539, so tightening it now
-  has no blast radius. New list targets refusal/assistant boilerplate only.
-- **Turn count is a floor, not a range.** "Within bounds" upper-bounds naturally via
-  `word_count`; a separate max would reject long-form by construction.
-- **One retry on schema-or-validation failure, not a configurable count.**
-  `TRANSCRIPT_VALIDATION_MAX_RETRIES` stays unused rather than gaining a second meaning.
-
-## Known risks
-
-- `filterwarnings = error` — a new SDK import that warns will fail the suite; narrow
-  ignore with a comment if so (precedent: the `google.generativeai` FutureWarning entry).
-- `google-genai` is pinned low (1.2.0) by the current closure; `response_schema` is
-  verified present at that version.
-
-
----
-
-## Outcome
-
-Merged 2026-09-21 as PR #573 (`bc0c188`), 7 commits squashed. 1863 backend tests
-passing (baseline 1802), `src/engine` at 98–100% per file, 16/16 mutations caught,
-all 13 CI checks green, GLM bot verdict "no defects found".
-
-Deferred, filed rather than dropped: #574 (long-form loses paid chunks on a
-transient provider failure), #575 (`_persist_local_audio` path join), #576
-(output-side injection screening).
-
-Demo: `apps/api/docs/demos/issue541-engine-script-generation.md`.
-
-Open operational item: the dev `GEMINI_API_KEY` is rejected by Google, so nothing
-here has been exercised against a live provider.
+- **Overriding the cap may perturb the rest of the closure.** `elevenlabs` is imported only
+  by podcastfy's own elevenlabs provider, so blast radius should be that one file — but
+  `main.py`'s startup check imports podcastfy, so the whole suite must stay green.
+- **`uv` may refuse the override** if something else conflicts. Fall back to raising the
+  floor in `dependencies` and letting the override resolve it.
+- Gemini-TTS model ids are newer than most training data; they came off Google's current
+  docs and go into settings with the source cited, per the #541 precedent.

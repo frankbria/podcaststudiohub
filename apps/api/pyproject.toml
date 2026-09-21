@@ -33,6 +33,10 @@ dependencies = [
     "sentry-sdk>=2.67.1",
     "openai>=1.109.1",
     "google-genai>=1.2.0",
+    "elevenlabs>=2.68.0",
+    "google-cloud-texttospeech>=2.37.0",
+    "edge-tts>=6.1.19",
+    "pydub>=0.25.1",
 ]
 
 [build-system]
@@ -46,6 +50,14 @@ build-backend = "hatchling.build"
 override-dependencies = [
     "setuptools>=78.1.1",
     "wheel>=0.46.2",
+    # podcastfy caps elevenlabs <2.0.0, but Text-to-Dialogue -- the whole point
+    # of the ElevenLabs backend in #542 -- exists only in 2.x. 2.x also removed
+    # `client.generate()`, which is the single call podcastfy's own provider
+    # makes (tts/providers/elevenlabs.py:21), so overriding the cap knowingly
+    # breaks podcastfy's ElevenLabs path. That path is still the live one until
+    # #543 removes podcastfy entirely; generate_podcast_task fails fast with a
+    # message naming #543 rather than an AttributeError. Accepted deliberately.
+    "elevenlabs>=2.68.0",
 ]
 
 [dependency-groups]

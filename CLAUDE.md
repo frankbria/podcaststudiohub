@@ -69,9 +69,20 @@ Models come from `ENGINE_GEMINI_MODEL` / `ENGINE_OPENAI_MODEL` in `src/config.py
 `src/engine/` may import `langchain`/`litellm` — that is the point of owning it, and
 `tests/test_dependency_reachability.py` enforces it at both source and import-graph level.
 
-**The live `generate_podcast_task` does not call this yet.** It still calls podcastfy. TTS is
-#542; the cut-over and the removal of the pin is #543. Until then the section below still
-describes the running system.
+**Step 2 (#542) has landed too:** `src/engine/tts/` — five backends (`openai`, `elevenlabs`,
+`gemini`, `gemini_multi`, `edge`) behind one `TTSBackend` interface, every temp file under a
+caller-supplied `workdir`, no module-global API keys, bounded concurrent per-turn synthesis,
+and Eleven v3 **Text-to-Dialogue**, which podcastfy's pinned SDK could not reach.
+
+That last point has a live consequence: `pyproject.toml` overrides podcastfy's `elevenlabs<2`
+cap, because `text_to_dialogue` exists only in 2.x and 2.x removed the `generate()` call
+podcastfy makes. **podcastfy's ElevenLabs path is therefore broken until #543**;
+`generate_podcast_task` fails fast naming that issue rather than raising an `AttributeError`
+from inside site-packages. Select another provider in the meantime.
+
+**The live `generate_podcast_task` does not call the engine yet.** It still calls podcastfy.
+The cut-over and the removal of the pin is #543. Until then the section below still describes
+the running system.
 
 ### Upstream Podcastfy Engine
 

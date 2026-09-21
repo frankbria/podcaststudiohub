@@ -211,6 +211,11 @@ class Settings(BaseSettings):
     # text-to-speech on the same model -- exceeding it returns a validation
     # error or truncates a streaming response part-way.
     ENGINE_ELEVENLABS_CHAR_LIMIT: int = 2000
+    # Bytes of MultiSpeakerMarkup per synthesize_speech request. Google
+    # documents the markup field at 4,000 bytes (and markup + prompt combined
+    # at 8,000), so this is the stricter of the documented figures. Bytes, not
+    # characters: for a non-ASCII script the two differ several times over.
+    ENGINE_GEMINI_MARKUP_BYTE_LIMIT: int = 4000
     # Concurrent per-turn synthesis requests. Bounded because providers
     # rate-limit and because Celery runs prefork, so this multiplies by the
     # worker count.

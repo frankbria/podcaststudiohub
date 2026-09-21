@@ -21,7 +21,7 @@ from src.config import settings
 from src.engine.models import Script
 from src.engine.tts import PROVIDERS, TTSError, VoiceConfig, get_backend, synthesise
 from src.engine.tts.base import TTSProviderError, turns_for_synthesis
-from src.engine.tts.elevenlabs import batch_turns
+from src.engine.tts.base import batch_turns, utf8_size
 
 SCRIPT = Script(
     title="What Retrieval-Augmented Generation Actually Fixes",
@@ -336,7 +336,7 @@ def _turns(*lengths):
 def test_batching_keeps_each_request_under_the_character_cap():
     """The cap is the total across every input in one request. Exceeding it
     returns a validation error, or truncates a streaming response part-way."""
-    batches = batch_turns(_turns(800, 800, 800, 800), char_limit=2000)
+    batches = batch_turns(_turns(800, 800, 800, 800), 2000)
 
     assert len(batches) == 2
     for batch in batches:
@@ -346,13 +346,13 @@ def test_batching_keeps_each_request_under_the_character_cap():
 def test_batching_keeps_turns_together_while_they_fit():
     """Bigger batches sound better — the model only times reactions across turns
     it sees together — so the cap is the only reason to ever split."""
-    batches = batch_turns(_turns(100, 100, 100), char_limit=2000)
+    batches = batch_turns(_turns(100, 100, 100), 2000)
 
     assert len(batches) == 1
 
 
 def test_batching_preserves_turn_order_across_batches():
-    batches = batch_turns(_turns(1500, 1500, 1500), char_limit=2000)
+    batches = batch_turns(_turns(1500, 1500, 1500), 2000)
     flattened = [t[0] for batch in batches for t in batch]
 
     assert flattened == [0, 1, 2]
@@ -360,7 +360,7 @@ def test_batching_preserves_turn_order_across_batches():
 
 def test_a_single_turn_over_the_cap_is_sent_alone_not_split():
     """Splitting mid-sentence would sound worse than a clear provider error."""
-    batches = batch_turns(_turns(5000), char_limit=2000)
+    batches = batch_turns(_turns(5000), 2000)
 
     assert len(batches) == 1 and len(batches[0]) == 1
 
@@ -423,6 +423,8 @@ def test_gemini_multi_sends_one_request_with_speaker_aliases(workdir):
     ):
         synthesise("gemini_multi", SCRIPT, GEMINI_CONFIG, workdir)
 
+    # One request because this script is small. A long one must split -- see
+    # test_gemini_multi_splits_a_script_past_the_markup_byte_limit.
     assert client.synthesize_speech.call_count == 1
     kwargs = client.synthesize_speech.call_args.kwargs
     voice = kwargs["voice"]
@@ -1049,3 +1051,135 @@ def test_a_numeric_string_speed_is_coerced_before_sending(workdir):
     speeds = [c.kwargs["speed"] for c in client.audio.speech.create.call_args_list]
     assert speeds == [1.5] * len(SCRIPT.turns)
     assert all(isinstance(s, float) for s in speeds)
+
+
+# --------------------------------------------------------------------------
+# Google caps the request too
+# --------------------------------------------------------------------------
+
+def _long_script(turns: int = 40, chars: int = 400) -> Script:
+    return Script(
+        title="t", summary="s",
+        turns=[{"speaker": "host" if i % 2 == 0 else "guest", "text": "y" * chars}
+               for i in range(turns)],
+    )
+
+
+def test_gemini_multi_splits_a_script_past_the_markup_byte_limit(workdir):
+    """Google measures MultiSpeakerMarkup in bytes and caps it. A long-form
+    script is comfortably past that, so sending the whole conversation in one
+    call would fail the entire episode — the same defect class the ElevenLabs
+    backend batches to avoid."""
+    script = _long_script()
+    client = fake_google_client(count=32)
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini_multi", script, GEMINI_CONFIG, workdir)
+
+    assert client.synthesize_speech.call_count > 1
+    for call in client.synthesize_speech.call_args_list:
+        markup = call.kwargs["input"].multi_speaker_markup
+        total = sum(len(t.text.encode("utf-8")) for t in markup.turns)
+        assert total <= settings.ENGINE_GEMINI_MARKUP_BYTE_LIMIT
+
+
+def test_gemini_multi_preserves_turn_order_across_batches(workdir):
+    script = _long_script(turns=12, chars=500)
+    client = fake_google_client(count=32)
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini_multi", script, GEMINI_CONFIG, workdir)
+
+    sent = [
+        t.text
+        for call in client.synthesize_speech.call_args_list
+        for t in call.kwargs["input"].multi_speaker_markup.turns
+    ]
+    assert sent == [turn.text for turn in script.turns]
+
+
+def test_every_gemini_batch_declares_the_same_speakers(workdir):
+    """Each request is independent; a batch missing a speaker config would
+    render that speaker's turns in the wrong voice."""
+    client = fake_google_client(count=32)
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini_multi", _long_script(), GEMINI_CONFIG, workdir)
+
+    for call in client.synthesize_speech.call_args_list:
+        voice = call.kwargs["voice"]
+        aliases = {
+            c.speaker_alias
+            for c in voice.multi_speaker_voice_config.speaker_voice_configs
+        }
+        used = {t.speaker for t in call.kwargs["input"].multi_speaker_markup.turns}
+        assert used <= aliases
+        assert voice.model_name == "gemini-2.5-flash-tts"
+
+
+def test_byte_sizing_is_not_character_sizing():
+    """For a non-ASCII script the two differ several times over, so measuring
+    the wrong one silently overshoots Google's cap."""
+    text = "日本語のテキスト"
+
+    assert utf8_size(text) > len(text)
+
+    turns = [(0, "host", text * 100), (1, "guest", text * 100)]
+    by_bytes = batch_turns(turns, 2000, size=utf8_size)
+    by_chars = batch_turns(turns, 2000, size=len)
+
+    assert len(by_bytes) > len(by_chars)
+
+
+def test_a_mid_stream_transfer_failure_is_a_provider_error(workdir):
+    """`convert` returns a lazy chunk iterator, so the HTTP body transfer
+    happens while collecting, not at the call. A reset part-way through would
+    otherwise escape as a raw httpx error."""
+    def exploding_chunks():
+        yield b"ID3partial"
+        raise ConnectionResetError("peer reset mid-body")
+
+    client = MagicMock()
+    client.text_to_dialogue.convert = create_autospec(
+        _real_dialogue_convert(), side_effect=[exploding_chunks()]
+    )
+
+    with patch("src.engine.tts.elevenlabs.ElevenLabs", return_value=client):
+        with pytest.raises(TTSProviderError, match="Text-to-Dialogue call failed"):
+            synthesise("elevenlabs", SCRIPT, ELEVEN_CONFIG, workdir)
+
+
+def test_gemini_multi_batches_a_non_ascii_script_by_bytes_not_characters(workdir):
+    """The helper is byte-aware, but that only matters if the backend passes it.
+    An ASCII script cannot tell the two apart — every character is one byte —
+    so this uses text where they differ threefold.
+    """
+    # Each character is 3 bytes in UTF-8.
+    text = "日本語" * 200  # 600 chars, 1800 bytes
+    script = Script(
+        title="t", summary="s",
+        turns=[{"speaker": "host" if i % 2 == 0 else "guest", "text": text}
+               for i in range(6)],
+    )
+    client = fake_google_client(count=32)
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini_multi", script, GEMINI_CONFIG, workdir)
+
+    limit = settings.ENGINE_GEMINI_MARKUP_BYTE_LIMIT
+    # Sized by characters these six turns would fit in one request; by bytes
+    # they cannot.
+    assert sum(len(t.text) for t in script.turns) <= limit
+    assert client.synthesize_speech.call_count > 1
+
+    for call in client.synthesize_speech.call_args_list:
+        markup = call.kwargs["input"].multi_speaker_markup
+        assert sum(len(t.text.encode("utf-8")) for t in markup.turns) <= limit

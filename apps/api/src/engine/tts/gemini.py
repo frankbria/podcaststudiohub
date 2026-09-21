@@ -27,7 +27,9 @@ from src.engine.tts.base import (
     TTSError,
     TTSProviderError,
     VoiceConfig,
+    batch_turns,
     turns_for_synthesis,
+    utf8_size,
 )
 from src.engine.tts.openai import synthesise_concurrently
 
@@ -124,15 +126,6 @@ class GeminiMultiTTS:
         client = texttospeech.TextToSpeechClient()
         model = _gemini_tts_model(voices.model)
 
-        markup = texttospeech.MultiSpeakerMarkup(
-            turns=[
-                texttospeech.MultiSpeakerMarkup.Turn(
-                    text=text,
-                    speaker=_HOST_ALIAS if speaker == "host" else _GUEST_ALIAS,
-                )
-                for _, speaker, text in turns
-            ]
-        )
         voice_params = texttospeech.VoiceSelectionParams(
             language_code=voices.language_code,
             model_name=model,
@@ -149,18 +142,41 @@ class GeminiMultiTTS:
                 ]
             ),
         )
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3
+        )
 
-        try:
-            response = client.synthesize_speech(
-                input=texttospeech.SynthesisInput(multi_speaker_markup=markup),
-                voice=voice_params,
-                audio_config=texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.MP3
-                ),
+        # Batched, for the same reason the ElevenLabs backend batches: the
+        # provider caps the request. Google measures its markup in bytes, and
+        # a long-form script is comfortably past the limit, so sending the
+        # whole conversation in one call would fail the entire episode.
+        segments = []
+        for batch in batch_turns(
+            turns, settings.ENGINE_GEMINI_MARKUP_BYTE_LIMIT, size=utf8_size
+        ):
+            markup = texttospeech.MultiSpeakerMarkup(
+                turns=[
+                    texttospeech.MultiSpeakerMarkup.Turn(
+                        text=text,
+                        speaker=_HOST_ALIAS if speaker == "host" else _GUEST_ALIAS,
+                    )
+                    for _, speaker, text in batch
+                ]
             )
-        except google_exceptions.GoogleAPIError as exc:
-            raise TTSProviderError(
-                f"Gemini multi-speaker TTS call failed: {exc}"
-            ) from exc
+            try:
+                response = client.synthesize_speech(
+                    input=texttospeech.SynthesisInput(multi_speaker_markup=markup),
+                    voice=voice_params,
+                    audio_config=audio_config,
+                )
+            except google_exceptions.GoogleAPIError as exc:
+                raise TTSProviderError(
+                    f"Gemini multi-speaker TTS call failed: {exc}"
+                ) from exc
+            segments.append(response.audio_content)
 
-        return concat_to_mp3([response.audio_content], workdir, "episode.mp3")
+        logger.info(
+            "Synthesised %d turns as %d multi-speaker request(s)",
+            len(turns), len(segments),
+        )
+        return concat_to_mp3(segments, workdir, "episode.mp3")

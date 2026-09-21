@@ -11,7 +11,7 @@ The fix is in the signature: a backend is handed the `workdir` it must write
 under, and hands back the one file it produced. Nothing else is negotiable.
 """
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -172,3 +172,44 @@ def turns_for_synthesis(script: Script) -> List[tuple]:
         for index, turn in enumerate(script.turns)
         if turn.text and turn.text.strip()
     ]
+
+
+def batch_turns(
+    turns: Sequence[tuple],
+    limit: int,
+    size: Callable[[str], int] = len,
+) -> List[List[tuple]]:
+    """Group consecutive turns into requests that stay under ``limit``.
+
+    Shared by every backend that sends more than one turn per request, because
+    every such provider caps the request. ``size`` is how that provider counts:
+    ElevenLabs bills Text-to-Dialogue by characters, Google measures its
+    multi-speaker markup in bytes, and for non-ASCII scripts those differ by
+    several times over.
+
+    Batching consecutive turns rather than one per request is the point: these
+    providers only produce conversational timing across the turns they see
+    together, so the cap is the only reason to ever split. A single turn larger
+    than the cap is sent alone — splitting mid-sentence would sound worse than
+    letting the provider reject it with a clear message.
+    """
+    batches: List[List[tuple]] = []
+    current: List[tuple] = []
+    used = 0
+
+    for turn in turns:
+        length = size(turn[2])
+        if current and used + length > limit:
+            batches.append(current)
+            current, used = [], 0
+        current.append(turn)
+        used += length
+
+    if current:
+        batches.append(current)
+    return batches
+
+
+def utf8_size(text: str) -> int:
+    """Byte length — what Google measures its markup in, unlike characters."""
+    return len(text.encode("utf-8"))

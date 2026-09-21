@@ -17,7 +17,7 @@ carries an override and why podcastfy's own ElevenLabs path is broken until #543
 """
 import logging
 from pathlib import Path
-from typing import Iterator, List, Optional, Sequence, Tuple
+from typing import Iterator, Optional
 
 import elevenlabs
 from elevenlabs.client import ElevenLabs
@@ -29,6 +29,7 @@ from src.engine.tts.base import (
     TTSError,
     TTSProviderError,
     VoiceConfig,
+    batch_turns,
     turns_for_synthesis,
 )
 
@@ -67,11 +68,17 @@ class ElevenLabsTTS:
                     model_id=model,
                     output_format=settings.ENGINE_ELEVENLABS_OUTPUT_FORMAT,
                 )
+                # Collected inside the try on purpose: `convert` returns a lazy
+                # chunk iterator, so the HTTP body transfer happens here, not
+                # above. A reset or read timeout part-way through the body
+                # would otherwise escape as a raw httpx error.
+                segments.append(_collect(audio))
+            except TTSProviderError:
+                raise
             except Exception as exc:  # noqa: BLE001 — the SDK raises ApiError subclasses plus bare httpx errors; every one maps to the same outcome for the caller
                 raise TTSProviderError(
                     f"ElevenLabs Text-to-Dialogue call failed: {exc}"
                 ) from exc
-            segments.append(_collect(audio))
 
         logger.info(
             "Synthesised %d turns as %d dialogue request(s)", len(turns), len(segments)
@@ -97,39 +104,6 @@ def _dialogue_model(stored: Optional[str]) -> str:
             "using %s instead", stored, settings.ENGINE_ELEVENLABS_MODEL,
         )
     return settings.ENGINE_ELEVENLABS_MODEL
-
-
-def batch_turns(
-    turns: Sequence[Tuple], char_limit: int
-) -> List[List[Tuple]]:
-    """Group consecutive turns into requests under the character cap.
-
-    Text-to-Dialogue's documented limit is the total across every input in one
-    request — 2,000 characters, which is *not* the 5,000 that applies to plain
-    single-voice Text-to-Speech on the same model. Exceeding it returns a
-    validation error, or worse, truncates a streaming response part-way.
-
-    Batching by consecutive turns, rather than per turn, is the whole point: the
-    model only produces conversational timing across the turns it sees together,
-    so bigger batches sound better and the cap is the only reason to split.
-    A single turn longer than the cap is sent alone — splitting mid-sentence
-    would be worse than letting the provider reject it with a clear message.
-    """
-    batches: List[List[Tuple]] = []
-    current: List[Tuple] = []
-    used = 0
-
-    for turn in turns:
-        length = len(turn[2])
-        if current and used + length > char_limit:
-            batches.append(current)
-            current, used = [], 0
-        current.append(turn)
-        used += length
-
-    if current:
-        batches.append(current)
-    return batches
 
 
 def _collect(audio) -> bytes:

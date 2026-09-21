@@ -201,16 +201,17 @@ def _chunk(body: str) -> List[str]:
     if len(body) <= min_chars:
         return [body]
 
-    target = max(len(body) // max_chunks, min_chars)
+    target = max(len(body) // max_chunks, min_chars, 1)
 
     chunks: List[str] = []
     current = ""
     for sentence in _SENTENCE_BREAK.split(body):
-        if current and len(current) + 1 + len(sentence) > target:
-            chunks.append(current)
-            current = sentence
-        else:
-            current = f"{current} {sentence}".strip()
+        for piece in _split_oversized(sentence, target):
+            if current and len(current) + 1 + len(piece) > target:
+                chunks.append(current)
+                current = piece
+            else:
+                current = f"{current} {piece}".strip()
     if current:
         chunks.append(current)
 
@@ -220,6 +221,38 @@ def _chunk(body: str) -> List[str]:
         # into the last allowed part rather than spending an extra round.
         chunks = chunks[: max_chunks - 1] + [" ".join(chunks[max_chunks - 1 :])]
     return chunks
+
+
+def _split_oversized(sentence: str, target: int) -> List[str]:
+    """Break a sentence that is itself bigger than a whole chunk.
+
+    Sentence boundaries are a heuristic, and extracted content routinely has
+    none: PDF and OCR text often arrives as one unpunctuated run. Without this,
+    such a source packs into a single chunk no matter how long it is, and
+    long-form quietly sends the entire body in one request.
+    """
+    if len(sentence) <= target:
+        return [sentence]
+
+    pieces: List[str] = []
+    current = ""
+    for word in sentence.split():
+        while len(word) > target:
+            # A single token longer than a whole chunk (a minified blob, a URL).
+            # Nothing but a hard cut will bound it.
+            if current:
+                pieces.append(current)
+                current = ""
+            pieces.append(word[:target])
+            word = word[target:]
+        if current and len(current) + 1 + len(word) > target:
+            pieces.append(current)
+            current = word
+        else:
+            current = f"{current} {word}".strip()
+    if current:
+        pieces.append(current)
+    return pieces
 
 
 # ---------------------------------------------------------------------------

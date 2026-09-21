@@ -561,3 +561,42 @@ def test_a_script_with_no_turns_is_rejected():
     with use_gemini(empty, empty):
         with pytest.raises(ScriptValidationError, match="no turns"):
             generate_script(SOURCES, ConversationConfig())
+
+
+def test_long_form_chunks_text_that_has_no_sentence_breaks():
+    """Extracted PDF/OCR content routinely arrives as one unpunctuated run.
+
+    Sentence boundaries are only a heuristic; without an oversize fallback the
+    whole body packs into one chunk and long-form silently sends the entire
+    source in a single request.
+    """
+    from src.engine.script import _chunk
+
+    unpunctuated = " ".join(f"word{i}" for i in range(2000))  # no . ! or ?
+
+    with patch.object(settings, "ENGINE_MAX_CHUNKS", 4), patch.object(
+        settings, "ENGINE_MIN_CHUNK_CHARS", 600
+    ):
+        chunks = _chunk(unpunctuated)
+
+    assert len(chunks) > 1, "unpunctuated source was not chunked at all"
+    assert len(chunks) <= 4
+    assert max(len(c) for c in chunks) < len(unpunctuated)
+    # Nothing is dropped on the floor.
+    assert "".join(chunks).replace(" ", "") == unpunctuated.replace(" ", "")
+
+
+def test_a_single_token_longer_than_a_chunk_is_still_bounded():
+    """A minified blob or a giant data URI has neither sentences nor spaces."""
+    from src.engine.script import _chunk
+
+    blob = "x" * 5000
+
+    with patch.object(settings, "ENGINE_MAX_CHUNKS", 5), patch.object(
+        settings, "ENGINE_MIN_CHUNK_CHARS", 600
+    ):
+        chunks = _chunk(blob)
+
+    assert len(chunks) > 1
+    assert max(len(c) for c in chunks) <= 1000  # target = 5000 // 5
+    assert "".join(chunks).replace(" ", "") == blob

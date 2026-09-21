@@ -694,3 +694,29 @@ re-applying the exact inverse edit — never a whole-file checkout.
   an explicit follow-up asking for its verdict. Don't keep waiting on a silent reviewer — its
   checks were a handful of greps; running them directly took one tool call. The blocking
   cross-family pass (codex) is the one that actually gates.
+
+## #541 / PR #573 — in-repo script generation engine
+
+- **A read-only reviewer subagent can still mutate the tree.** A `code-reviewer` agent ran
+  `git stash` / `git stash pop` to compare against the committed state. During that window
+  `git status` was clean and `git stash list` showed nothing new, so an uncommitted fix looked
+  permanently lost and re-applying it was already underway. Commit before launching review
+  agents, or give the reviewer its own worktree. Tell reviewers explicitly not to mutate.
+- **Check provider parameter *units*, not just names.** `google-genai`'s
+  `HttpOptions.timeout` is milliseconds while the repo's `GEMINI_API_TIMEOUT` is seconds —
+  passing it straight through yields a 120 ms timeout that would fail every real call, and
+  nothing about the signature says so. Read the field description.
+- **GPT-5-family models reject a non-default `temperature`** (`unsupported_value`). Mapping a
+  `creativity` setting onto `temperature` works on Gemini and 400s on OpenAI.
+- **Don't port a dead default just because it was there.** `AI_ARTIFACT_PATTERNS` contained
+  "based on the" and "according to my" — fine while the setting had no consumer, an instant
+  false-positive machine the moment one exists. Reviving dead config means re-reviewing it.
+- **A reviewer's "that looks fabricated" about model IDs is a knowledge-cutoff artifact.**
+  `gemini-3.5-flash` and `gpt-5.6-terra` both read as typos to a reviewer. Verify against live
+  docs, then put the source URL in the code comment so the next reviewer doesn't re-raise it.
+- **Guard tests that grep for a banned term will flag the comment explaining the ban.** The new
+  engine's docstrings mention what it exists to avoid, which tripped both the new guard and a
+  pre-existing repo-wide one. Match import statements in the new guard; reword the prose to
+  keep the existing guard untouched rather than loosening it.
+- **`filterwarnings = error` turns a test's own unclosed `open()` into a failure.** Use
+  `Path.read_text()` in tests.

@@ -19,7 +19,7 @@ deployment configs (`deployment/`).
 podcaststudiohub/
 ├── apps/
 │   ├── api/              # FastAPI backend (Python, uv)
-│   │   ├── src/          # Application code (api, routers, services, tasks, models, schemas, middleware, utils)
+│   │   ├── src/          # Application code (api, routers, services, tasks, models, schemas, middleware, utils, engine)
 │   │   ├── alembic/      # DB migrations (versions/ up to 018_…)
 │   │   ├── tests/        # pytest + pytest-bdd
 │   │   └── pyproject.toml
@@ -54,6 +54,24 @@ formally supports Next 16 / React 19 and is still patched; Auth.js v5 never left
 security-patch mode; Better Auth requires a database it owns, which FastAPI already owns. See
 `apps/web/docs/auth-direction-evaluation.md` for the full evaluation and the two re-evaluation
 triggers (chiefly: wanting social login / SSO / 2FA / passkeys).
+
+### In-repo generation engine (`apps/api/src/engine/`)
+
+Being built to replace podcastfy, one step at a time — epic #538. **Step 1 (#541) has landed:**
+the script layer. `generate_script(sources, config, longform)` returns a validated Pydantic
+`Script` (`turns: list[Turn(speaker, text)]` plus title/summary) by calling the provider SDKs
+(`google-genai`, `openai`) directly and asking for structured JSON. Prompts live in
+`src/engine/prompts/*.md` and are versioned here — nothing is fetched at runtime. Long-form
+chunks carry a rolling summary rather than the whole prior transcript. `persist_transcript`
+stores the script beside the audio under the same `podcasts/user-*/` prefix.
+
+Models come from `ENGINE_GEMINI_MODEL` / `ENGINE_OPENAI_MODEL` in `src/config.py`. Nothing under
+`src/engine/` may import `langchain`/`litellm` — that is the point of owning it, and
+`tests/test_dependency_reachability.py` enforces it at both source and import-graph level.
+
+**The live `generate_podcast_task` does not call this yet.** It still calls podcastfy. TTS is
+#542; the cut-over and the removal of the pin is #543. Until then the section below still
+describes the running system.
 
 ### Upstream Podcastfy Engine
 

@@ -1,139 +1,129 @@
-# #522 — Node 20 EOL → Node 24 LTS (branch feature/issue-522-node-24-lts)
-1. RED: `deployment/tests/test_node_runtime.py` pins: `.nvmrc`=24; no `node-version:` literal in workflows, every setup-node uses `node-version-file: '.nvmrc'`; `engines.node` + `@types/node` major == `.nvmrc`; deploy-dev rsyncs `.nvmrc` and selects node via nvm + fails on mismatch before every remote npm/pm2-npm call
-2. `.nvmrc` = `24`; 8 `node-version: '20'` → `node-version-file: '.nvmrc'` (rm-review: setup-node moved before `gh pr checkout` so stale PR branches without `.nvmrc` still work)
-3. deploy-dev.yml frontend step: rsync `.nvmrc`; `USE_NODE` prelude (source per-user nvm, `nvm install` from `.nvmrc` — idempotent, self-provisions, no global change; fail if major mismatch; log `node -v`) before `npm install`, `npm run build`, `pm2 start npm` (`--interpreter "$(command -v node)"` so a daemon started under system node doesn't run next under it)
-4. `engines.node >=24`, `@types/node ^24` + lockfile, dependabot comment, README/DEPLOYMENT_SETUP/setup-demo-vps.sh → 24
-- Deviation: VPS `node -v` before-state not captured (auto-mode denies SSH reads); deploy log is the evidence
-- [x] all 4 AC — DONE, merged in PR #561 (follow-up #564)
+# [P2.18] #541 — Engine step 1: in-repo script generation
 
-# #540 — [P2.17] Remove the unreachable quality-metrics surface (branch feature/issue-540-remove-dead-quality-metrics)
+Epic #538, step 1 of 3. Depends on #539 (done). Blocks #542, #543.
 
-Verified before deleting: nothing in `src/` writes `generation_progress["quality_metrics"]`
-(`grep -rn 'generation_progress\['` → only `tasks/podcast_generation.py` + `tasks/callbacks.py`,
-none set the key); `QualityMetricsCalculator` has no importer outside its own tests;
-`QualityScoreService` is reached only from the router; `apps/web/src` has zero `quality` hits;
-no docs/nginx/e2e reference the prefix. So every `/quality-metrics/*` response is a permanent
-404/empty.
-
-1. RED: `apps/api/tests/test_quality_metrics_removed.py` — the app exposes no `/quality-metrics`
-   route and `src.routers.quality_metrics` / the two services / the schema module are gone
-   (fails on `main` where they all exist).
-2. Delete `src/routers/quality_metrics.py`, `src/schemas/quality_metrics.py`,
-   `src/services/quality_metrics_service.py`, `src/services/quality_score_service.py`.
-3. Unregister: `src/main.py` (import + `include_router`), `src/routers/__init__.py`
-   (import + `__all__`).
-4. Delete the three test files that only covered the dead code
-   (`test_quality_metrics.py`, `test_quality_metrics_endpoint.py`,
-   `unit/test_quality_score_service.py`).
-5. File the revive half as a follow-up issue blocked on #541 (P2.18), citing this commit so the
-   scoring logic is one `git show` away.
-
-- Decision (autonomous, no fork): **removal, not 501** — the issue pre-decided it and grep
-  confirms no customer-facing surface calls these endpoints. 501 would keep 1,149 lines of
-  src alive to serve an error.
-- Decision (autonomous): delete `quality_score_service.py` + schemas too, rather than keeping
-  them "for P2.18". A service with zero call sites is the same dead code the issue is about;
-  git history is the archive (precedent: #539/PR #567 deleted `ScriptGenerationService` whole).
-- Scope: the "now" half only. Done-when boxes 2 and 3 are the revive and belong to the
-  follow-up issue, which is what closes them.
-
-- Deviation from step 1: **no RED guard test written.** For a pure deletion there is no
-  implementation code to drive, and a test asserting "this module is absent" guards against
-  nothing real — a partial deletion (module gone, import left) already fails every test that
-  imports the app. Matches the #539/PR #567 precedent, which deleted without a guard test.
-  Evidence moved to the demo instead.
+**Scope guard (from the issue):** this lands the module + unit tests with recorded
+provider responses. TTS is #542. Cut-over + dependency removal is #543. The live
+Celery task does **not** call this yet.
 
 ## Acceptance criteria
-- [x] No endpoint returns a permanent empty result — the surface is removed
-- [x] App starts and its route table contains no `/quality-metrics` path
-- [x] Revive half filed as a prioritized follow-up blocked on #541 — #570 `[P2.21]`
-- DONE, PR #569. Demo: `apps/api/docs/demos/issue540-remove-dead-quality-metrics.md`
-  (main: 64 OpenAPI paths, 3 quality routes answering 401 → branch: 61 paths, 0 quality routes,
-  404). Suite 1899 → 1802 passed (= the 97 collected tests in the 3 deleted files), 0 failures,
-  coverage 94.93% → 94.74%.
-- Loose end found while verifying, filed separately: `episode_service.py:459
-  update_generation_status` has zero callers and takes a caller-supplied `generation_progress`
-  dict — the mass-assignment shape #271 removed elsewhere. Filed as #571 `[P3.13]`.
-- Retracted: I also filed the tracked sample transcripts as dead weight (#572) and closed it on
-  verifying — they are at repo root `data/transcripts/`, not `apps/api/`, `.gitignore` documents
-  keeping them on purpose, and podcastfy still creates that directory at runtime. Lesson: the
-  path a grep prints is relative to the grep's cwd; confirm with `git ls-files <abs path>` before
-  filing.
 
-# Epic — Replace the podcastfy engine with a thin in-house generation engine
+- [ ] `generate_script` returns a validated `Script` for url/text/pdf-extracted input, short and long-form
+- [ ] No runtime network call other than the LLM provider
+- [ ] Prompts in-repo; a test asserts no `langchain`/`litellm` import under `src/engine`
+- [ ] Transcript persistence helper exists and is covered
 
-Source: 2026-09-17 deep dive (engine debt vs ElevenLabs' podcast offering). Verdict: keep our own
-script layer, drop `podcastfy==0.4.1`, adopt ElevenLabs Text-to-Dialogue (`eleven_v3`) as one TTS
-backend. Do NOT move the product onto `POST /v1/studio/podcasts` (enum durations, no own-script
-input, single vendor).
+## Files
 
-Prior art checked: #446 (fork not justified on security alone — this epic is the "reason beyond
-security" its doc anticipated), #363 (0.4.3 deferred), #518 (audit-gate toil; its option 4 is this
-epic), #32/#21 (transcript validation + quality endpoints, both now dead paths).
+```
+apps/api/src/engine/__init__.py            public API re-exports
+apps/api/src/engine/models.py              Turn, Script, ConversationConfig
+apps/api/src/engine/llm.py                 provider clients (gemini + openai), structured JSON
+apps/api/src/engine/script.py              generate_script, chunking, rolling summary, validation
+apps/api/src/engine/transcript.py          persist_transcript helper
+apps/api/src/engine/prompts/short_form.md
+apps/api/src/engine/prompts/long_form.md
+apps/api/src/config.py                     engine settings (revive the orphaned validation block)
+apps/api/pyproject.toml                    add openai + google-genai as direct deps
+apps/api/tests/unit/test_engine_script.py
+apps/api/tests/unit/test_engine_transcript.py
+apps/api/tests/unit/fixtures/engine/*.json recorded provider payloads
+apps/api/tests/test_dependency_reachability.py  + engine import guards
+```
 
-## Issues (dependency order)
-- Epic  [P2.15] tracking issue
-- [P2.16] delete dead `ScriptGenerationService` + tests — independent, first
-- [P2.17] quality-metrics endpoints are unreachable — hide now, revive after P2.18 persists transcripts
-- [P2.18] engine step 1: in-repo script generation (structured turns, prompts in repo, direct SDK, transcript persisted, real progress)
-- [P2.19] engine step 2: TTS adapter interface (ElevenLabs v3 dialogue, Gemini multi, Edge, OpenAI); fixes cwd temp race + global key
-- [P2.20] engine step 3: cut over task, remove pin, drop 31 suppressions, docs; closes #518 root cause
-- [P3.9] confirm ElevenLabs commercial terms in writing before launch depends on it
+## Steps (TDD — test first at each step)
 
-## Not filed (YAGNI)
-- Studio `create-podcast` "quick mode": revisit only if a customer asks for zero-config generation.
-- Interim patch for the gemini_multi cwd race: lands in P2.19; no separate fix.
+1. **`models.py`** — `Turn(speaker: Literal["host","guest"], text: str)`,
+   `Script(title, summary, turns: list[Turn])`, `ConversationConfig` with a default for
+   every field and `extra="ignore"` so a `conversation_templates.config` dict (which also
+   carries podcastfy-only keys like `text_to_speech`) maps straight in.
+   Tests: unknown keys dropped, `None`/partial config yields defaults, speaker literal enforced.
 
-# #503 — Rate-limiter fail-open observable (branch feature/issue-503-rate-limiter-fail-open-observable)
-1. `rate_limiter.py`: warning→error; name the sentinel (`FAIL_OPEN_REMAINING`); count fail-opens in a process-local `fail_open_stats`
-2. `dependencies.py`: consume the sentinel — emit a distinct `rate_limit_fail_open` error event with endpoint + ip
-3. `/ready`: report `rate_limiter.fail_open_count` / `last_fail_open_at` (informational, does not gate readiness — Redis check already does)
-- [x] Redis outage during login → error-level signal   - [x] fail-open observable beyond a log line   - [x] sentinel removed — DONE, merged in PR #556
+2. **`llm.py`** — `generate_json(prompt, system, config, schema) -> BaseModel`.
+   - Gemini: `genai.Client(api_key=...).models.generate_content(model=…, contents=…,
+     config=types.GenerateContentConfig(system_instruction=…, temperature=…,
+     max_output_tokens=…, response_mime_type="application/json", response_schema=Schema))`
+   - OpenAI: `client.chat.completions.parse(model=…, messages=…, response_format=Schema)`
+   - Timeout/retries come from the client constructor, not a hand-rolled loop.
+   - Raises `EngineError` on a missing API key or an unparseable payload.
+   Tests: both providers called with the right kwargs (autospec against the real SDK
+   signature, per `tests/unit/test_podcast_generation_task.py`); missing key raises.
 
----
+3. **Prompts** — `prompts/short_form.md`, `prompts/long_form.md`, loaded with
+   `importlib.resources` and `str.format`-rendered from `ConversationConfig`.
+   Substance ported from the four pinned Hub prompts (fetched once at dev time from the
+   commit hashes in `docs/podcastfy-advisory-reachability.md:151-154`): persona roles,
+   conversation style, dialogue structure, engagement techniques, word count, language,
+   the "discuss the provided input, do not invent a topic" guardrail, and the long-form
+   part-index instructions (open on part 0, wrap up on the last, alternate speakers
+   across the seam). Output-format instructions are **not** ported — podcastfy's ask for
+   `<Person1>` free text; ours asks for the JSON schema.
+   Test: both prompt files ship in the wheel and render with no unreplaced placeholder.
 
-# #518 [P2.10] Audit gate: stop hand-patching unreachable litellm CVEs
+4. **`script.py` — `generate_script(sources, config, longform=False, on_progress=None)`**
+   - Short form: one call, validate, one retry on schema-or-validation failure.
+   - Long form: chunk on sentence boundaries (`ENGINE_MAX_CHUNKS`, `ENGINE_MIN_CHUNK_CHARS`
+     — same 8/600 defaults podcastfy used), then per chunk pass **only** the accumulated
+     per-chunk summaries plus the last two turns as context. Each chunk call already
+     returns a `summary` field, so the rolling summary costs no extra LLM call. This is
+     the fix for the O(n²) full-transcript resend.
+   - `on_progress(stage, percent)` fires per chunk — the seam #543 needs for real
+     extracting → scripting → synthesising progress.
+   - Validation (ported from the deleted `ScriptGenerationService._validate_transcript`):
+     both speakers present with non-empty text, ≥ `MIN_TRANSCRIPT_WORDS` combined,
+     ≥ `MIN_CONVERSATION_TURNS` speaker transitions, neither speaker above
+     `MAX_SPEAKER_IMBALANCE_PERCENT` of total words, no `AI_ARTIFACT_PATTERNS` hit.
+   Tests: short form happy path; long form stitches N chunks and never passes a prior
+   chunk's turns as context; each validation rule rejects; retry succeeds on the second
+   response and gives up on the second failure; `on_progress` called once per chunk.
 
-DONE — merged in PR #558. Decision (options 2+3 from the issue, autonomous — no fork):
-- pip-audit runs with `-f json`; a small gate script classifies findings:
-  - package `litellm` → **non-blocking**: `::warning::` annotation + step summary line each
-  - id/alias in the enumerated non-litellm ignore list → ignored (unchanged, 11 IDs)
-  - anything else → **fails**, listed loudly
-  - missing/invalid JSON or skipped deps → fails closed
-- The 27 enumerated litellm IDs are deleted.
-- Compensating control strengthened: `litellm` must not load *at all* (not just `litellm.proxy`),
-  including after constructing `ContentGenerator` exactly as `process_content` does (model_name=None
-  → config gemini → ChatGoogleGenerativeAI, not ChatLiteLLM). That makes every litellm advisory —
-  proxy or core — unreachable while the test is green.
+5. **`transcript.py` — `persist_transcript(script, user_id, episode_id)`** → S3 key
+   `podcasts/user-{user_id}/episode-{episode_id}.transcript.json` via the existing
+   `build_podcast_s3_key` sibling convention, with the `LOCAL_AUDIO_STORAGE_PATH`
+   fallback mirroring `_persist_local_audio`. Returns the path/key to write into
+   `episode.transcript_path` (today always `None` — #309).
+   Tests: S3 path and local-fallback path, JSON round-trips back into `Script`.
 
-Steps
-1. RED: tests for gate script (subprocess on fixture JSON): litellm-only → exit 0 + warnings;
-   ignored non-litellm → exit 0; unknown non-litellm → exit 1; bad JSON → exit 1; skipped dep → exit 1
-2. GREEN: `apps/api/scripts/pip_audit_gate.py`; `security-audit.sh` runs pip-audit json → gate
-3. Strengthen `test_dependency_reachability.py` litellm probe
-4. Docs: script header + `docs/podcastfy-advisory-reachability.md` record the decision and the
-   compensating control
+6. **`config.py`** — add `ENGINE_LLM_PROVIDER` (`gemini` default, matching today's live
+   behaviour), `ENGINE_GEMINI_MODEL`, `ENGINE_OPENAI_MODEL`, `ENGINE_MAX_OUTPUT_TOKENS`,
+   `ENGINE_MAX_CHUNKS`, `ENGINE_MIN_CHUNK_CHARS`, `OPENAI_API_TIMEOUT`,
+   `OPENAI_API_MAX_RETRIES`. Update `.env.example`.
 
-Done when
-- [x] New litellm advisory does not block unrelated PRs
-- [x] Reachable (non-litellm, unlisted) advisory still fails loudly
-- [x] Replacement documented in script header + reachability doc
-- [x] Decision records test_dependency_reachability.py as the compensating control
+7. **`test_dependency_reachability.py`** — add the two guards, matching the file's
+   existing Pattern A/B: a source grep over `src/engine/**.py` for `langchain`/`litellm`
+   with a floor-count assertion, and a subprocess probe that imports the engine and
+   asserts neither appears in `sys.modules`.
 
-## #530 — deterministic tiebreak on paginated list queries (2026-09-18)
-- [x] tests/pagination_tiebreak.py helper: force created_at tie, page 2-at-a-time, assert ids == id order
-- [x] one tie test per service: projects, episodes (sort_by created_at asc+desc), episode_layouts, content, tts_configs, conversation_templates, distribution_targets, teams, RSS _get_completed_episodes (stable across two calls)
-- [x] append `<Model>.id` (same direction) as final sort key at every site; episode_service after the chosen sort_column
-- Decisions: teams list added (paginated, not in issue list); unpaginated get_members/get_invitations left alone.
+8. **`pyproject.toml`** — `openai` and `google-genai` become direct deps (both are
+   already in the closure transitively; `openai` stays under podcastfy's `<2` ceiling
+   until #543 removes the pin).
 
-## [P2.16] #539 — delete dead ScriptGenerationService (branch feature/issue-539-delete-dead-script-service)
-Plan source: issue body ("Fix"). No architectural fork — approved autonomously.
-1. `git rm` `src/services/script_generation_service.py` (586) + `tests/test_script_generation.py` (1302)
-2. Drop the `ContentGenerator` import from the `main.py` lifespan guard — it existed only for this service
-3. Keep `tests/test_imports.py` and `tests/test_dependency_reachability.py` as-is: they import
-   `ContentGenerator` to test the *package install* and the CI-enforced advisory-reachability claims
-   (#446), not this service. Deleting those imports would weaken a deliberate CI gate.
-4. Coverage: file was 97.31% of 186 stmts; overall 94.88% → 94.81% projected. Gate is 85%, no risk.
-- Deviation from the issue: the `podcastfy-0.4.3-evaluation.md` row justified "no impact" by pointing at
-  `script_generation_service.py` pinning `GEMINI_MODEL_NAME`. With the service gone the live path pins
-  **no** LLM model, so the 0.4.3 default change *would* swap our model. Row rewritten to say so.
+## Decisions made autonomously (no architectural fork)
+
+- **Model defaults verified against live provider docs today, not memory:**
+  `gemini-3.5-flash` (GA, balances cost/quality; podcastfy's `gemini-1.5-pro-latest` is a
+  deprecated alias) and `gpt-5.6-terra` (OpenAI's current "balances intelligence and
+  cost" tier). Both are settings, so #543 can retune without a code change.
+- **`generate_script` is synchronous.** Celery tasks here are sync, and `asyncio.run`
+  inside a Celery worker is a known trap in this repo.
+- **Rolling summary is reused from the `Script.summary` the model already returns**
+  per chunk, rather than a separate summarisation call. No extra spend.
+- **Reused `MAX_SPEAKER_IMBALANCE_PERCENT` (80%) instead of adding a ratio knob.**
+  The issue says "within a ratio"; an 80%-of-total cap is that constraint, and the
+  setting already exists in `config.py` (orphaned since #539 deleted its only consumer).
+  Same for `MIN_TRANSCRIPT_WORDS`, `MIN_CONVERSATION_TURNS`, `AI_ARTIFACT_PATTERNS`.
+- **Tightened the `AI_ARTIFACT_PATTERNS` default.** The inherited list contains
+  `"based on the"` and `"according to my"`, which match ordinary podcast speech and would
+  reject good scripts. The setting has had no consumer since #539, so tightening it now
+  has no blast radius. New list targets refusal/assistant boilerplate only.
+- **Turn count is a floor, not a range.** "Within bounds" upper-bounds naturally via
+  `word_count`; a separate max would reject long-form by construction.
+- **One retry on schema-or-validation failure, not a configurable count.**
+  `TRANSCRIPT_VALIDATION_MAX_RETRIES` stays unused rather than gaining a second meaning.
+
+## Known risks
+
+- `filterwarnings = error` — a new SDK import that warns will fail the suite; narrow
+  ignore with a comment if so (precedent: the `google.generativeai` FutureWarning entry).
+- `google-genai` is pinned low (1.2.0) by the current closure; `response_schema` is
+  verified present at that version.

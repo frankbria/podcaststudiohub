@@ -1,0 +1,72 @@
+[
+  {
+    "title": "The Signal Room: Vector Databases, Part One",
+    "summary": "Opened the episode and framed the question: what a vector database is actually for, and why exact-match indexes were the wrong tool for similarity search.",
+    "turns": [
+      {
+        "speaker": "host",
+        "text": "Welcome to The Signal Room. We've got a long one today, because vector search is one of those topics where the summary version is actively misleading."
+      },
+      {
+        "speaker": "guest",
+        "text": "It is. People hear database and picture rows and a WHERE clause, and that mental model falls apart immediately."
+      },
+      {
+        "speaker": "host",
+        "text": "Because you're not asking for a match, you're asking for nearness."
+      },
+      {
+        "speaker": "guest",
+        "text": "Nearness in a few hundred dimensions, which our intuitions are terrible at. A B-tree gives you nothing here. There's no ordering to exploit."
+      }
+    ]
+  },
+  {
+    "title": "The Signal Room: Vector Databases, Part Two",
+    "summary": "Covered approximate nearest neighbour indexes, the recall-versus-latency trade-off, and why HNSW became the default choice.",
+    "turns": [
+      {
+        "speaker": "host",
+        "text": "So if you can't index it the usual way, what replaced the B-tree?"
+      },
+      {
+        "speaker": "guest",
+        "text": "Approximate nearest neighbour structures. HNSW is the one most people end up on — a layered graph where you greedily walk toward your query."
+      },
+      {
+        "speaker": "host",
+        "text": "Approximate being the load-bearing word."
+      },
+      {
+        "speaker": "guest",
+        "text": "You give up a guarantee of the exact top results for something that returns in single-digit milliseconds. And you tune that knowingly — recall against latency, and you should be measuring recall, not assuming it."
+      }
+    ]
+  },
+  {
+    "title": "The Signal Room: Vector Databases, Part Three",
+    "summary": "Closed on operational realities: re-embedding costs when the model changes, filtering interacting badly with the index, and a wrap-up.",
+    "turns": [
+      {
+        "speaker": "host",
+        "text": "Before we wrap, the thing nobody warns you about: what happens when you change embedding models?"
+      },
+      {
+        "speaker": "guest",
+        "text": "You re-embed everything. The old vectors are meaningless in the new space. That's a migration, and on a large corpus it's a real one."
+      },
+      {
+        "speaker": "host",
+        "text": "And metadata filtering, which people assume is free."
+      },
+      {
+        "speaker": "guest",
+        "text": "It fights the index. Filter hard enough and the graph walk can't find enough candidates, so recall quietly collapses. Test it with your real filters, not a synthetic benchmark."
+      },
+      {
+        "speaker": "host",
+        "text": "Good place to stop. Thanks for listening, and we'll see you next week."
+      }
+    ]
+  }
+]

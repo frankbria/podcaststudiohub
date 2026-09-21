@@ -1,4 +1,4 @@
-# [P2.19] #542 — Engine step 2: in-repo TTS layer
+# [P2.19] #542 — Engine step 2: in-repo TTS layer — ✅ MERGED (PR #577, 44630a0)
 
 Epic #538, step 2 of 3. Depends on #541 (`Script`/`Turn`, merged as PR #573).
 Blocks #543. Previous plan for #541 is in git history at `5b43ab1`.
@@ -9,10 +9,10 @@ still calls podcastfy until #543.
 
 ## Acceptance criteria
 
-- [ ] Five backends behind one interface; all temp files under `workdir`
-- [ ] No module-global API keys; a test asserts `openai.api_key` is untouched after synthesis
-- [ ] ElevenLabs backend uses Text-to-Dialogue on `eleven_v3` and respects the per-request character cap
-- [ ] Concurrent per-turn synthesis where the backend is single-speaker
+- [x] Five backends behind one interface; all temp files under `workdir`
+- [x] No module-global API keys; a test asserts `openai.api_key` is untouched after synthesis
+- [x] ElevenLabs backend uses Text-to-Dialogue on `eleven_v3` and respects the per-request character cap
+- [x] Concurrent per-turn synthesis where the backend is single-speaker
 
 ## Decisions taken before writing code
 
@@ -101,3 +101,23 @@ apps/api/pytest.ini                     register the live marker
   floor in `dependencies` and letting the override resolve it.
 - Gemini-TTS model ids are newer than most training data; they came off Google's current
   docs and go into settings with the source cited, per the #541 precedent.
+
+
+---
+
+## Outcome
+
+Merged 2026-09-21 as PR #577 (`44630a0`), 7 commits squashed. 1946 backend tests
+passing (baseline 1863), 547 frontend, `src/engine/tts` at 100% per file except
+the Protocol stub, all 13 CI checks green, final GLM verdict "no defects found".
+
+**Five review rounds, 14 findings, all real.** Nine concerned rows the app has
+already written — shapes no fully-populated fixture produces. Two were defects
+in the previous round's own fix. The durable lesson is in `lessons.md`: read the
+validators, not the examples.
+
+Deferred, filed rather than dropped: #578 (Google credentials wired to nothing),
+#579 (every provider key revoked — the engine has never reached a real
+provider). #544 re-prioritised to P2.19.1 so it sorts ahead of #543.
+
+Demo: `apps/api/docs/demos/issue542-engine-tts-layer.md`.

@@ -746,3 +746,23 @@ re-applying the exact inverse edit — never a whole-file checkout.
   duplicate/in-progress/lock short-circuits turned a redelivery of a *completed* episode into
   a failure, and the retries-exhausted handler then overwrote its status. Guards go after the
   short-circuits and before the paid work.
+
+## #542 review rounds — the pattern worth keeping
+
+Five rounds, 14 findings, all real. Two clusters, both avoidable:
+
+- **Nine were about rows already in the database.** Fixtures were built
+  fully-populated; the app writes rows that are not. `GEMINI_REQUIRED_KEYS` is
+  only `{model, language_code}`, the UI stored `eleven_multilingual_v2` and a
+  Studio *voice name* in the `model` field, and write validation checks key
+  presence but not type — so numeric voices and empty language codes store
+  cleanly. **Read the validator and the writer before trusting a fixture.**
+- **Two were defects in the previous round's fix.** Independent fixes composed
+  into a broken whole (fallback voices + suppressed model), and a size cap
+  counted the wrong quantity — with the test repeating the same arithmetic, so
+  it stayed green. **After fixing, ask what the new code assumes, and make the
+  test measure the real thing, not a proxy for it.**
+
+Corollary for mutation checks: a mutation that survives is a test gap, not a
+nuisance. Swapping byte-sizing for char-sizing survived because every fixture
+was ASCII — the helper was tested, but nothing proved the caller used it.

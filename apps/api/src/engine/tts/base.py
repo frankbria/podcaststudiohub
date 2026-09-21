@@ -127,7 +127,11 @@ class VoiceConfig(BaseModel):
                 host_voice=host,
                 guest_voice=guest,
                 model=raw.get("model"),
-                language_code=raw.get("language_code", "en-US"),
+                # `or` not `get(..., default)`: write validation checks key
+            # presence only, so a present-but-empty value stores cleanly and
+            # would be sent verbatim. Every neighbouring field already
+            # treats present-empty as absent.
+            language_code=raw.get("language_code") or "en-US",
                 options={k: v for k, v in raw.items() if k not in _NAMED_KEYS},
                 used_default_voices=defaulted,
             )
@@ -177,7 +181,7 @@ def turns_for_synthesis(script: Script) -> List[tuple]:
 def batch_turns(
     turns: Sequence[tuple],
     limit: int,
-    size: Callable[[str], int] = len,
+    size: Callable[[tuple], int] = lambda turn: len(turn[2]),
 ) -> List[List[tuple]]:
     """Group consecutive turns into requests that stay under ``limit``.
 
@@ -198,7 +202,7 @@ def batch_turns(
     used = 0
 
     for turn in turns:
-        length = size(turn[2])
+        length = size(turn)
         if current and used + length > limit:
             batches.append(current)
             current, used = [], 0

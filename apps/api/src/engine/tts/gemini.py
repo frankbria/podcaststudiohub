@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 
 from google.api_core import exceptions as google_exceptions
+from google.auth import exceptions as google_auth_exceptions
 from google.cloud import texttospeech
 
 from src.config import settings
@@ -39,6 +40,22 @@ logger = logging.getLogger(__name__)
 # stable; only their pairing with speaker_id matters to the API.
 _HOST_ALIAS = "Host"
 _GUEST_ALIAS = "Guest"
+
+
+# Serialized bytes a turn costs beyond its text and speaker alias: protobuf
+# field tags and length prefixes. Measured against a real MultiSpeakerMarkup at
+# 10-11 bytes per turn; 12 leaves room for the extra length byte a turn over
+# 127 bytes needs. Counting only the text understates every batch, and since
+# packing is greedy that understatement is exactly what pushes the request over
+# Google's cap.
+_TURN_FRAMING_BYTES = 12
+
+
+def _markup_turn_size(turn) -> int:
+    """What one turn contributes to the serialized markup."""
+    _, speaker, text = turn
+    alias = _HOST_ALIAS if speaker == "host" else _GUEST_ALIAS
+    return utf8_size(text) + utf8_size(alias) + _TURN_FRAMING_BYTES
 
 
 def _is_gemini_tts_model(value) -> bool:
@@ -67,6 +84,23 @@ def _gemini_tts_model(stored) -> str:
     return settings.ENGINE_GEMINI_TTS_MODEL
 
 
+def _client() -> "texttospeech.TextToSpeechClient":
+    """Construct the client inside the error boundary.
+
+    google-cloud clients resolve default credentials eagerly in ``__init__``,
+    and a host without them raises ``DefaultCredentialsError`` -- which is a
+    ``GoogleAuthError``, *not* a ``GoogleAPIError``, so it would escape
+    unclassified. Nothing in this repo wires up ADC today, which makes that the
+    likely first failure rather than an exotic one.
+    """
+    try:
+        return texttospeech.TextToSpeechClient()
+    except google_auth_exceptions.GoogleAuthError as exc:
+        raise TTSProviderError(
+            f"Google Cloud TTS credentials are unavailable: {exc}"
+        ) from exc
+
+
 class GeminiTTS:
     """Single-speaker synthesis, one request per turn."""
 
@@ -77,7 +111,7 @@ class GeminiTTS:
         if not turns:
             raise TTSError("Script has no speakable turns")
 
-        client = texttospeech.TextToSpeechClient()
+        client = _client()
         audio_config = texttospeech.AudioConfig(
             audio_encoding=texttospeech.AudioEncoding.MP3
         )
@@ -123,7 +157,7 @@ class GeminiMultiTTS:
         if not turns:
             raise TTSError("Script has no speakable turns")
 
-        client = texttospeech.TextToSpeechClient()
+        client = _client()
         model = _gemini_tts_model(voices.model)
 
         voice_params = texttospeech.VoiceSelectionParams(
@@ -152,7 +186,9 @@ class GeminiMultiTTS:
         # whole conversation in one call would fail the entire episode.
         segments = []
         for batch in batch_turns(
-            turns, settings.ENGINE_GEMINI_MARKUP_BYTE_LIMIT, size=utf8_size
+            turns,
+            settings.ENGINE_GEMINI_MARKUP_BYTE_LIMIT,
+            size=_markup_turn_size,
         ):
             markup = texttospeech.MultiSpeakerMarkup(
                 turns=[

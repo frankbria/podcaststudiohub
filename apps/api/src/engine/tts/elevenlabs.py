@@ -55,7 +55,11 @@ class ElevenLabsTTS:
         model = _dialogue_model(voices.model)
 
         segments = []
-        for batch in batch_turns(turns, settings.ENGINE_ELEVENLABS_CHAR_LIMIT):
+        for batch in batch_turns(
+            turns,
+            settings.ENGINE_ELEVENLABS_CHAR_LIMIT,
+            size=lambda turn: len(turn[2]),
+        ):
             inputs = [
                 elevenlabs.DialogueInput(
                     text=text, voice_id=voices.voice_for(speaker)

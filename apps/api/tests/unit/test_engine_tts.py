@@ -404,6 +404,18 @@ def test_audio_tags_reach_the_provider_untouched(workdir):
 # Google backends
 # --------------------------------------------------------------------------
 
+def _serialized_markup_bytes(call) -> int:
+    """The markup's real serialized size — what Google's limit applies to.
+
+    Summing `len(turn.text)` measures the wrong thing: each turn also carries a
+    speaker alias and its protobuf framing. Asserting on the text alone is the
+    same mistake the production code made, so the test would have passed while
+    the request went over the cap.
+    """
+    markup = call.kwargs["input"].multi_speaker_markup
+    return type(markup).pb(markup).ByteSize()
+
+
 def fake_google_client(count: int = 8):
     client = MagicMock()
     client.synthesize_speech.side_effect = [
@@ -1080,9 +1092,9 @@ def test_gemini_multi_splits_a_script_past_the_markup_byte_limit(workdir):
 
     assert client.synthesize_speech.call_count > 1
     for call in client.synthesize_speech.call_args_list:
-        markup = call.kwargs["input"].multi_speaker_markup
-        total = sum(len(t.text.encode("utf-8")) for t in markup.turns)
-        assert total <= settings.ENGINE_GEMINI_MARKUP_BYTE_LIMIT
+        assert _serialized_markup_bytes(call) <= (
+            settings.ENGINE_GEMINI_MARKUP_BYTE_LIMIT
+        )
 
 
 def test_gemini_multi_preserves_turn_order_across_batches(workdir):
@@ -1131,8 +1143,8 @@ def test_byte_sizing_is_not_character_sizing():
     assert utf8_size(text) > len(text)
 
     turns = [(0, "host", text * 100), (1, "guest", text * 100)]
-    by_bytes = batch_turns(turns, 2000, size=utf8_size)
-    by_chars = batch_turns(turns, 2000, size=len)
+    by_bytes = batch_turns(turns, 2000, size=lambda t: utf8_size(t[2]))
+    by_chars = batch_turns(turns, 2000, size=lambda t: len(t[2]))
 
     assert len(by_bytes) > len(by_chars)
 
@@ -1181,5 +1193,56 @@ def test_gemini_multi_batches_a_non_ascii_script_by_bytes_not_characters(workdir
     assert client.synthesize_speech.call_count > 1
 
     for call in client.synthesize_speech.call_args_list:
-        markup = call.kwargs["input"].multi_speaker_markup
-        assert sum(len(t.text.encode("utf-8")) for t in markup.turns) <= limit
+        assert _serialized_markup_bytes(call) <= limit
+
+
+def test_the_counted_size_covers_what_is_actually_serialized(workdir):
+    """Regression for a defect in the cap itself: counting only turn text left
+    each turn's speaker alias and field framing uncounted, and because packing
+    is greedy every batch sat right at the counted limit — so the uncounted
+    remainder pushed the real request over it.
+
+    40 turns of 100 bytes counted 4,000 and serialized to 4,420.
+    """
+    script = Script(
+        title="t", summary="s",
+        turns=[{"speaker": "host" if i % 2 == 0 else "guest", "text": "y" * 100}
+               for i in range(40)],
+    )
+    client = fake_google_client(count=32)
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini_multi", script, GEMINI_CONFIG, workdir)
+
+    for call in client.synthesize_speech.call_args_list:
+        assert _serialized_markup_bytes(call) <= (
+            settings.ENGINE_GEMINI_MARKUP_BYTE_LIMIT
+        )
+
+
+def test_missing_google_credentials_is_a_provider_error(workdir):
+    """google-cloud clients resolve credentials eagerly in __init__, and
+    DefaultCredentialsError is a GoogleAuthError — not a GoogleAPIError — so it
+    would escape unclassified. Nothing in this repo wires up ADC, which makes
+    it the likely first failure rather than an exotic one."""
+    from google.auth import exceptions as google_auth_exceptions
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient",
+        side_effect=google_auth_exceptions.DefaultCredentialsError("no ADC"),
+    ):
+        with pytest.raises(TTSProviderError, match="credentials are unavailable"):
+            synthesise("gemini_multi", SCRIPT, GEMINI_CONFIG, workdir)
+
+
+def test_a_present_but_empty_language_code_falls_back_to_the_default():
+    """Write validation checks key presence only, so this row stores cleanly —
+    and an empty language code is an INVALID_ARGUMENT at synthesis. Every
+    neighbouring field already treats present-empty as absent."""
+    voices = VoiceConfig.from_tts_config(
+        {"model": "gemini-2.5-flash-tts", "language_code": ""}, "gemini_multi"
+    )
+
+    assert voices.language_code == "en-US"

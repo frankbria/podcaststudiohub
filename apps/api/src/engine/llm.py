@@ -85,8 +85,11 @@ def _generate_gemini(
     # time — exactly the defect #542 is fixing in podcastfy's OpenAI provider.
     client = genai.Client(
         api_key=settings.GEMINI_API_KEY,
-        # HttpOptions.timeout is MILLISECONDS; GEMINI_API_TIMEOUT is seconds.
-        # Passing the seconds value through would time out after 120ms.
+        # MILLISECONDS, while GEMINI_API_TIMEOUT is seconds — passing the
+        # seconds value straight through would time out after 120ms. Verified
+        # against the pinned google-genai: `_api_client.py` divides this by
+        # 1000.0 before handing it to the transport. The field's own docstring
+        # says "in milliseconds" too. Re-check both if the pin ever moves.
         http_options=types.HttpOptions(timeout=settings.GEMINI_API_TIMEOUT * 1000),
     )
     try:
@@ -129,6 +132,11 @@ def _generate_openai(
 
     client = openai.OpenAI(
         api_key=settings.OPENAI_API_KEY,
+        # SECONDS here, unlike the Gemini client above. openai-python hands this
+        # to httpx, whose timeouts are seconds (`_constants.py` defaults to
+        # `httpx.Timeout(timeout=600, connect=5.0)` — ten minutes, not 600ms).
+        # Do not "fix" this to match the * 1000 above: that would be a
+        # 120,000-second timeout, i.e. no timeout at all.
         timeout=settings.OPENAI_API_TIMEOUT,
     )
     # `creativity` is deliberately not forwarded: GPT-5-family models reject any

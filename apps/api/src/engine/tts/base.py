@@ -30,6 +30,10 @@ _NAMED_KEYS = frozenset(
     {"voice_1", "voice_2", "voice_1_id", "voice_2_id", "model", "language_code"}
 )
 
+# The providers whose stored config is valid without voices -- see
+# GEMINI_REQUIRED_KEYS in src/schemas/tts_configuration.py.
+_VOICE_OPTIONAL_PROVIDERS = frozenset({"gemini", "gemini_multi"})
+
 
 class TTSError(EngineError):
     """Speech synthesis could not be performed (bad config, unknown provider)."""
@@ -72,7 +76,7 @@ class VoiceConfig(BaseModel):
 
     @classmethod
     def from_tts_config(
-        cls, config: Optional[Dict[str, Any]]
+        cls, config: Optional[Dict[str, Any]], provider: Optional[str] = None
     ) -> "VoiceConfig":
         """Build from the raw ``tts_configurations.config`` JSONB.
 
@@ -80,6 +84,15 @@ class VoiceConfig(BaseModel):
         Pydantic error when a voice is missing, because the caller is a Celery
         task that needs to tell "this episode is misconfigured" apart from "this
         code is wrong".
+
+        ``provider`` decides whether a missing voice is an error at all. The
+        Google providers are the exception: ``GEMINI_REQUIRED_KEYS`` in
+        ``src/schemas/tts_configuration.py`` is only ``{model, language_code}``,
+        so a stored row that passed validation legitimately carries no voices
+        and every existing Gemini episode would otherwise fail at the #543
+        cut-over. Those fall back to the configured prebuilt speakers; the other
+        three providers require voices at write time, so a missing one there is
+        a genuinely broken row.
         """
         raw = {k: v for k, v in (config or {}).items() if v is not None}
 
@@ -88,6 +101,12 @@ class VoiceConfig(BaseModel):
             if raw.get(host_key) or raw.get(guest_key):
                 host, guest = raw.get(host_key), raw.get(guest_key)
                 break
+
+        if (not host or not guest) and provider in _VOICE_OPTIONAL_PROVIDERS:
+            from src.config import settings
+
+            host = host or settings.ENGINE_GEMINI_HOST_VOICE
+            guest = guest or settings.ENGINE_GEMINI_GUEST_VOICE
 
         if not host or not guest:
             raise TTSError(

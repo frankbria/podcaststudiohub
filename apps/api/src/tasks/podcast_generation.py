@@ -299,19 +299,6 @@ def generate_podcast_task(
     run_dir: Optional[str] = None
 
     try:
-        # ElevenLabs is unavailable on this path until the #543 cut-over.
-        # #542 moved the dependency to elevenlabs>=2.x for Text-to-Dialogue, and
-        # 2.x removed `client.generate()` -- the one call podcastfy's provider
-        # makes. Failing here with the reason beats an AttributeError raised
-        # from inside site-packages after the LLM has already been paid for.
-        if tts_model == "elevenlabs":
-            raise RuntimeError(
-                "ElevenLabs generation is temporarily unavailable: the engine "
-                "rewrite (#542) requires elevenlabs>=2.x, which removed the API "
-                "podcastfy uses. It returns when #543 replaces podcastfy. "
-                "Select another TTS provider for this episode in the meantime."
-            )
-
         # Idempotency guard (issue #295): short-circuit before any paid work so a
         # broker-redelivered duplicate or double-dispatch cannot re-run the paid
         # LLM/TTS pipeline. A genuine retry (same task_id) is allowed through.
@@ -332,6 +319,24 @@ def generate_podcast_task(
             )
             return _skipped_result("concurrent run in progress")
         lock_held = True
+
+        # ElevenLabs is unavailable on this path until the #543 cut-over.
+        # #542 moved the dependency to elevenlabs>=2.x for Text-to-Dialogue, and
+        # 2.x removed `client.generate()` -- the one call podcastfy's provider
+        # makes. Failing here with the reason beats an AttributeError raised
+        # from inside site-packages after the LLM has already been paid for.
+        #
+        # Deliberately AFTER the idempotency short-circuits above: raising
+        # before them would turn a redelivery of an already-complete episode
+        # into a failure, and the retries-exhausted handler would then overwrite
+        # a completed episode's status with 'failed'.
+        if tts_model == "elevenlabs":
+            raise RuntimeError(
+                "ElevenLabs generation is temporarily unavailable: the engine "
+                "rewrite (#542) requires elevenlabs>=2.x, which removed the API "
+                "podcastfy uses. It returns when #543 replaces podcastfy. "
+                "Select another TTS provider for this episode in the meantime."
+            )
         # Record in-progress state so subsequent deliveries observe in-flight work
         # and the status no longer jumps straight from 'queued' to a terminal value.
         _update_episode(episode_id, {"generation_status": "generating"})

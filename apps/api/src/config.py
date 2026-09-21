@@ -198,6 +198,12 @@ class Settings(BaseSettings):
     #     Text-to-Dialogue and audio tags.
     ENGINE_OPENAI_TTS_MODEL: str = "gpt-4o-mini-tts"
     ENGINE_GEMINI_TTS_MODEL: str = "gemini-2.5-flash-tts"
+    # Google is the one provider whose stored config need not carry voices:
+    # GEMINI_REQUIRED_KEYS in src/schemas/tts_configuration.py is only
+    # {model, language_code}, so a perfectly valid row has none. These are the
+    # fallback prebuilt Gemini-TTS speakers for that case.
+    ENGINE_GEMINI_HOST_VOICE: str = "Kore"
+    ENGINE_GEMINI_GUEST_VOICE: str = "Charon"
     ENGINE_ELEVENLABS_MODEL: str = "eleven_v3"
     ENGINE_ELEVENLABS_OUTPUT_FORMAT: str = "mp3_44100_128"
     # Characters per Text-to-Dialogue request, summed across every input.

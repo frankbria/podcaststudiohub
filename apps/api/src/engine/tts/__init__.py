@@ -34,5 +34,5 @@ def synthesise(provider, script, config, workdir):
     ``tts_configurations.config`` in, finished audio path out.
     """
     return get_backend(provider).synthesise(
-        script, VoiceConfig.from_tts_config(config), workdir
+        script, VoiceConfig.from_tts_config(config, provider), workdir
     )

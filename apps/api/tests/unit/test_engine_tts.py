@@ -113,7 +113,7 @@ def test_voice_config_rejects_a_config_missing_a_speaker(config):
     """A half-configured episode must fail as configuration, not as a
     Pydantic error the Celery task cannot classify."""
     with pytest.raises(TTSError, match="missing a voice"):
-        VoiceConfig.from_tts_config(config)
+        VoiceConfig.from_tts_config(config, "openai")
 
 
 def test_empty_turns_are_never_sent_to_a_provider():
@@ -767,3 +767,72 @@ def test_edge_passes_rate_and_volume_through_to_the_client(tmp_path):
     assert ctor.call_args.kwargs["volume"] == "-5%"
     assert ctor.call_args.args == ("hello", "en-US-AriaNeural")
     assert destination.read_bytes() == MP3
+
+
+# --------------------------------------------------------------------------
+# Google configs legitimately carry no voices
+# --------------------------------------------------------------------------
+
+# Exactly what GEMINI_REQUIRED_KEYS permits: model + language_code, no voices.
+STORED_GEMINI_CONFIG = {"model": "gemini-2.5-flash-tts", "language_code": "en-US"}
+
+
+@pytest.mark.parametrize("provider", ["gemini", "gemini_multi"])
+def test_a_stored_google_config_without_voices_is_accepted(provider):
+    """`GEMINI_REQUIRED_KEYS` is only {model, language_code}, so a row that
+    passed write-time validation legitimately has no voices. Rejecting it would
+    fail every existing Gemini episode at the #543 cut-over."""
+    voices = VoiceConfig.from_tts_config(STORED_GEMINI_CONFIG, provider)
+
+    assert voices.host_voice and voices.guest_voice
+    assert voices.host_voice != voices.guest_voice
+
+
+@pytest.mark.parametrize("provider", ["openai", "elevenlabs", "edge"])
+def test_the_other_providers_still_require_voices(provider):
+    """Their schemas require voices at write time, so a missing one there is a
+    genuinely broken row, not a permitted shape."""
+    with pytest.raises(TTSError, match="missing a voice"):
+        VoiceConfig.from_tts_config({"model": "whatever"}, provider)
+
+
+def test_gemini_multi_synthesises_from_a_voiceless_stored_config(workdir):
+    client = fake_google_client()
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        output = synthesise("gemini_multi", SCRIPT, STORED_GEMINI_CONFIG, workdir)
+
+    assert output.is_file()
+    configs = client.synthesize_speech.call_args.kwargs[
+        "voice"
+    ].multi_speaker_voice_config.speaker_voice_configs
+    assert [c.speaker_id for c in configs] == [
+        settings.ENGINE_GEMINI_HOST_VOICE,
+        settings.ENGINE_GEMINI_GUEST_VOICE,
+    ]
+
+
+def test_an_explicit_voice_still_wins_over_the_fallback(workdir):
+    voices = VoiceConfig.from_tts_config(GEMINI_CONFIG, "gemini_multi")
+
+    assert (voices.host_voice, voices.guest_voice) == ("Kore", "Charon")
+
+
+# --------------------------------------------------------------------------
+# The guard must not break idempotency
+# --------------------------------------------------------------------------
+
+def test_elevenlabs_guard_sits_after_the_idempotency_short_circuits():
+    """Raising before them would turn a redelivery of an already-complete
+    episode into a failure, and the retries-exhausted handler would then
+    overwrite a completed episode's status with 'failed'."""
+    source = Path("src/tasks/podcast_generation.py").read_text()
+
+    guard = source.index("ElevenLabs generation is temporarily unavailable")
+    already_complete = source.index('_skipped_result("already complete")')
+    lock = source.index('_skipped_result("concurrent run in progress")')
+
+    assert already_complete < guard, "guard runs before the duplicate check"
+    assert lock < guard, "guard runs before the concurrency lock"

@@ -37,10 +37,23 @@ no docs/nginx/e2e reference the prefix. So every `/quality-metrics/*` response i
 - Scope: the "now" half only. Done-when boxes 2 and 3 are the revive and belong to the
   follow-up issue, which is what closes them.
 
+- Deviation from step 1: **no RED guard test written.** For a pure deletion there is no
+  implementation code to drive, and a test asserting "this module is absent" guards against
+  nothing real — a partial deletion (module gone, import left) already fails every test that
+  imports the app. Matches the #539/PR #567 precedent, which deleted without a guard test.
+  Evidence moved to the demo instead.
+
 ## Acceptance criteria
-- [ ] No endpoint returns a permanent empty result — the surface is removed
-- [ ] App starts and its route table contains no `/quality-metrics` path
-- [ ] Revive half filed as a prioritized follow-up blocked on #541
+- [x] No endpoint returns a permanent empty result — the surface is removed
+- [x] App starts and its route table contains no `/quality-metrics` path
+- [x] Revive half filed as a prioritized follow-up blocked on #541 — #570 `[P2.21]`
+- DONE, PR #569. Demo: `apps/api/docs/demos/issue540-remove-dead-quality-metrics.md`
+  (main: 64 OpenAPI paths, 3 quality routes answering 401 → branch: 61 paths, 0 quality routes,
+  404). Suite 1899 → 1802 passed (= the 97 collected tests in the 3 deleted files), 0 failures,
+  coverage 94.93% → 94.74%.
+- Loose ends found while verifying, filed separately: 9 tracked sample transcripts under
+  `apps/api/data/transcripts/` (#309 leftovers, nothing reads them now) and
+  `episode_service.py:459 update_generation_status` (zero callers).
 
 # Epic — Replace the podcastfy engine with a thin in-house generation engine
 

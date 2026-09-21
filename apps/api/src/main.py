@@ -205,8 +205,6 @@ from src.routers.rss_feed import router as rss_feed_router, public_router as rss
 from src.routers import distribution_targets  # noqa: E402
 # Register routers - TTS Configuration CRUD (GAP-006)
 from src.routers import tts_configurations  # noqa: E402
-# Register routers - Quality Metrics, GAP-014
-from src.routers import quality_metrics  # noqa: E402
 # Register routers - Team Collaboration, GAP-051
 from src.routers import teams  # noqa: E402
 # Register routers - Billing & Subscriptions, GAP-050
@@ -224,7 +222,6 @@ app.include_router(episode_layouts.router)
 app.include_router(audio_snippets.router)
 app.include_router(conversation_templates.router)
 app.include_router(tts_configurations.router)
-app.include_router(quality_metrics.router)
 app.include_router(teams.router)
 app.include_router(billing.router)
 app.include_router(analytics.router)

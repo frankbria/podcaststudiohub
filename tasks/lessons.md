@@ -656,3 +656,41 @@ re-applying the exact inverse edit — never a whole-file checkout.
   `DATABASE_URL=… ENCRYPTION_KEY=… JWT_SECRET_KEY=… pytest` lands in the document as literal
   credentials. Keep test creds in an untracked env file and invoke `env $(cat ~/.podcastfy-test-env)`
   so the capture is clean the first time — no prior demo in this repo contains an env var.
+
+## #540 / PR #569 (2026-09-20) — remove the unreachable quality-metrics surface
+
+- **A grep's printed path is relative to the grep's cwd, and I filed a wrong issue over it.**
+  `git ls-files data/transcripts/` run from the repo root prints `data/transcripts/…`; I had
+  `apps/api` in my head from the surrounding work and filed #572 claiming
+  `apps/api/data/transcripts/` was dead weight. It does not exist —
+  `git ls-files apps/api/data/` returns 0, the files are at repo root, and the root `.gitignore`
+  documents keeping them on purpose. Before filing an issue about a path, confirm it with
+  `git ls-files <the exact path>` **and** read any `.gitignore` comment covering it — a documented
+  decision is not an oversight. Retract loudly when wrong (closed #572, corrected the PR body,
+  the demo, and todo.md).
+- **`python /abs/path/script.py` does not put the cwd on `sys.path`** — only the *script's*
+  directory. Running a repo's app from a scratch script (e.g. probing a `main` worktree with the
+  main checkout's venv) needs `PYTHONPATH=.`, or the import dies with `No module named 'src'`
+  and looks like a broken worktree.
+- **401-vs-404 is the cheap, decisive proof that a route was removed.** An unauthenticated request
+  through `httpx.ASGITransport` returns 401 while the route exists (the auth dependency ran) and
+  404 once it is gone. No DB, no token, no server — and it is real HTTP against the real app,
+  which an OpenAPI diff alone is not.
+- **Prove "nothing writes this key" with an AST walk, not a grep.** Parsing every assignment to
+  `generation_progress`, every `progress.update({...})` and every `progress["k"] =` across `src/`
+  enumerates what the pipeline *can* write and names the sole writer. A grep for the string finds
+  the reads too and cannot tell you the writer has no caller. Narrow the `.update()` rule to
+  receivers whose name contains `progress`, or `jwt.py`'s `payload.update({"exp": …})` shows up.
+- **For a pure deletion, the honest RED step is a full baseline run before touching anything.**
+  There is no implementation code to drive and an "is this module absent" test guards nothing —
+  a half-deletion already fails every test that imports the app. The baseline is what makes
+  "1899 → 1802, and 97 tests collected in exactly those three files" a real claim. Budget for it:
+  the tree must stay unmodified for the ~4 minutes it takes.
+- **`gh pr checks` lags `gh run list` by minutes.** Right after opening the PR, `gh pr checks`
+  showed only GitGuardian, so a "wait until nothing is pending" loop exited immediately and
+  declared CI settled while Test Suite had not even registered. Gate on
+  `gh run list --json name,status,conclusion,headSha` grouped by workflow instead.
+- **The `code-reviewer` subagent went idle twice without ever returning a report**, including after
+  an explicit follow-up asking for its verdict. Don't keep waiting on a silent reviewer — its
+  checks were a handful of greps; running them directly took one tool call. The blocking
+  cross-family pass (codex) is the one that actually gates.

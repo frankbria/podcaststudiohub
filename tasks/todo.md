@@ -6,6 +6,60 @@
 - Deviation: VPS `node -v` before-state not captured (auto-mode denies SSH reads); deploy log is the evidence
 - [x] all 4 AC — DONE, merged in PR #561 (follow-up #564)
 
+# #540 — [P2.17] Remove the unreachable quality-metrics surface (branch feature/issue-540-remove-dead-quality-metrics)
+
+Verified before deleting: nothing in `src/` writes `generation_progress["quality_metrics"]`
+(`grep -rn 'generation_progress\['` → only `tasks/podcast_generation.py` + `tasks/callbacks.py`,
+none set the key); `QualityMetricsCalculator` has no importer outside its own tests;
+`QualityScoreService` is reached only from the router; `apps/web/src` has zero `quality` hits;
+no docs/nginx/e2e reference the prefix. So every `/quality-metrics/*` response is a permanent
+404/empty.
+
+1. RED: `apps/api/tests/test_quality_metrics_removed.py` — the app exposes no `/quality-metrics`
+   route and `src.routers.quality_metrics` / the two services / the schema module are gone
+   (fails on `main` where they all exist).
+2. Delete `src/routers/quality_metrics.py`, `src/schemas/quality_metrics.py`,
+   `src/services/quality_metrics_service.py`, `src/services/quality_score_service.py`.
+3. Unregister: `src/main.py` (import + `include_router`), `src/routers/__init__.py`
+   (import + `__all__`).
+4. Delete the three test files that only covered the dead code
+   (`test_quality_metrics.py`, `test_quality_metrics_endpoint.py`,
+   `unit/test_quality_score_service.py`).
+5. File the revive half as a follow-up issue blocked on #541 (P2.18), citing this commit so the
+   scoring logic is one `git show` away.
+
+- Decision (autonomous, no fork): **removal, not 501** — the issue pre-decided it and grep
+  confirms no customer-facing surface calls these endpoints. 501 would keep 1,149 lines of
+  src alive to serve an error.
+- Decision (autonomous): delete `quality_score_service.py` + schemas too, rather than keeping
+  them "for P2.18". A service with zero call sites is the same dead code the issue is about;
+  git history is the archive (precedent: #539/PR #567 deleted `ScriptGenerationService` whole).
+- Scope: the "now" half only. Done-when boxes 2 and 3 are the revive and belong to the
+  follow-up issue, which is what closes them.
+
+- Deviation from step 1: **no RED guard test written.** For a pure deletion there is no
+  implementation code to drive, and a test asserting "this module is absent" guards against
+  nothing real — a partial deletion (module gone, import left) already fails every test that
+  imports the app. Matches the #539/PR #567 precedent, which deleted without a guard test.
+  Evidence moved to the demo instead.
+
+## Acceptance criteria
+- [x] No endpoint returns a permanent empty result — the surface is removed
+- [x] App starts and its route table contains no `/quality-metrics` path
+- [x] Revive half filed as a prioritized follow-up blocked on #541 — #570 `[P2.21]`
+- DONE, PR #569. Demo: `apps/api/docs/demos/issue540-remove-dead-quality-metrics.md`
+  (main: 64 OpenAPI paths, 3 quality routes answering 401 → branch: 61 paths, 0 quality routes,
+  404). Suite 1899 → 1802 passed (= the 97 collected tests in the 3 deleted files), 0 failures,
+  coverage 94.93% → 94.74%.
+- Loose end found while verifying, filed separately: `episode_service.py:459
+  update_generation_status` has zero callers and takes a caller-supplied `generation_progress`
+  dict — the mass-assignment shape #271 removed elsewhere. Filed as #571 `[P3.13]`.
+- Retracted: I also filed the tracked sample transcripts as dead weight (#572) and closed it on
+  verifying — they are at repo root `data/transcripts/`, not `apps/api/`, `.gitignore` documents
+  keeping them on purpose, and podcastfy still creates that directory at runtime. Lesson: the
+  path a grep prints is relative to the grep's cwd; confirm with `git ls-files <abs path>` before
+  filing.
+
 # Epic — Replace the podcastfy engine with a thin in-house generation engine
 
 Source: 2026-09-17 deep dive (engine debt vs ElevenLabs' podcast offering). Verdict: keep our own

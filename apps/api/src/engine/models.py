@@ -81,5 +81,16 @@ class ConversationConfig(BaseModel):
     def from_template_config(
         cls, config: Optional[Dict[str, Any]]
     ) -> "ConversationConfig":
-        """Build from the raw template JSONB (or ``None`` for no template)."""
-        return cls.model_validate(config or {})
+        """Build from the raw template JSONB (or ``None`` for no template).
+
+        Nulls are dropped before validation. ``podcast_tagline`` and
+        ``engagement_techniques`` are optional in ``ConversationTemplateConfig``,
+        and the write path dumps with ``exclude_none=False``
+        (``conversation_template_service.py:46``), so a template saved without
+        them is stored with explicit JSON nulls. Pydantic does not fall back to
+        a default for an explicit ``None``, so passing them straight through
+        would reject the stored shape instead of using the defaults below.
+        """
+        return cls.model_validate(
+            {key: value for key, value in (config or {}).items() if value is not None}
+        )

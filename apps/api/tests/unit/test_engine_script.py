@@ -725,3 +725,55 @@ def test_curly_apostrophes_do_not_hide_an_assistant_artifact():
     with use_gemini(payload, payload):
         with pytest.raises(ScriptValidationError, match="artifact"):
             generate_script(SOURCES, ConversationConfig())
+
+
+def test_config_accepts_a_template_stored_with_its_optional_fields_unset():
+    """`ConversationTemplateConfig` leaves `podcast_tagline` and
+    `engagement_techniques` optional, and the write path dumps with
+    `exclude_none=False`, so a template saved without them is stored with
+    explicit JSON nulls. Pydantic does not fall back to a default for an
+    explicit None, so this shape has to be handled or every episode using such
+    a template fails at the #543 cut-over.
+    """
+    stored = {
+        "word_count": 300,
+        "conversation_style": ["casual"],
+        "roles_person1": "host",
+        "roles_person2": "expert guest",
+        "dialogue_structure": ["Introduction", "Main Content", "Conclusion"],
+        "podcast_name": "The Signal Room",
+        "output_language": "en",
+        "creativity": 0.5,
+        "podcast_tagline": None,
+        "engagement_techniques": None,
+    }
+
+    config = ConversationConfig.from_template_config(stored)
+
+    assert config.podcast_name == "The Signal Room"
+    # The nulls fall back to the documented defaults rather than raising.
+    assert isinstance(config.podcast_tagline, str)
+    assert config.engagement_techniques
+
+
+def test_a_template_stored_with_nulls_generates_a_script_end_to_end():
+    """The docstring on generate_script promises it accepts the raw template
+    dict the router builds. Prove it does, for the null-carrying shape."""
+    stored = {
+        "word_count": 300,
+        "conversation_style": ["casual"],
+        "roles_person1": "host",
+        "roles_person2": "expert guest",
+        "dialogue_structure": ["Introduction", "Main Content", "Conclusion"],
+        "podcast_name": "The Signal Room",
+        "output_language": "en",
+        "creativity": 0.5,
+        "podcast_tagline": None,
+        "engagement_techniques": None,
+        "text_to_speech": {"default_tts_model": "elevenlabs"},
+    }
+
+    with use_gemini(load_fixture("short_form")):
+        script = generate_script(SOURCES, stored)
+
+    assert len(script.turns) == 12

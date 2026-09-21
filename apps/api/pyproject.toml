@@ -31,6 +31,8 @@ dependencies = [
     "pytest-xdist>=3.5.0",
     "psycopg[binary]>=3.3.4",
     "sentry-sdk>=2.67.1",
+    "openai>=1.109.1",
+    "google-genai>=1.2.0",
 ]
 
 [build-system]

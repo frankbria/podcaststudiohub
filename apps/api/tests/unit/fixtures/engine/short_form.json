@@ -1,0 +1,54 @@
+{
+  "title": "What Retrieval-Augmented Generation Actually Fixes",
+  "summary": "A two-host discussion of retrieval-augmented generation: why grounding a model in fetched documents reduces fabricated answers, what it costs in latency, and where it still fails.",
+  "turns": [
+    {
+      "speaker": "host",
+      "text": "Welcome to The Signal Room. Today we're digging into retrieval-augmented generation, and honestly the name undersells what it's doing."
+    },
+    {
+      "speaker": "guest",
+      "text": "Right, because the interesting part isn't the retrieval. It's that you've moved the source of truth out of the weights and into something you can actually inspect and update."
+    },
+    {
+      "speaker": "host",
+      "text": "So when the model gets something wrong, you can go look at what it was handed?"
+    },
+    {
+      "speaker": "guest",
+      "text": "Exactly. You can point at the passage. That's an enormous difference operationally. The failure stops being mysterious."
+    },
+    {
+      "speaker": "host",
+      "text": "Let me push back a little though. The piece here claims it eliminates hallucination, and that's just not what the numbers show."
+    },
+    {
+      "speaker": "guest",
+      "text": "No, it isn't, and I'd have cut that line. It reduces fabrication when the retrieved context is relevant. Hand it three irrelevant documents and a confident model will still stitch together something that sounds right."
+    },
+    {
+      "speaker": "host",
+      "text": "Which makes the retriever the thing that actually determines quality."
+    },
+    {
+      "speaker": "guest",
+      "text": "The retriever is the product. People spend months tuning the generation prompt and about an afternoon on chunking, and then wonder why the answers drift."
+    },
+    {
+      "speaker": "host",
+      "text": "There's a latency cost too, and the article is pretty candid about it."
+    },
+    {
+      "speaker": "guest",
+      "text": "You're adding a round trip before you've generated a single token. For a chat interface that's fine. For something synchronous and high volume, that budget matters, and it's worth measuring before you commit."
+    },
+    {
+      "speaker": "host",
+      "text": "So the honest summary is: better grounding, inspectable failures, slower responses, and the retriever carries the weight."
+    },
+    {
+      "speaker": "guest",
+      "text": "That's it. Treat it as an information retrieval problem that happens to end in a language model, and you'll make far better decisions. Thanks for listening, everyone."
+    }
+  ]
+}

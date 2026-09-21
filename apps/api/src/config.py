@@ -162,12 +162,39 @@ class Settings(BaseSettings):
     # the probe fast rather than hang it until the client's own timeout.
     READINESS_CHECK_TIMEOUT_SECONDS: float = 2.0
 
+    # In-repo generation engine (issue #541). The live task still calls
+    # podcastfy until #543 cuts it over, so these only drive src/engine today.
+    # Provider defaults were checked against the live model catalogues on
+    # 2026-09-21; podcastfy's own default, gemini-1.5-pro-latest, is a
+    # deprecated alias. Both are settings so #543 can retune without a deploy.
+    ENGINE_LLM_PROVIDER: str = "gemini"  # gemini | openai
+    ENGINE_GEMINI_MODEL: str = "gemini-3.5-flash"
+    ENGINE_OPENAI_MODEL: str = "gpt-5.6-terra"
+    ENGINE_MAX_OUTPUT_TOKENS: int = 8192
+    # Chunk bounds for long-form generation. Same defaults podcastfy used, but
+    # ENGINE_MAX_CHUNKS is a hard cap here: it bounds the number of paid calls
+    # a single episode can make.
+    ENGINE_MAX_CHUNKS: int = 8
+    ENGINE_MIN_CHUNK_CHARS: int = 600
+    OPENAI_API_TIMEOUT: int = 120  # Timeout in seconds for OpenAI API calls
+
     # Transcript Validation Settings
     MIN_TRANSCRIPT_WORDS: int = 100
     MAX_SPEAKER_IMBALANCE_PERCENT: float = 80.0
     TRANSCRIPT_VALIDATION_MAX_RETRIES: int = 3
     MIN_CONVERSATION_TURNS: int = 3
-    AI_ARTIFACT_PATTERNS: str = "i apologize,as an ai,should clarify,according to my,based on the"
+    # Phrases that mean the model broke character and answered as an assistant.
+    # Comma-separated, matched as plain case-insensitive substrings against the
+    # spoken text, so every entry must be a phrase that cannot occur in ordinary
+    # dialogue and cannot itself contain a comma. The list this replaced
+    # contained "based on the", "according to my" and "should clarify", which
+    # occur constantly in real conversation and would have rejected good
+    # scripts; it was never exercised, because its only consumer was the dead
+    # service deleted in #539.
+    AI_ARTIFACT_PATTERNS: str = (
+        "as an ai,as a language model,i cannot fulfill,"
+        "i can't assist with,i am unable to provide"
+    )
 
     @field_validator("ENCRYPTION_KEY")
     @classmethod

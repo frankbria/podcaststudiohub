@@ -127,11 +127,18 @@ const STATUS_MESSAGES: Record<string, string> = {
   failed: "Generation failed",
 }
 
+// `model` is required by the backend write schema, so whatever is stored here
+// is what every new config carries -- there is no "unset" for the engine to
+// fall back from. These were podcastfy-era values that the in-repo TTS layer
+// (#542) cannot use: `eleven_multilingual_v2` has no Text-to-Dialogue support,
+// and `en-US-Studio-MultiSpeaker` is a restricted *voice* name sitting in a
+// field that wants a model id. The backends defend against the old values for
+// rows already written; these are what new rows should carry.
 const DEFAULT_CONFIGS: Record<string, Record<string, string>> = {
-  openai: { model: "tts-1-hd", voice_1: "alloy", voice_2: "echo" },
-  elevenlabs: { model: "eleven_multilingual_v2", voice_1_id: "", voice_2_id: "" },
-  gemini: { model: "en-US-Studio-MultiSpeaker", language_code: "en-US" },
-  gemini_multi: { model: "en-US-Studio-MultiSpeaker", language_code: "en-US" },
+  openai: { model: "gpt-4o-mini-tts", voice_1: "alloy", voice_2: "echo" },
+  elevenlabs: { model: "eleven_v3", voice_1_id: "", voice_2_id: "" },
+  gemini: { model: "gemini-2.5-flash-tts", language_code: "en-US" },
+  gemini_multi: { model: "gemini-2.5-flash-tts", language_code: "en-US" },
   edge: { voice_1: "en-US-GuyNeural", voice_2: "en-US-JennyNeural" },
 }
 

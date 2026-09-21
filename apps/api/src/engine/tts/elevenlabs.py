@@ -17,7 +17,7 @@ carries an override and why podcastfy's own ElevenLabs path is broken until #543
 """
 import logging
 from pathlib import Path
-from typing import Iterator, List, Sequence, Tuple
+from typing import Iterator, List, Optional, Sequence, Tuple
 
 import elevenlabs
 from elevenlabs.client import ElevenLabs
@@ -51,7 +51,7 @@ class ElevenLabsTTS:
             raise TTSError("Script has no speakable turns")
 
         client = ElevenLabs(api_key=settings.ELEVENLABS_API_KEY)
-        model = voices.model or settings.ENGINE_ELEVENLABS_MODEL
+        model = _dialogue_model(voices.model)
 
         segments = []
         for batch in batch_turns(turns, settings.ENGINE_ELEVENLABS_CHAR_LIMIT):
@@ -77,6 +77,26 @@ class ElevenLabsTTS:
             "Synthesised %d turns as %d dialogue request(s)", len(turns), len(segments)
         )
         return concat_to_mp3(segments, workdir, "episode.mp3")
+
+
+def _dialogue_model(stored: Optional[str]) -> str:
+    """The model to send, ignoring a stored value Text-to-Dialogue cannot use.
+
+    `model` is required at write time, so every stored row has one -- which
+    makes a plain ``stored or default`` fall back never. And the app's only
+    config writer still posts `eleven_multilingual_v2`
+    (`apps/web/src/app/(auth)/episodes/[id]/page.tsx`), a family Text-to-Dialogue
+    does not support, so honouring it would fail every real config. Audio tags
+    are v3-only for the same reason.
+    """
+    if stored and stored.startswith("eleven_v3"):
+        return stored
+    if stored:
+        logger.warning(
+            "Stored ElevenLabs model %r does not support Text-to-Dialogue; "
+            "using %s instead", stored, settings.ENGINE_ELEVENLABS_MODEL,
+        )
+    return settings.ENGINE_ELEVENLABS_MODEL
 
 
 def batch_turns(

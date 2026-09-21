@@ -836,3 +836,118 @@ def test_elevenlabs_guard_sits_after_the_idempotency_short_circuits():
 
     assert already_complete < guard, "guard runs before the duplicate check"
     assert lock < guard, "guard runs before the concurrency lock"
+
+
+# --------------------------------------------------------------------------
+# Stored model ids are podcastfy-era values
+#
+# `model` is required at write time for four of the five providers, so a plain
+# `stored or default` never falls back — and the app's only config writer still
+# posts values the new endpoints cannot use. These lock in the defence for rows
+# already written.
+# --------------------------------------------------------------------------
+
+LEGACY_ELEVEN = {"model": "eleven_multilingual_v2",
+                 "voice_1_id": "voiceA", "voice_2_id": "voiceB"}
+LEGACY_GEMINI = {"model": "en-US-Studio-MultiSpeaker", "language_code": "en-US"}
+
+
+def test_a_stored_non_v3_model_does_not_reach_text_to_dialogue(workdir):
+    """`eleven_multilingual_v2` is what the app stores today, and
+    Text-to-Dialogue does not support that family — honouring it would fail
+    every real config at the #543 cut-over."""
+    client = fake_eleven_client()
+
+    with patch("src.engine.tts.elevenlabs.ElevenLabs", return_value=client):
+        synthesise("elevenlabs", SCRIPT, LEGACY_ELEVEN, workdir)
+
+    assert client.text_to_dialogue.convert.call_args.kwargs["model_id"] == "eleven_v3"
+
+
+def test_an_explicit_v3_model_is_still_honoured(workdir):
+    client = fake_eleven_client()
+    config = {**ELEVEN_CONFIG, "model": "eleven_v3_conversational"}
+
+    with patch("src.engine.tts.elevenlabs.ElevenLabs", return_value=client):
+        synthesise("elevenlabs", SCRIPT, config, workdir)
+
+    kwargs = client.text_to_dialogue.convert.call_args.kwargs
+    assert kwargs["model_id"] == "eleven_v3_conversational"
+
+
+def test_a_stored_studio_voice_name_is_not_sent_as_a_gemini_model(workdir):
+    """`en-US-Studio-MultiSpeaker` is a restricted *voice* name sitting in the
+    field that wants a model id — sending it asks for the wrong thing."""
+    client = fake_google_client()
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini_multi", SCRIPT, LEGACY_GEMINI, workdir)
+
+    model = client.synthesize_speech.call_args.kwargs["voice"].model_name
+    assert model == settings.ENGINE_GEMINI_TTS_MODEL
+    assert model.startswith("gemini-")
+
+
+def test_an_explicit_gemini_tts_model_is_still_honoured(workdir):
+    client = fake_google_client()
+    config = {**LEGACY_GEMINI, "model": "gemini-2.5-pro-tts"}
+
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini_multi", SCRIPT, config, workdir)
+
+    assert client.synthesize_speech.call_args.kwargs["voice"].model_name == (
+        "gemini-2.5-pro-tts"
+    )
+
+
+def test_single_speaker_gemini_sends_a_model_only_when_it_is_one(workdir):
+    """Classic prebuilt voices take no model at all, so a Studio voice name in
+    that field must not be forwarded — but a real Gemini-TTS id must be."""
+    client = fake_google_client()
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini", SCRIPT, {**LEGACY_GEMINI, "voice_1": "a", "voice_2": "b"},
+                   workdir)
+    assert not client.synthesize_speech.call_args.kwargs["voice"].model_name
+
+    client = fake_google_client()
+    with patch(
+        "src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client
+    ):
+        synthesise("gemini", SCRIPT,
+                   {**GEMINI_CONFIG, "model": "gemini-2.5-flash-tts"}, workdir)
+    assert client.synthesize_speech.call_args.kwargs["voice"].model_name == (
+        "gemini-2.5-flash-tts"
+    )
+
+
+def test_stored_openai_speed_is_forwarded(workdir):
+    """`speed` is bounded 0.25-4.0 at write time, exactly the speech API's own
+    range — the field exists to be sent, not collected and dropped."""
+    client = fake_openai_client()
+
+    with patch("src.engine.tts.openai.openai.OpenAI", return_value=client):
+        synthesise("openai", SCRIPT, {**OPENAI_CONFIG, "speed": 1.25}, workdir)
+
+    assert all(
+        c.kwargs["speed"] == 1.25
+        for c in client.audio.speech.create.call_args_list
+    )
+
+
+def test_speed_is_omitted_when_not_configured(workdir):
+    """It is optional; sending a default would override the model's own."""
+    client = fake_openai_client()
+
+    with patch("src.engine.tts.openai.openai.OpenAI", return_value=client):
+        synthesise("openai", SCRIPT, OPENAI_CONFIG, workdir)
+
+    assert all(
+        "speed" not in c.kwargs
+        for c in client.audio.speech.create.call_args_list
+    )

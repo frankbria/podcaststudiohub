@@ -882,7 +882,10 @@ describe('EpisodePage TTS config creation', () => {
         body: JSON.stringify({
           name: 'My Config',
           provider: 'openai',
-          config: { model: 'tts-1-hd', voice_1: 'alloy', voice_2: 'echo' },
+          // Defaults changed in #542: the in-repo TTS layer cannot use the
+          // podcastfy-era ids, and `model` is required by the write schema
+          // so whatever is defaulted here is what every new config carries.
+          config: { model: 'gpt-4o-mini-tts', voice_1: 'alloy', voice_2: 'echo' },
           is_default: false,
         }),
       })
@@ -938,7 +941,8 @@ describe('EpisodePage TTS config creation', () => {
           name: 'My ElevenLabs Config',
           provider: 'elevenlabs',
           config: {
-            model: 'eleven_multilingual_v2',
+            // #542: Text-to-Dialogue has no eleven_multilingual_v2 support.
+            model: 'eleven_v3',
             voice_1_id: 'voice-1',
             voice_2_id: 'voice-2',
           },

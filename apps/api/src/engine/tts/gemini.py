@@ -39,6 +39,32 @@ _HOST_ALIAS = "Host"
 _GUEST_ALIAS = "Guest"
 
 
+def _is_gemini_tts_model(value) -> bool:
+    """Gemini-TTS model ids look like ``gemini-2.5-flash-tts``.
+
+    The app's config writer still stores `en-US-Studio-MultiSpeaker` in the
+    `model` field, which is a *voice* name, not a model id.
+    """
+    return bool(value) and str(value).startswith("gemini-")
+
+
+def _gemini_tts_model(stored) -> str:
+    """The multi-speaker model to send, ignoring a stored voice name.
+
+    `model` is required at write time, so a plain ``stored or default`` would
+    never fall back -- and the stored value is the restricted Studio voice for
+    every row the app has written, which is not a model at all.
+    """
+    if _is_gemini_tts_model(stored):
+        return stored
+    if stored:
+        logger.warning(
+            "Stored Gemini model %r is not a Gemini-TTS model id; using %s",
+            stored, settings.ENGINE_GEMINI_TTS_MODEL,
+        )
+    return settings.ENGINE_GEMINI_TTS_MODEL
+
+
 class GeminiTTS:
     """Single-speaker synthesis, one request per turn."""
 
@@ -56,10 +82,17 @@ class GeminiTTS:
 
         def render(turn) -> bytes:
             _, speaker, text = turn
-            voice_params = texttospeech.VoiceSelectionParams(
-                language_code=voices.language_code,
-                name=voices.voice_for(speaker),
-            )
+            # model_name is sent only when the stored value is a Gemini-TTS
+            # model id. Classic prebuilt voices take no model, and the app
+            # still stores a Studio *voice name* in that field, which the API
+            # would reject as a model.
+            params = {
+                "language_code": voices.language_code,
+                "name": voices.voice_for(speaker),
+            }
+            if _is_gemini_tts_model(voices.model):
+                params["model_name"] = voices.model
+            voice_params = texttospeech.VoiceSelectionParams(**params)
             try:
                 response = client.synthesize_speech(
                     input=texttospeech.SynthesisInput(text=text),
@@ -85,7 +118,7 @@ class GeminiMultiTTS:
             raise TTSError("Script has no speakable turns")
 
         client = texttospeech.TextToSpeechClient()
-        model = voices.model or settings.ENGINE_GEMINI_TTS_MODEL
+        model = _gemini_tts_model(voices.model)
 
         markup = texttospeech.MultiSpeakerMarkup(
             turns=[

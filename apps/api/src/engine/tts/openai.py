@@ -51,12 +51,20 @@ class OpenAITTS:
 
         def render(turn) -> bytes:
             _, speaker, text = turn
+            # `speed` is bounded 0.25-4.0 at write time, which is exactly the
+            # speech API's own range -- the field exists to be forwarded.
+            extra = (
+                {"speed": voices.options["speed"]}
+                if "speed" in voices.options
+                else {}
+            )
             try:
                 response = client.audio.speech.create(
                     model=model,
                     voice=voices.voice_for(speaker),
                     input=text,
                     response_format="mp3",
+                    **extra,
                 )
             except openai.OpenAIError as exc:
                 raise TTSProviderError(f"OpenAI TTS call failed: {exc}") from exc

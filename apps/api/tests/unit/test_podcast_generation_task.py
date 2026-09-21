@@ -124,7 +124,11 @@ def test_task_kwargs_bind_against_real_generate_podcast_signature():
 		urls=["https://youtube.com/watch?v=abc"],
 		text_content="Pre-extracted file content.",
 		topic="AI safety",
-		tts_model="elevenlabs",
+		# Deliberately not "elevenlabs": #542 made that provider fail fast on
+		# this path until #543 (elevenlabs>=2.x dropped the API podcastfy
+		# calls). Any non-default provider exercises the kwarg binding this
+		# test is actually about.
+		tts_model="gemini_multi",
 		longform=True,
 	)
 

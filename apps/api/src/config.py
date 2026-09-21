@@ -185,6 +185,45 @@ class Settings(BaseSettings):
     ENGINE_MIN_CHUNK_CHARS: int = 600
     OPENAI_API_TIMEOUT: int = 120  # Timeout in seconds for OpenAI API calls
 
+    # In-repo TTS layer (src/engine/tts, issue #542). Not on the live path
+    # until #543. Provider model ids were read off each vendor's current docs
+    # on 2026-09-21; as with the LLM ids above, no test can catch a wrong one
+    # because every test fakes the SDK boundary.
+    #   - gpt-4o-mini-tts is OpenAI's current TTS model and the only one that
+    #     honours `instructions`; podcastfy used the legacy tts-1-hd.
+    #   - gemini-2.5-flash-tts is GA multi-speaker Gemini-TTS. podcastfy pinned
+    #     en-US-Studio-MultiSpeaker and *enforced* it in validate_parameters;
+    #     that Studio voice is now restricted.
+    #   - eleven_v3 is the only ElevenLabs model family supporting
+    #     Text-to-Dialogue and audio tags.
+    ENGINE_OPENAI_TTS_MODEL: str = "gpt-4o-mini-tts"
+    ENGINE_GEMINI_TTS_MODEL: str = "gemini-2.5-flash-tts"
+    # Google is the one provider whose stored config need not carry voices:
+    # GEMINI_REQUIRED_KEYS in src/schemas/tts_configuration.py is only
+    # {model, language_code}, so a perfectly valid row has none. These are the
+    # fallback prebuilt Gemini-TTS speakers for that case.
+    ENGINE_GEMINI_HOST_VOICE: str = "Kore"
+    ENGINE_GEMINI_GUEST_VOICE: str = "Charon"
+    ENGINE_ELEVENLABS_MODEL: str = "eleven_v3"
+    ENGINE_ELEVENLABS_OUTPUT_FORMAT: str = "mp3_44100_128"
+    # Characters per Text-to-Dialogue request, summed across every input.
+    # Deliberately 2000, not the 5000 that applies to plain single-voice
+    # text-to-speech on the same model -- exceeding it returns a validation
+    # error or truncates a streaming response part-way.
+    ENGINE_ELEVENLABS_CHAR_LIMIT: int = 2000
+    # Bytes of MultiSpeakerMarkup per synthesize_speech request. Google
+    # documents the markup field at 4,000 bytes (and markup + prompt combined
+    # at 8,000), so this is the stricter of the documented figures. Bytes, not
+    # characters: for a non-ASCII script the two differ several times over.
+    ENGINE_GEMINI_MARKUP_BYTE_LIMIT: int = 4000
+    # Concurrent per-turn synthesis requests. Bounded because providers
+    # rate-limit and because Celery runs prefork, so this multiplies by the
+    # worker count.
+    ENGINE_TTS_MAX_CONCURRENCY: int = 4
+    # Matches src/tasks/audio_composition.py. podcastfy was inconsistent:
+    # 320k on its multi-speaker path, pydub's default on the per-turn one.
+    ENGINE_AUDIO_BITRATE: str = "192k"
+
     # Transcript Validation Settings
     MIN_TRANSCRIPT_WORDS: int = 100
     MAX_SPEAKER_IMBALANCE_PERCENT: float = 80.0

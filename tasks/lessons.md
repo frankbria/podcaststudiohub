@@ -720,3 +720,29 @@ re-applying the exact inverse edit — never a whole-file checkout.
   keep the existing guard untouched rather than loosening it.
 - **`filterwarnings = error` turns a test's own unclosed `open()` into a failure.** Use
   `Path.read_text()` in tests.
+
+## #542 / PR #577 — in-repo TTS layer
+
+- **A dependency cap can veto an issue's whole premise.** podcastfy pins `elevenlabs<2`, but
+  `text_to_dialogue` exists only in 2.x — and 2.x removed the `generate()` call podcastfy
+  makes. Check the cap *before* planning around a capability. `[tool.uv] override-dependencies`
+  is the repo's escape hatch, but it means knowingly breaking the old path, which is a user
+  decision, not a default.
+- **Verify a break is import-time or call-time.** Overriding the cap looked catastrophic until
+  a two-line probe showed podcastfy still imports fine under 2.x and only fails when
+  `.generate()` is actually called. That's the difference between "suite goes red" and "one
+  provider is unavailable for one step".
+- **A "verify at implementation time" note in an issue means the issue may be wrong.** All
+  three provider details in #542's design were stale: the Text-to-Dialogue char cap is 2,000
+  not 5,000 (5,000 is the *single-voice* endpoint), `en-US-Studio-MultiSpeaker` is restricted
+  with a different replacement API shape, and `tts-1-hd` is superseded by `gpt-4o-mini-tts`.
+- **Grep-based guard tests flag their own docstrings.** Second time this bit (see #541). If a
+  module explains what it avoids, the guard must parse the AST, not scan the text.
+- **Not every provider's stored config has the same required keys.** `GEMINI_REQUIRED_KEYS` is
+  only `{model, language_code}`, so a valid Google row has no voices at all. Tests that always
+  build fully-populated fixtures never see the shapes the schema actually permits — the same
+  gap that produced the null-template bug in #541. Read the validator, not the examples.
+- **A fail-fast guard placed too early breaks idempotency.** Putting it above the
+  duplicate/in-progress/lock short-circuits turned a redelivery of a *completed* episode into
+  a failure, and the retries-exhausted handler then overwrote its status. Guards go after the
+  short-circuits and before the paid work.

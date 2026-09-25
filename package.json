@@ -31,7 +31,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",
-    "concurrently": "^8.2.2"
+    "concurrently": "^10.0.5"
   },
   "overrides": {
     "flatted": "^3.4.2",

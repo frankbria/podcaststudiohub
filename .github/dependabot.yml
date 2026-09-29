@@ -12,6 +12,9 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     groups:
+      security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
       minor-and-patch:
         update-types: ["minor", "patch"]
 
@@ -25,6 +28,9 @@ updates:
       interval: "weekly"
     open-pull-requests-limit: 5
     groups:
+      security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
       minor-and-patch:
         update-types: ["minor", "patch"]
 
@@ -47,5 +53,8 @@ updates:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
     groups:
+      security-updates:
+        applies-to: security-updates
+        patterns: ["*"]
       minor-and-patch:
         update-types: ["minor", "patch"]

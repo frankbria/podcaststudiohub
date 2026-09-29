@@ -11,6 +11,9 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
 
   # Python backend (uv.lock + pyproject.toml) — CVE alerting for the 200+
   # package closure (#306).
@@ -21,6 +24,9 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
 
   # npm workspace monorepo: the root package-lock.json covers apps/web too,
   # so a single npm entry at "/" scans the whole JS tree (#306).
@@ -40,3 +46,6 @@ updates:
       # lacks. Move this with the runtime.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]

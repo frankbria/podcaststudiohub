@@ -9,19 +9,18 @@ cd "$(dirname "$0")/.."
 # Allowlisted advisories. npm has no native per-advisory ignore, so we filter the
 # JSON ourselves rather than pulling in audit-ci/better-npm-audit for this.
 #
-# CURRENTLY EMPTY — every known high+ advisory is fixed in the lockfile, so this
-# gate is equivalent to a plain `npm audit --audit-level=high` today. The
-# mechanism is kept because unfixable advisories recur (see the 25-entry
-# structural ignore list in apps/api/scripts/security-audit.sh for the Python
-# side); an empty list means nothing is being hidden right now.
-#
 # Only add an entry when NO release fixes it. Verify that claim against the
 # registry (`npm view <pkg> versions`) rather than the advisory's affected range:
 # a range of `<=X` means X+1 is the fix, not that every release is affected. That
 # misreading is what previously masked next-auth 4.24.15.
 #
 # Each entry must carry: why no bump fixes it, an issue link, and a re-check trigger.
-ALLOWED_ADVISORIES=()
+ALLOWED_ADVISORIES=(
+  # braces <=3.0.3 stack-exhaustion DoS. 3.0.3 is the latest release, so no bump
+  # fixes it. Dev-only: tailwindcss@3 -> chokidar@3 build-time watcher, which only
+  # expands our own config globs. #610. Re-check: braces >3.0.3, or Tailwind v4.
+  GHSA-vfj7-8cjw-p6xm
+)
 
 audit_json="$(mktemp)"
 trap 'rm -f "$audit_json"' EXIT
@@ -64,9 +63,14 @@ for (const [name, vuln] of Object.entries(report.vulnerabilities || {})) {
   const ids = (vuln.via || [])
     .filter((v) => typeof v === "object" && v.url)
     .map((v) => v.url.split("/").pop());
+  // Entries with no advisory objects are only vulnerable *via* another package
+  // (their `via` is package names). Every such chain bottoms out at a package that
+  // carries the advisory and is judged on its own, so skipping these loses nothing
+  // and lets an allowlisted leaf clear its dependents.
+  if (ids.length === 0) continue;
   const unlisted = ids.filter((id) => !allowed.has(id));
-  if (ids.length === 0 || unlisted.length > 0) {
-    blocking.push(`${name} (${vuln.severity}): ${unlisted.join(", ") || "via vulnerable dependency"}`);
+  if (unlisted.length > 0) {
+    blocking.push(`${name} (${vuln.severity}): ${unlisted.join(", ")}`);
   }
 }
 

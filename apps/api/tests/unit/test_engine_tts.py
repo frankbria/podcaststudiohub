@@ -1328,6 +1328,12 @@ def test_google_credentials_setting_synthesises_without_adc(
         ("/nonexistent/sa.json", None),
         ("FILE", "not json"),
         ("FILE", "[]"),  # valid JSON, not an object: google-auth raises AttributeError
+        # Required fields present but private_key null (an unrendered secrets
+        # template). google-auth 2.55 raises ValueError here; this pins it so a
+        # bump that turns it into an AttributeError fails CI (PR #613 review).
+        ('{"type": "service_account", "client_email": "a@b.iam.gserviceaccount.com",'
+         ' "token_uri": "https://oauth2.googleapis.com/token", "private_key": null}',
+         None),
     ],
 )
 def test_an_unusable_google_credentials_setting_is_a_provider_error(

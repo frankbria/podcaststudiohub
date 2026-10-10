@@ -1229,12 +1229,121 @@ def test_missing_google_credentials_is_a_provider_error(workdir):
     it the likely first failure rather than an exotic one."""
     from google.auth import exceptions as google_auth_exceptions
 
-    with patch(
+    with patch.object(settings, "GOOGLE_CLOUD_CREDENTIALS", None), patch(
         "src.engine.tts.gemini.texttospeech.TextToSpeechClient",
         side_effect=google_auth_exceptions.DefaultCredentialsError("no ADC"),
     ):
         with pytest.raises(TTSProviderError, match="credentials are unavailable"):
             synthesise("gemini_multi", SCRIPT, GEMINI_CONFIG, workdir)
+
+
+SERVICE_ACCOUNT_EMAIL = "tts@podcast-test.iam.gserviceaccount.com"
+
+
+@pytest.fixture(scope="module")
+def service_account_info() -> dict:
+    """A structurally real service-account key. Building a client from it makes
+    no network call — tokens are only minted on the first request."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    return {
+        "type": "service_account",
+        "project_id": "podcast-test",
+        "private_key_id": "0" * 40,
+        "private_key": pem,
+        "client_email": SERVICE_ACCOUNT_EMAIL,
+        "client_id": "1",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+
+
+@pytest.fixture
+def no_adc(monkeypatch):
+    """A host with no Application Default Credentials at all."""
+    from google.auth import exceptions as google_auth_exceptions
+
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    with patch(
+        "google.auth.default",
+        side_effect=google_auth_exceptions.DefaultCredentialsError("no ADC"),
+    ):
+        yield
+
+
+@pytest.mark.parametrize("form", ["json", "path"])
+@pytest.mark.parametrize("provider", ["gemini", "gemini_multi"])
+def test_google_credentials_setting_synthesises_without_adc(
+    provider, form, service_account_info, no_adc, workdir, tmp_path
+):
+    """#578: the setting was declared and read by nothing, so both Google
+    backends depended on ADC that nothing in the repo provisions. The client is
+    constructed for real here; only the network call is faked."""
+    import json
+
+    from google.cloud import texttospeech
+
+    value = json.dumps(service_account_info)
+    if form == "path":
+        key_file = tmp_path / "sa.json"
+        key_file.write_text(value)
+        value = str(key_file)
+
+    built = []
+    real_init = texttospeech.TextToSpeechClient.__init__
+
+    def recording_init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        built.append(self)
+
+    with patch.object(settings, "GOOGLE_CLOUD_CREDENTIALS", value), patch.object(
+        texttospeech.TextToSpeechClient, "__init__", recording_init
+    ), patch.object(
+        texttospeech.TextToSpeechClient,
+        "synthesize_speech",
+        autospec=True,
+        return_value=MagicMock(audio_content=MP3),
+    ):
+        path = synthesise(provider, SCRIPT, GEMINI_CONFIG, workdir)
+
+    assert path.parent == workdir
+    assert built[0].transport._credentials.service_account_email == (
+        SERVICE_ACCOUNT_EMAIL
+    )
+
+
+@pytest.mark.parametrize("value", ["{not json", "/nonexistent/sa.json", "{}"])
+def test_an_unusable_google_credentials_setting_is_a_provider_error(
+    value, no_adc, workdir
+):
+    """A typo in the setting must fail like missing ADC does — a classified
+    TTSProviderError — and must not fall back to ADC, which would mask it."""
+    with patch.object(settings, "GOOGLE_CLOUD_CREDENTIALS", value):
+        with pytest.raises(TTSProviderError, match="GOOGLE_CLOUD_CREDENTIALS"):
+            synthesise("gemini", SCRIPT, GEMINI_CONFIG, workdir)
+
+
+def test_the_provider_error_never_echoes_the_credential(
+    service_account_info, no_adc, workdir
+):
+    """The setting holds a private key; the error lands in task logs and the
+    episode's error field."""
+    import json
+
+    broken = dict(service_account_info, token_uri=None)
+    broken.pop("client_email")
+    value = json.dumps(broken)
+    with patch.object(settings, "GOOGLE_CLOUD_CREDENTIALS", value):
+        with pytest.raises(TTSProviderError) as excinfo:
+            synthesise("gemini", SCRIPT, GEMINI_CONFIG, workdir)
+
+    assert "PRIVATE KEY" not in str(excinfo.value)
 
 
 def test_a_present_but_empty_language_code_falls_back_to_the_default():

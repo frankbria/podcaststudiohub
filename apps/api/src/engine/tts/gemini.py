@@ -14,12 +14,14 @@ docs (`cloud.google.com/text-to-speech/docs/gemini-tts`) on 2026-09-21. As with
 the LLM model ids in `config.py`, no test can catch a wrong one — the SDK is
 faked at the boundary — so changing them needs a live smoke test.
 """
+import json
 import logging
 from pathlib import Path
 
 from google.api_core import exceptions as google_exceptions
 from google.auth import exceptions as google_auth_exceptions
 from google.cloud import texttospeech
+from google.oauth2 import service_account
 
 from src.config import settings
 from src.engine.models import Script
@@ -84,17 +86,49 @@ def _gemini_tts_model(stored) -> str:
     return settings.ENGINE_GEMINI_TTS_MODEL
 
 
+def _service_account_credentials(value: str):
+    """``GOOGLE_CLOUD_CREDENTIALS`` holds the service-account JSON itself or a
+    path to it (#578). A dedicated setting rather than
+    ``GOOGLE_APPLICATION_CREDENTIALS`` because pydantic reads ``.env`` into
+    ``settings`` without exporting it, so ADC would never see it there.
+
+    This is a platform-level credential, unlike the per-tenant keys; if BYOK
+    ever arrives for Google, the tenant's key is passed in here instead.
+
+    Errors name the setting, never its value -- it carries a private key.
+    """
+    try:
+        if value.lstrip().startswith("{"):
+            return service_account.Credentials.from_service_account_info(
+                json.loads(value)
+            )
+        return service_account.Credentials.from_service_account_file(value)
+    except json.JSONDecodeError:
+        raise TTSProviderError("GOOGLE_CLOUD_CREDENTIALS is not valid JSON") from None
+    except OSError as exc:
+        raise TTSProviderError(
+            f"GOOGLE_CLOUD_CREDENTIALS file cannot be read: {exc.strerror}"
+        ) from None
+    except (ValueError, google_auth_exceptions.GoogleAuthError):
+        raise TTSProviderError(
+            "GOOGLE_CLOUD_CREDENTIALS is not a usable service-account key"
+        ) from None
+
+
 def _client() -> "texttospeech.TextToSpeechClient":
     """Construct the client inside the error boundary.
 
-    google-cloud clients resolve default credentials eagerly in ``__init__``,
-    and a host without them raises ``DefaultCredentialsError`` -- which is a
+    With ``GOOGLE_CLOUD_CREDENTIALS`` unset this falls back to Application
+    Default Credentials, so a host that already has ADC keeps working.
+    google-cloud clients resolve those eagerly in ``__init__``, and a host
+    without them raises ``DefaultCredentialsError`` -- which is a
     ``GoogleAuthError``, *not* a ``GoogleAPIError``, so it would escape
-    unclassified. Nothing in this repo wires up ADC today, which makes that the
-    likely first failure rather than an exotic one.
+    unclassified.
     """
+    value = settings.GOOGLE_CLOUD_CREDENTIALS
+    credentials = _service_account_credentials(value) if value else None
     try:
-        return texttospeech.TextToSpeechClient()
+        return texttospeech.TextToSpeechClient(credentials=credentials)
     except google_auth_exceptions.GoogleAuthError as exc:
         raise TTSProviderError(
             f"Google Cloud TTS credentials are unavailable: {exc}"

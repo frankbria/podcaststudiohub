@@ -766,3 +766,25 @@ Five rounds, 14 findings, all real. Two clusters, both avoidable:
 Corollary for mutation checks: a mutation that survives is a test gap, not a
 nuisance. Swapping byte-sizing for char-sizing survived because every fixture
 was ASCII — the helper was tested, but nothing proved the caller used it.
+
+## #578 — Google TTS credentials (PR #613)
+
+- **Check what a review bot predicts about a library before you widen an `except`.**
+  The bot said `{"private_key": null}` would raise `AttributeError` from google-auth.
+  On the pinned 2.55.2 it raises `ValueError`, which was already handled. The fix was
+  a test case that pins the real behaviour, not a broader catch. Catching more makes a
+  wrong prediction look reasonable, and a test turns it into a CI failure when a
+  dependency bump really does change things.
+- **"Never echo the secret" has to cover the event, not just the message.** The error
+  string was clean and `from None` dropped the chain, but Sentry's default
+  frame-locals capture still sent the whole PEM. Only a test that pushed a real SDK
+  event through `init_sentry()` with a capture transport showed it. A secret-handling
+  test must assert on what actually leaves the process.
+- **A mutation that survives can just be aimed at the wrong branch.** Removing
+  `from None` on the JSON branch survived because the test exercised the
+  "unusable key" branch. Mutate the line the test actually reaches before concluding
+  the test is weak.
+- **Tooling: `conducting-demo` SKILL.md gives the wrong `showboat exec` signature.**
+  It is `showboat exec <file> <lang> <code>` (e.g. `exec demo.md bash '…'`). The
+  skill's `exec demo.md 'cmd'` form records "no such file or directory" for every
+  command.

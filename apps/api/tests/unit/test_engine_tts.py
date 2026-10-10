@@ -69,9 +69,11 @@ def _fake_pydub():
 
 @pytest.fixture(autouse=True)
 def _keys():
+    # GOOGLE_CLOUD_CREDENTIALS too: a dev .env copied from .env.example holds a
+    # placeholder path, and _client() would try to read it before any fake.
     with patch.object(settings, "OPENAI_API_KEY", "test-openai"), patch.object(
         settings, "ELEVENLABS_API_KEY", "test-eleven"
-    ):
+    ), patch.object(settings, "GOOGLE_CLOUD_CREDENTIALS", None):
         yield
 
 
@@ -1318,15 +1320,77 @@ def test_google_credentials_setting_synthesises_without_adc(
     )
 
 
-@pytest.mark.parametrize("value", ["{not json", "/nonexistent/sa.json", "{}"])
+@pytest.mark.parametrize(
+    "value, file_body",
+    [
+        ("{not json", None),
+        ("{}", None),
+        ("/nonexistent/sa.json", None),
+        ("FILE", "not json"),
+        ("FILE", "[]"),  # valid JSON, not an object: google-auth raises AttributeError
+    ],
+)
 def test_an_unusable_google_credentials_setting_is_a_provider_error(
-    value, no_adc, workdir
+    value, file_body, no_adc, workdir, tmp_path
 ):
     """A typo in the setting must fail like missing ADC does — a classified
     TTSProviderError — and must not fall back to ADC, which would mask it."""
+    if file_body is not None:
+        key_file = tmp_path / "sa.json"
+        key_file.write_text(file_body)
+        value = str(key_file)
     with patch.object(settings, "GOOGLE_CLOUD_CREDENTIALS", value):
         with pytest.raises(TTSProviderError, match="GOOGLE_CLOUD_CREDENTIALS"):
             synthesise("gemini", SCRIPT, GEMINI_CONFIG, workdir)
+
+
+def test_a_sentry_event_for_a_bad_credential_carries_no_key_material(
+    service_account_info, no_adc, workdir
+):
+    """Sentry attaches frame locals by default, and the setting is a private
+    key. The event is built by the real SDK through init_sentry()'s own config;
+    only the transport is swapped so nothing leaves the process."""
+    import json
+
+    import sentry_sdk
+    from sentry_sdk.transport import Transport
+
+    from src.logging_config import init_sentry
+
+    class Capture(Transport):
+        def __init__(self, options=None):
+            super().__init__(options)
+            self.payloads = []
+
+        def capture_envelope(self, envelope):
+            self.payloads.extend(item.get_bytes() for item in envelope.items)
+
+    transport = Capture()
+    real_init = sentry_sdk.init
+    broken = dict(service_account_info)
+    broken.pop("client_email")  # a usable-looking key google-auth still rejects
+    try:
+        with patch.object(settings, "SENTRY_DSN", "https://k@example.com/1"), patch(
+            "sentry_sdk.init",
+            lambda **kw: real_init(
+                **kw, transport=transport, default_integrations=False,
+                auto_enabling_integrations=False,
+            ),
+        ), patch.object(settings, "GOOGLE_CLOUD_CREDENTIALS", json.dumps(broken)):
+            assert init_sentry() is True
+            try:
+                synthesise("gemini", SCRIPT, GEMINI_CONFIG, workdir)
+            except TTSProviderError:
+                sentry_sdk.capture_exception()
+            sentry_sdk.flush()
+    finally:
+        sentry_sdk.get_client().close()
+        sentry_sdk.get_global_scope().set_client(None)
+
+    event = b"".join(transport.payloads).decode()
+    assert "TTSProviderError" in event
+    assert "PRIVATE KEY" not in event
+    assert broken["private_key"][40:80] not in event
 
 
 def test_the_provider_error_never_echoes_the_credential(
@@ -1344,6 +1408,10 @@ def test_the_provider_error_never_echoes_the_credential(
             synthesise("gemini", SCRIPT, GEMINI_CONFIG, workdir)
 
     assert "PRIVATE KEY" not in str(excinfo.value)
+    # The chained google-auth / JSONDecodeError (whose .doc is the whole
+    # credential) must not ride along on the traceback either.
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__suppress_context__
 
 
 def test_a_present_but_empty_language_code_falls_back_to_the_default():

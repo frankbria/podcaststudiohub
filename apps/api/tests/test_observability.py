@@ -319,6 +319,7 @@ def test_sentry_initialises_with_dsn_and_pii_disabled():
     assert kwargs["dsn"] == "https://k@example.com/1"
     assert kwargs["environment"] == "staging"
     assert kwargs["send_default_pii"] is False
+    assert kwargs["include_local_variables"] is False
     assert kwargs["traces_sample_rate"] == 0.0
 
 

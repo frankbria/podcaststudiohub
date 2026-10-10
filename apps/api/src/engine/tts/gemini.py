@@ -98,13 +98,16 @@ def _service_account_credentials(value: str):
     Errors name the setting, never its value -- it carries a private key.
     """
     try:
-        if value.lstrip().startswith("{"):
-            return service_account.Credentials.from_service_account_info(
-                json.loads(value)
-            )
-        return service_account.Credentials.from_service_account_file(value)
+        raw = value if value.lstrip().startswith("{") else Path(value).read_text()
+        info = json.loads(raw)
+        # google-auth assumes a dict and raises AttributeError on anything else.
+        if not isinstance(info, dict):
+            raise ValueError
+        return service_account.Credentials.from_service_account_info(info)
     except json.JSONDecodeError:
-        raise TTSProviderError("GOOGLE_CLOUD_CREDENTIALS is not valid JSON") from None
+        raise TTSProviderError(
+            "GOOGLE_CLOUD_CREDENTIALS does not hold valid JSON"
+        ) from None
     except OSError as exc:
         raise TTSProviderError(
             f"GOOGLE_CLOUD_CREDENTIALS file cannot be read: {exc.strerror}"

@@ -219,10 +219,16 @@ If you want to use Google Cloud Text-to-Speech as an alternative:
 1. Create Google Cloud project: https://console.cloud.google.com/
 2. Enable Text-to-Speech API
 3. Create service account and download JSON key
-4. Set path in .env:
+4. Set it in `apps/api/.env`, either as a path to the key file or as the JSON itself
+   on one line (handy when the value comes from a secrets store):
    ```bash
    GOOGLE_CLOUD_CREDENTIALS=/path/to/google-credentials.json
+   # or
+   GOOGLE_CLOUD_CREDENTIALS={"type": "service_account", ...}
    ```
+   Leave it unset to use Application Default Credentials on the host. Setting
+   `GOOGLE_APPLICATION_CREDENTIALS` in `.env` does **not** work: the app reads `.env`
+   into its settings without exporting it, so Google's ADC lookup never sees it.
 
 ### Platform Distribution Keys (Spotify, Apple Podcasts)
 

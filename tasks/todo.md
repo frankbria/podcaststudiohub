@@ -1,12 +1,12 @@
-# [P2.19.2] #578 — Google Cloud TTS credential wiring
+# [P2.19.2] #578 — Google Cloud TTS credential wiring — PR #613
 
 Previous plan (#542) is in git history at `9ace356`.
 
 ## Acceptance criteria
 
-- [ ] A host with `GOOGLE_CLOUD_CREDENTIALS` set can synthesise with `gemini` and `gemini_multi` without ADC present
-- [ ] A host with neither set fails with the existing clear `TTSProviderError`, not a stack trace
-- [ ] `.env.example` documents the expected format
+- [x] A host with `GOOGLE_CLOUD_CREDENTIALS` set can synthesise with `gemini` and `gemini_multi` without ADC present
+- [x] A host with neither set fails with the existing clear `TTSProviderError`, not a stack trace
+- [x] `.env.example` documents the expected format
 
 ## Decision (autonomous — no fork)
 

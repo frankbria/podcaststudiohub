@@ -155,6 +155,10 @@ def init_sentry() -> bool:
         release=settings.APP_VERSION,
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         send_default_pii=False,
+        # Frame locals hold provider secrets (a service-account private key on
+        # a bad GOOGLE_CLOUD_CREDENTIALS, #578) and tenant scripts; the default
+        # scrubber matches top-level names only, so it misses both.
+        include_local_variables=False,
         before_send=_scrub,
     )
     return True

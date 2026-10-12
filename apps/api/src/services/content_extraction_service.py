@@ -1,14 +1,14 @@
 """
 Content extraction service for processing episode content sources.
 
-This service wraps Podcastfy content_parser modules to extract text from URL, PDF,
-and text sources. It integrates with the ContentSource model to:
+This service extracts text from URL, PDF and text sources (the parsing itself
+lives in text_extraction.py). It integrates with the ContentSource model to:
 - Update extraction_status (pending → extracting → complete/failed)
 - Store extracted text in extracted_content column
 - Store error details in error_message column
 
-The service uses async wrappers around Podcastfy's synchronous extractors to
-maintain async compatibility with the FastAPI application.
+The synchronous fetch/parse steps run in worker threads so the FastAPI
+application stays async.
 """
 
 import asyncio
@@ -20,12 +20,9 @@ from urllib.parse import parse_qs, urljoin, urlparse
 from uuid import UUID
 
 import requests
-from bs4 import BeautifulSoup
 from sqlalchemy.ext.asyncio import AsyncSession
 from requests.exceptions import RequestException, Timeout, HTTPError
 
-from podcastfy.content_parser.website_extractor import WebsiteExtractor
-from podcastfy.content_parser.pdf_extractor import PDFExtractor
 from youtube_transcript_api import YouTubeTranscriptApi
 
 from ..config import settings
@@ -35,17 +32,32 @@ from ..utils.pinned_fetch import pinned_session
 from ..utils.ssrf import SSRFValidationError, validate_public_url
 from .content_service import get_content_source_by_id, update_content_source
 from .storage_service import StorageService
+from .text_extraction import (
+	FETCH_TIMEOUT_SECONDS,
+	USER_AGENT,
+	html_to_text,
+	normalize_url,
+	pdf_to_text,
+)
 
 
 logger = logging.getLogger(__name__)
 
-# Exact hosts, not substrings: podcastfy matched "youtube.com" anywhere in the
-# URL, so youtube.com.evil.test counted as YouTube.
+# Exact hosts, not substrings: a substring match ("youtube.com" anywhere in
+# the URL) would count youtube.com.evil.test as YouTube.
 _YOUTUBE_HOSTS = frozenset(
 	{"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
 )
-# Caption-only cues podcastfy's youtube_transcriber dropped from the text.
+# Caption-only cues dropped from the transcript, as the previous engine did.
 _CAPTION_CUES = frozenset({"[music]"})
+
+
+def _remove_temp_file(path: Optional[str]) -> None:
+	if path and os.path.exists(path):
+		try:
+			os.unlink(path)
+		except OSError:
+			logger.warning(f"Failed to remove temp PDF file: {path}")
 
 
 def _youtube_video_id(url: str) -> Optional[str]:
@@ -66,10 +78,10 @@ def _youtube_video_id(url: str) -> Optional[str]:
 
 
 def _youtube_transcript(video_id: str) -> str:
-	entries = YouTubeTranscriptApi.get_transcript(video_id)
+	snippets = YouTubeTranscriptApi().fetch(video_id)
 	return " ".join(
-		entry["text"] for entry in entries
-		if entry["text"].strip().lower() not in _CAPTION_CUES
+		snippet.text for snippet in snippets
+		if snippet.text.strip().lower() not in _CAPTION_CUES
 	)
 
 # Redirect status codes that carry a Location header to follow.
@@ -104,14 +116,9 @@ class ContentExtractionService:
 	"""
 	Service for extracting content from various sources.
 
-	Wraps Podcastfy's synchronous content extractors with async interfaces
-	and integrates with the ContentSource database model for status tracking.
+	Runs the synchronous fetch/parse steps (src/services/text_extraction.py)
+	behind async interfaces and records progress on the ContentSource row.
 	"""
-
-	def __init__(self):
-		"""Initialize the extraction service with Podcastfy extractors."""
-		self.website_extractor = WebsiteExtractor()
-		self.pdf_extractor = PDFExtractor()
 
 	def fetch_url_text(self, url: str) -> str:
 		"""
@@ -120,9 +127,8 @@ class ContentExtractionService:
 		Redirects are not auto-followed: each hop is re-validated with the SSRF
 		guard before it is requested, so a public URL cannot redirect the
 		server-side fetch into an internal address such as the cloud metadata
-		endpoint (issue #206). Podcastfy's ``WebsiteExtractor`` follows redirects
-		unconditionally, so this performs the fetch itself and reuses the
-		extractor's parsing helpers for output consistency.
+		endpoint (issue #206). A plain ``requests.get`` follows redirects
+		unconditionally, so this performs each hop itself.
 
 		Args:
 			url: URL to fetch.
@@ -136,16 +142,15 @@ class ContentExtractionService:
 			ValueError: For a YouTube URL that names no video.
 		"""
 		# A YouTube page is the video's transcript, not its watch-page HTML (the
-		# behaviour podcastfy had, #543). The request goes to YouTube's own API
+		# behaviour the previous engine had, #543). The request goes to YouTube's own API
 		# host, not the user-supplied URL, so the SSRF path below does not apply.
-		extractor = self.website_extractor
 		# Normalised first: urlparse finds no host in a scheme-less URL, so
 		# "youtube.com/watch?v=…" would otherwise miss the transcript branch.
-		current_url = extractor.normalize_url(url)
+		current_url = normalize_url(url)
 		video_id = _youtube_video_id(current_url)
 		if video_id:
 			return _youtube_transcript(video_id)
-		headers = {"User-Agent": extractor.user_agent}
+		headers = {"User-Agent": USER_AGENT}
 
 		for _ in range(_MAX_REDIRECT_HOPS + 1):
 			resolved = validate_public_url(
@@ -159,7 +164,7 @@ class ContentExtractionService:
 				response = session.get(
 					current_url,
 					headers=headers,
-					timeout=extractor.timeout,
+					timeout=FETCH_TIMEOUT_SECONDS,
 					allow_redirects=False,
 				)
 			if response.status_code in _REDIRECT_STATUS:
@@ -170,9 +175,7 @@ class ContentExtractionService:
 				continue
 
 			response.raise_for_status()
-			soup = BeautifulSoup(response.text, "html.parser")
-			extractor.remove_unwanted_elements(soup)
-			return extractor.clean_content(soup.get_text(separator="\n"))
+			return html_to_text(response.text)
 
 		raise requests.TooManyRedirects(
 			f"Exceeded the maximum of {_MAX_REDIRECT_HOPS} redirects"
@@ -187,7 +190,7 @@ class ContentExtractionService:
 		Extract content from a URL source.
 
 		Retrieves content source, validates it's a URL type, extracts content
-		using Podcastfy's WebsiteExtractor, and updates the database with
+		with the SSRF-safe fetch_url_text, and updates the database with
 		results or error details.
 
 		Args:
@@ -200,7 +203,7 @@ class ContentExtractionService:
 		Raises:
 			ValueError: If content source not found or not URL type
 		"""
-		content_source = await self._url_source(db, content_source_id)
+		content_source = await self._source_of_type(db, content_source_id, 'url')
 		url = content_source.source_data.get('url')
 		error_msg = self._precheck_url(url, content_source_id)
 		if error_msg:
@@ -230,15 +233,15 @@ class ContentExtractionService:
 		)
 		return ExtractionResult(success=True, content=extracted_text)
 
-	async def _url_source(self, db: AsyncSession, content_source_id: UUID):
-		"""The content source, which must exist and be a URL source."""
+	async def _source_of_type(self, db: AsyncSession, content_source_id: UUID, kind: str):
+		"""The content source, which must exist and be of type ``kind``."""
 		content_source = await get_content_source_by_id(db, content_source_id)
 		if not content_source:
 			raise ValueError(f"Content source {content_source_id} not found")
-		if content_source.source_type != 'url':
+		if content_source.source_type != kind:
 			raise ValueError(
 				f"Content source {content_source_id} is type '{content_source.source_type}', "
-				"expected 'url'"
+				f"expected '{kind}'"
 			)
 		return content_source
 
@@ -285,8 +288,8 @@ class ContentExtractionService:
 		Extract content from a PDF source.
 
 		Retrieves content source, validates it's a PDF type, downloads the PDF from
-		S3 (via StorageService) to a temp file, extracts content using Podcastfy's
-		PDFExtractor, and updates the database with results or error details.
+		S3 (via StorageService) to a temp file, extracts its text with pymupdf,
+		and updates the database with results or error details.
 
 		Args:
 			db: Database session
@@ -298,86 +301,75 @@ class ContentExtractionService:
 		Raises:
 			ValueError: If content source not found or not PDF type
 		"""
-		# Retrieve content source
-		content_source = await get_content_source_by_id(db, content_source_id)
-		if not content_source:
-			raise ValueError(f"Content source {content_source_id} not found")
-
-		# Validate source type
-		if content_source.source_type != 'pdf':
-			raise ValueError(
-				f"Content source {content_source_id} is type '{content_source.source_type}', "
-				"expected 'pdf'"
-			)
-
-		# Extract PDF file location from source_data
+		content_source = await self._source_of_type(db, content_source_id, 'pdf')
 		s3_key = content_source.source_data.get('s3_key')
 		filename = content_source.source_data.get('filename')
-
-		if not s3_key or not filename:
-			error_msg = "PDF source missing 's3_key' or 'filename' in source_data"
-			logger.error(f"Content source {content_source_id}: {error_msg}")
-			await self._update_extraction_failed(db, content_source, error_msg)
-			return ExtractionResult(success=False, error_message=error_msg)
-
-		# The PDF lives in S3 under s3_key (written by the upload endpoint). Without
-		# a configured bucket there is nothing to download from, so fail clearly
-		# rather than reading a non-existent local path.
-		bucket = getattr(settings, "AWS_S3_BUCKET", None)
-		if not bucket:
-			error_msg = "File storage not configured; cannot retrieve PDF for extraction"
-			logger.error(f"Content source {content_source_id}: {error_msg}")
+		error_msg = self._precheck_pdf(s3_key, filename, content_source_id)
+		if error_msg:
 			await self._update_extraction_failed(db, content_source, error_msg)
 			return ExtractionResult(success=False, error_message=error_msg)
 
 		# Update status to 'extracting'
 		await self._update_extraction_status(db, content_source, 'extracting')
 
-		# Download the PDF from S3 to a temp file, extract, then always clean up.
-		storage = StorageService(bucket_name=bucket, region_name=settings.AWS_REGION)
+		try:
+			extracted_text = await self._download_and_extract_pdf(s3_key, filename)
+			# Update with success
+			await self._update_extraction_complete(db, content_source, extracted_text)
+		except Exception as e:  # noqa: BLE001 — every extraction failure (download, corrupt PDF, DB write) must end as a recorded 'failed' status with a message, never a source stuck 'extracting'; _pdf_error_message logs each kind (logger.exception for the unexpected)
+			error_msg = self._pdf_error_message(e, s3_key, filename)
+			await self._update_extraction_failed(db, content_source, error_msg)
+			return ExtractionResult(success=False, error_message=error_msg)
+
+		logger.info(
+			f"Successfully extracted {len(extracted_text)} characters from PDF {filename}"
+		)
+		return ExtractionResult(success=True, content=extracted_text)
+
+	def _precheck_pdf(
+		self, s3_key: Optional[str], filename: Optional[str], content_source_id: UUID
+	) -> Optional[str]:
+		"""Why the PDF cannot be extracted at all, or None when it can."""
+		if not s3_key or not filename:
+			error_msg = "PDF source missing 's3_key' or 'filename' in source_data"
+			logger.error(f"Content source {content_source_id}: {error_msg}")
+			return error_msg
+		# The PDF lives in S3 under s3_key (written by the upload endpoint). Without
+		# a configured bucket there is nothing to download from, so fail clearly
+		# rather than reading a non-existent local path.
+		if not getattr(settings, "AWS_S3_BUCKET", None):
+			error_msg = "File storage not configured; cannot retrieve PDF for extraction"
+			logger.error(f"Content source {content_source_id}: {error_msg}")
+			return error_msg
+		return None
+
+	async def _download_and_extract_pdf(self, s3_key: str, filename: str) -> str:
+		"""Download the PDF to a temp file, extract its text, always clean up."""
+		storage = StorageService(
+			bucket_name=settings.AWS_S3_BUCKET, region_name=settings.AWS_REGION
+		)
 		temp_path: Optional[str] = None
 		try:
 			with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
 				temp_path = tmp.name
-
 			logger.info(f"Downloading PDF {filename} from S3 key {s3_key}")
 			await storage.download_file(s3_key, temp_path)
-
-			# Extract content using Podcastfy (sync extractor in a worker thread)
 			logger.info(f"Extracting content from PDF: {filename}")
-			extracted_text = await asyncio.to_thread(
-				self.pdf_extractor.extract_content,
-				temp_path
-			)
-
-			# Update with success
-			await self._update_extraction_complete(db, content_source, extracted_text)
-
-			logger.info(
-				f"Successfully extracted {len(extracted_text)} characters from PDF {filename}"
-			)
-			return ExtractionResult(success=True, content=extracted_text)
-
-		except FileNotFoundError:
-			error_msg = f"PDF file not found in storage (s3_key: {s3_key})"
-			logger.error(f"File error extracting {filename}: {error_msg}")
-			await self._update_extraction_failed(db, content_source, error_msg)
-			return ExtractionResult(success=False, error_message=error_msg)
-
-		except Exception as e:
-			# Handle download failures and PDF extraction errors (corrupted file, etc.)
-			error_msg = f"Error extracting PDF content: {str(e)}"
-			logger.exception(f"Error extracting {filename}: {error_msg}")
-			await self._update_extraction_failed(db, content_source, error_msg)
-			return ExtractionResult(success=False, error_message=error_msg)
-
+			return await asyncio.to_thread(pdf_to_text, temp_path)
 		finally:
 			# Always remove the downloaded temp file, even on failure.
-			if temp_path and os.path.exists(temp_path):
-				try:
-					os.unlink(temp_path)
-				except OSError:
-					logger.warning(f"Failed to remove temp PDF file: {temp_path}")
+			_remove_temp_file(temp_path)
+
+	def _pdf_error_message(self, exc: Exception, s3_key: str, filename: str) -> str:
+		"""Log a failed PDF extraction the way its kind deserves; return the message."""
+		if isinstance(exc, FileNotFoundError):
+			error_msg = f"PDF file not found in storage (s3_key: {s3_key})"
+			logger.error(f"File error extracting {filename}: {error_msg}")
+			return error_msg
+		# Download failures and PDF extraction errors (corrupted file, etc.)
+		error_msg = f"Error extracting PDF content: {str(exc)}"
+		logger.exception(f"Error extracting {filename}: {error_msg}")
+		return error_msg
 
 	async def extract_from_text(
 		self,

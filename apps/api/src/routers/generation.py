@@ -30,10 +30,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generation", tags=["Generation"])
 
-# podcastfy 0.4.1's TTSProviderFactory registers providers as
-# {openai, elevenlabs, edge, gemini, geminimulti}. The app stores the
-# multi-speaker provider as "gemini_multi" (underscore), which podcastfy would
-# reject as unsupported — normalize it before forwarding (issue #217).
+# INERT since #543: this translation was for podcastfy, whose provider registry
+# spelled the multi-speaker provider "geminimulti" (issue #217). The task now
+# reads the episode's stored TTS configuration itself and ignores tts_model and
+# conversation_config["text_to_speech"]. Removal needs generate_podcast split
+# first (cc 56), tracked in #623.
 _PODCASTFY_TTS_PROVIDER = {"gemini_multi": "geminimulti"}
 
 # Statuses from which a (re)generation may be started. Anything else means a run

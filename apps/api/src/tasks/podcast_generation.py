@@ -1,8 +1,7 @@
 """
 Celery tasks for podcast generation.
 
-generate_podcast_task runs the in-repo engine (src/engine) by default, or
-podcastfy when settings.ENGINE is "podcastfy" (#543).
+generate_podcast_task runs the in-repo engine (src/engine, #538 / #543).
 """
 import os
 import shutil
@@ -283,34 +282,10 @@ def _claim_generation(episode_id: str, task_id: str, retries: Optional[int]) -> 
     return None
 
 
-def _reject_unavailable_provider(tts_model: str) -> None:
-    # ElevenLabs is unavailable on this path until the #543 cut-over.
-    # #542 moved the dependency to elevenlabs>=2.x for Text-to-Dialogue, and
-    # 2.x removed `client.generate()` -- the one call podcastfy's provider
-    # makes. Failing here with the reason beats an AttributeError raised
-    # from inside site-packages after the LLM has already been paid for.
-    #
-    # Deliberately called AFTER the idempotency short-circuits: raising
-    # before them would turn a redelivery of an already-complete episode
-    # into a failure, and the retries-exhausted handler would then overwrite
-    # a completed episode's status with 'failed'.
-    if tts_model == "elevenlabs" and not _uses_native_engine():
-        raise RuntimeError(
-            "ElevenLabs generation is temporarily unavailable: the engine "
-            "rewrite (#542) requires elevenlabs>=2.x, which removed the API "
-            "podcastfy uses. It returns when #543 replaces podcastfy. "
-            "Select another TTS provider for this episode in the meantime."
-        )
-
-
-# podcastfy 0.4.1's own voices for an episode with no TTS configuration, kept so
-# unconfigured episodes sound the same across the #543 cut-over. The model is
-# left to the engine's verified default (ENGINE_OPENAI_TTS_MODEL).
+# Voices for an episode with no TTS configuration: the defaults the previous
+# engine used, kept so unconfigured episodes sound the same across the #543
+# cut-over. The model is the engine's verified default (ENGINE_OPENAI_TTS_MODEL).
 _DEFAULT_TTS_CONFIG = {"voice_1": "echo", "voice_2": "shimmer"}
-
-
-def _uses_native_engine() -> bool:
-    return settings.ENGINE == "native"
 
 
 def _effective_tts(episode: Episode):
@@ -323,10 +298,9 @@ def _effective_tts(episode: Episode):
 def _load_native_inputs(episode_id: str) -> tuple:
     """Return ``(user_id, tts_provider, tts_config)`` for the native engine.
 
-    Read from the episode row rather than passed by the router: the router
-    sends podcastfy's renamed provider and nested voice shape, and the row is
-    the one source of truth for both engines. An episode with no TTS
-    configuration gets podcastfy's own default voices.
+    Read from the episode row, the one source of truth for the configuration,
+    rather than from the router's kwargs. An episode with no TTS configuration
+    gets _DEFAULT_TTS_CONFIG.
     """
     with SyncSessionLocal() as db:
         episode = db.get(Episode, uuid_module.UUID(episode_id))
@@ -338,50 +312,11 @@ def _load_native_inputs(episode_id: str) -> tuple:
         return str(episode.user_id), tts.provider, dict(tts.config or {})
 
 
-def _stored_transcript_path(episode_id: str) -> Optional[str]:
-    with SyncSessionLocal() as db:
-        episode = db.get(Episode, uuid_module.UUID(episode_id))
-        return episode.transcript_path if episode is not None else None
-
-
-def _generate_audio(
-    task: Task,
-    episode_id: str,
-    run_dir: str,
-    *,
-    urls: Optional[List[str]],
-    text_content: Optional[str],
-    image_paths: Optional[List[str]],
-    topic: Optional[str],
-    tts_model: str,
-    conversation_config: Optional[Dict[str, Any]],
-    longform: bool,
-) -> tuple:
-    """Run the selected engine; return ``(audio_path, transcript_path)``."""
-    if _uses_native_engine():
-        return _run_native_engine(
-            task, episode_id, run_dir,
-            urls=urls, text_content=text_content, image_paths=image_paths,
-            topic=topic, conversation_config=conversation_config, longform=longform,
-        )
-    audio_file_path = _run_podcastfy(
-        task, episode_id, run_dir,
-        urls=urls, text_content=text_content, image_paths=image_paths,
-        topic=topic, tts_model=tts_model,
-        conversation_config=conversation_config, longform=longform,
-    )
-    # podcastfy does not return the transcript path when generating audio; the
-    # transcript is a temp artifact deleted with the run dir after upload (#309).
-    # Keep whatever the row already names (a native run's stored transcript):
-    # writing None would orphan that object for the delete flows (#543).
-    return audio_file_path, _stored_transcript_path(episode_id)
-
-
 def _collect_sources(text_content: Optional[str], urls: Optional[List[str]]) -> List[str]:
     """The engine's text inputs: extracted/pasted text, then pending URLs.
 
-    podcastfy fetched URL sources itself; the engine takes text, so pending
-    URLs go through the same SSRF-guarded fetch as extraction (#206, #543).
+    Pending URLs go through the same SSRF-guarded fetch as extraction
+    (#206, #543): the engine takes text, not URLs.
     """
     sources = [text_content] if text_content else []
     if urls:
@@ -435,60 +370,6 @@ def _run_native_engine(
     # the delete flows can only queue a transcript the row already names.
     _update_episode(episode_id, {"transcript_path": transcript_path})
     return str(audio_path), transcript_path
-
-
-def _run_podcastfy(
-    task: Task,
-    episode_id: str,
-    run_dir: str,
-    *,
-    urls: Optional[List[str]],
-    text_content: Optional[str],
-    image_paths: Optional[List[str]],
-    topic: Optional[str],
-    tts_model: str,
-    conversation_config: Optional[Dict[str, Any]],
-    longform: bool,
-) -> str:
-    """Generate with podcastfy and return the audio path inside ``run_dir``."""
-    from podcastfy.client import generate_podcast
-
-    # Update progress after extraction
-    _report_progress(task, episode_id, 'extraction', 33, 'Content extracted successfully')
-
-    # Stage 2: Transcript Generation (33-66%)
-    _report_progress(task, episode_id, 'transcript', 33, 'Generating podcast transcript...')
-
-    # Route engine output (audio + transcript) into a per-run temp dir via
-    # podcastfy's supported text_to_speech.output_directories config (deep-
-    # merged into its defaults). Otherwise podcastfy writes to persistent
-    # data/audio + data/transcripts, which nothing ever cleans up (issue #309).
-    engine_conversation_config = dict(conversation_config or {})
-    engine_tts_config = dict(engine_conversation_config.get("text_to_speech") or {})
-    engine_tts_config["output_directories"] = {
-        "audio": run_dir,
-        "transcripts": run_dir,
-    }
-    engine_conversation_config["text_to_speech"] = engine_tts_config
-
-    # Generate the podcast using existing CLI.
-    # podcastfy 0.4.1 has no `file`/`youtube_urls` kwargs: YouTube URLs flow
-    # through `urls`, and file/PDF sources are pre-extracted into `text`.
-    result = generate_podcast(
-        urls=urls,
-        text=text_content,
-        image_paths=image_paths,
-        topic=topic,
-        tts_model=tts_model,
-        conversation_config=engine_conversation_config,
-        longform=longform,
-    )
-
-    _report_progress(task, episode_id, 'transcript', 66, 'Transcript generated successfully')
-
-    # Stage 3: Audio Synthesis (66-100%)
-    _report_progress(task, episode_id, 'audio', 66, 'Synthesizing audio...')
-    return result
 
 
 def _measure_audio(audio_file_path: str) -> tuple:
@@ -765,10 +646,8 @@ def generate_podcast_task(
     platforms: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Generate a podcast episode with the engine selected by ``settings.ENGINE``.
-
-    This task wraps the existing generate_podcast() function from the CLI
-    and provides progress tracking for the GUI.
+    Generate a podcast episode with the in-repo engine (src/engine): script,
+    voice, store the transcript, and report progress for the GUI.
 
     After successful generation, optionally triggers downstream workflow steps:
     - S3 upload (always, via finalize_episode_generation_task or build_generation_workflow)
@@ -782,8 +661,8 @@ def generate_podcast_task(
         text_content: Raw text content (also carries pre-extracted file/PDF content)
         image_paths: List of image file paths
         topic: Topic for content generation (uses web search)
-        tts_model: podcastfy's TTS provider key (ENGINE=podcastfy only; the native
-            engine reads the episode's stored TTS configuration itself)
+        tts_model: Accepted and ignored: the router still sends it (#623). The
+            engine reads the episode's stored TTS configuration itself
         conversation_config: Custom conversation configuration
         longform: Whether to generate long-form content
         enable_composition: Whether to merge audio snippets after generation
@@ -796,7 +675,7 @@ def generate_podcast_task(
         {
             "status": "success" | "failed",
             "audio_file_path": str,
-            "transcript_path": Optional[str],  # stored transcript (native engine); None on podcastfy
+            "transcript_path": Optional[str],  # S3 key or local path of the stored transcript
             "duration_seconds": float,
             "file_size_bytes": int,
             "error": Optional[str]
@@ -812,7 +691,6 @@ def generate_podcast_task(
             return skipped
         lock_held = True
 
-        _reject_unavailable_provider(tts_model)
         # Record in-progress state so subsequent deliveries observe in-flight work
         # and the status no longer jumps straight from 'queued' to a terminal value.
         _update_episode(episode_id, {"generation_status": "generating"})
@@ -821,11 +699,10 @@ def generate_podcast_task(
         _report_progress(self, episode_id, 'extraction', 0, 'Extracting content from sources...')
 
         run_dir = tempfile.mkdtemp(prefix=GENERATION_RUN_DIR_PREFIX)
-        audio_file_path, transcript_path = _generate_audio(
+        audio_file_path, transcript_path = _run_native_engine(
             self, episode_id, run_dir,
             urls=urls, text_content=text_content, image_paths=image_paths,
-            topic=topic, tts_model=tts_model,
-            conversation_config=conversation_config, longform=longform,
+            topic=topic, conversation_config=conversation_config, longform=longform,
         )
         file_size_bytes, duration_seconds = _measure_audio(audio_file_path)
 
@@ -835,8 +712,7 @@ def generate_podcast_task(
         generation_result = {
             "status": "success",
             "audio_file_path": audio_file_path,
-            # The engine's persisted transcript (S3 key or local path); None on
-            # podcastfy, which discards its own (#309, #543).
+            # The engine's persisted transcript: S3 key or local path (#543).
             "transcript_path": transcript_path,
             "duration_seconds": duration_seconds,
             "file_size_bytes": file_size_bytes,

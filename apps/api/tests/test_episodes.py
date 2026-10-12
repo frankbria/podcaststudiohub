@@ -416,6 +416,39 @@ async def test_delete_episode_with_s3_key_queues_outbox_row(
 
 
 @pytest.mark.asyncio
+async def test_delete_episode_queues_an_s3_transcript_as_an_s3_deletion(
+	client, project_and_auth, set_system_fields, test_db
+):
+	"""With a bucket configured, transcript_path holds an S3 key (#543). Queued as
+	a local file_path, the drain would os.remove() a path that never existed and
+	leave the object in the bucket forever, including after account erasure."""
+	from unittest.mock import patch
+	from sqlalchemy import select
+	from src.models.storage_deletion_outbox import StorageDeletionOutbox
+
+	project_id, headers = project_and_auth
+	create_response = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Transcript Episode", "description": "Desc"}
+	})
+	episode_id = create_response.json()["id"]
+	transcript_key = f"podcasts/user-{uuid4()}/episode-{episode_id}.transcript.json"
+	await set_system_fields(episode_id, transcript_path=transcript_key)
+
+	with patch("src.services.episode_service.drain_storage_deletion_outbox") as mock_drain:
+		mock_drain.delay = lambda: None
+		response = await client.delete(f"/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 204
+	result = await test_db.execute(
+		select(StorageDeletionOutbox).where(StorageDeletionOutbox.s3_key == transcript_key)
+	)
+	row = result.scalar_one()
+	assert row.file_path is None
+
+
+@pytest.mark.asyncio
 async def test_delete_episode_without_s3_key_queues_no_outbox_row(
 	client, project_and_auth, test_db
 ):

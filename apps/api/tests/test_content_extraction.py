@@ -953,3 +953,14 @@ def test_a_scheme_less_youtube_url_still_yields_its_transcript(extraction_servic
 
 	assert text == "Hello."
 	http.assert_not_called()
+
+
+def test_a_temp_pdf_that_cannot_be_removed_is_logged_not_raised(tmp_path, caplog):
+	from src.services.content_extraction_service import _remove_temp_file
+
+	path = tmp_path / "x.pdf"
+	path.write_bytes(b"%PDF")
+	with patch("src.services.content_extraction_service.os.unlink", side_effect=OSError("busy")):
+		_remove_temp_file(str(path))  # must not raise
+
+	assert "Failed to remove temp PDF file" in caplog.text

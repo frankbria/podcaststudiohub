@@ -41,8 +41,11 @@ class ProviderError(EngineError):
 
     ``retryable`` marks a failure the engine retries in place with a short
     backoff (#574), so one 503 on chunk 7 does not throw away chunks 1-6. It is
-    set only for failures that come back fast and generated nothing: a rate
-    limit, a 5xx, a refused or dropped connection. A failure that will recur on
+    set only for failures that come back fast: a rate limit, a 5xx, a refused or
+    dropped connection. Those almost always generated nothing; the exception is
+    a response body cut off mid-read, which may follow a finished (billed)
+    generation — retried anyway, because it is rare and costs no timeout to
+    detect. A failure that will recur on
     every attempt (bad key, unknown model, rejected request) is not retryable,
     and neither is a timeout: each one costs the full provider timeout, and the
     provider may have finished — and billed — the generation anyway. Those

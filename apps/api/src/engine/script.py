@@ -35,7 +35,7 @@ _ATTEMPTS = 2
 
 # Waits before each retry of a retryable provider failure (#574): what keeps a
 # 503 on chunk 7 from discarding chunks 1-6, which were paid for. Only failures
-# that return fast and generated nothing are retryable (see ProviderError), so
+# that return fast are retryable (see ProviderError for the one billed edge), so
 # this adds at most ~10s of sleep plus a few quick round trips per chunk; a
 # timeout is never retried here, because each one already spent the full
 # provider timeout of the Celery soft time limit. An outage that outlasts this

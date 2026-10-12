@@ -83,8 +83,8 @@ async def test_pdf_upload_extract_generate_pipeline(client, test_db, episode_and
         "src.services.content_extraction_service.settings.AWS_S3_BUCKET", "test-bucket"
     ), patch(
         "src.services.content_extraction_service.StorageService"
-    ) as mock_storage_cls, patch.object(
-        service.pdf_extractor, "extract_content", return_value=extracted_text
+    ) as mock_storage_cls, patch(
+        "src.services.content_extraction_service.pdf_to_text", return_value=extracted_text
     ):
         mock_storage = mock_storage_cls.return_value
         mock_storage.download_file = AsyncMock(return_value="/tmp/x.pdf")

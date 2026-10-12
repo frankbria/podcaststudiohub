@@ -37,7 +37,9 @@ def _run(tmp_path, dependencies, *, raw=None):
     return result, summary.read_text() if summary.exists() else ""
 
 
-def test_new_litellm_advisory_warns_but_does_not_block(tmp_path):
+def test_a_litellm_advisory_blocks_now_that_the_allowance_is_gone(tmp_path):
+    """litellm was warn-only only because podcastfy capped it (#518); since #543
+    it is not installed, so an advisory for it is a real finding again."""
     result, summary = _run(
         tmp_path,
         [
@@ -48,8 +50,8 @@ def test_new_litellm_advisory_warns_but_does_not_block(tmp_path):
             }
         ],
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.count("::warning") == 1 and "CVE-2099-0001" in result.stdout
+    assert result.returncode == 1
+    assert result.stdout.count("::error") == 1 and "CVE-2099-0001" in result.stdout
     assert summary.count("CVE-2099-0001") == 1  # pip-audit's duplicate records collapse
 
 
@@ -67,22 +69,35 @@ def test_unlisted_advisory_in_any_other_package_fails_loudly(tmp_path):
     assert "CVE-2099-0002" in summary
 
 
-def test_triaged_non_litellm_advisory_is_ignored_by_id_or_alias(tmp_path):
+def test_formerly_triaged_ids_block_again(tmp_path):
+    """The ten podcastfy-era TRIAGED ids are gone with podcastfy (#543)."""
     result, _ = _run(
         tmp_path,
-        [
-            # listed by its primary id
-            {"name": "pytest", "version": "8.4.2", "vulns": [_vuln("PYSEC-2026-1845")]},
-            # listed by an alias (pip-audit reports PYSEC-2026-2192, we list the CVE)
-            {
-                "name": "langchain",
-                "version": "0.3.0",
-                "vulns": [_vuln("PYSEC-2026-2192", ["CVE-2026-55443"])],
-            },
-        ],
+        [{"name": "pytest", "version": "8.4.2", "vulns": [_vuln("PYSEC-2026-1845")]}],
     )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "::error" not in result.stdout
+    assert result.returncode == 1
+    assert "PYSEC-2026-1845" in result.stdout
+
+
+def test_the_allowlist_mechanism_still_works_if_an_entry_is_ever_added(tmp_path, monkeypatch):
+    """Both lists are empty, but the mechanism stays: exercised in-process with
+    the sets patched, by id and by alias, warn-only and triaged."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("pip_audit_gate", GATE)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    monkeypatch.setattr(gate, "TRIAGED", {"CVE-2026-55443"})
+    monkeypatch.setattr(gate, "WARN_ONLY_PACKAGES", {"somepkg"})
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    report = tmp_path / "audit.json"
+    report.write_text(json.dumps({"dependencies": [
+        # triaged by alias: pip-audit reports PYSEC-2026-2192, the list holds the CVE
+        {"name": "a", "version": "1", "vulns": [_vuln("PYSEC-2026-2192", ["CVE-2026-55443"])]},
+        {"name": "somepkg", "version": "1", "vulns": [_vuln("CVE-2099-0003")]},
+    ]}))
+
+    assert gate.main(str(report)) == 0
 
 
 def test_clean_report_passes(tmp_path):

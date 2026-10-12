@@ -88,11 +88,10 @@ def test_engine_package_never_imports_langchain_or_litellm():
 
     # Matched against import statements and the hub call specifically, not any
     # mention: these modules' docstrings explain what they exist to avoid, and a
-    # bare substring scan would flag that prose. The blunt substring check still
-    # exists one test up (test_no_caller_selects_a_non_default_llm), applied to
-    # all of src/ including this package.
+    # bare substring scan would flag that prose. Not being installed at all is
+    # enforced separately (test_the_old_engines_dependency_tree_is_not_installed).
     banned = re.compile(
-        r"^\s*(?:from|import)\s+[\w.]*\b(?:langchain\w*|langsmith)\b|\bhub\.pull\s*\("
+        r"^\s*(?:from|import)\s+[\w.]*\b(?:langchain\w*|langsmith|litellm)\b|\bhub\.pull\s*\("
     )
     offenders = [
         f"{path.relative_to(engine)}:{i}: {line.strip()}"

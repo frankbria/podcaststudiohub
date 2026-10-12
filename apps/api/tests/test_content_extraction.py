@@ -887,7 +887,7 @@ def _transcript_api(entries):
 	"""A YouTubeTranscriptApi class whose instances' fetch() returns ``entries``."""
 	from unittest.mock import create_autospec
 	from youtube_transcript_api import YouTubeTranscriptApi
-	from youtube_transcript_api._transcripts import FetchedTranscriptSnippet
+	from youtube_transcript_api import FetchedTranscriptSnippet
 
 	api = create_autospec(YouTubeTranscriptApi)
 	api.return_value.fetch.return_value = [FetchedTranscriptSnippet(**e) for e in entries]

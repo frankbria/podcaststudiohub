@@ -788,3 +788,28 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
   It is `showboat exec <file> <lang> <code>` (e.g. `exec demo.md bash '…'`). The
   skill's `exec demo.md 'cmd'` form records "no such file or directory" for every
   command.
+
+## #574 — in-engine chunk retry (PR #618)
+
+- **A mutation script must never restore with `git checkout`.** It resets to the
+  last *commit*, so the first mutation silently wiped uncommitted review fixes and
+  every later mutation ran against stale code. Commit before any mutation run,
+  restore from a `cp -p` backup, and md5-check the files afterwards.
+- **"Transient" and "worth retrying here" are different properties.** A read
+  timeout is transient, but retrying it in-engine costs the full 120s provider
+  timeout per attempt (and may re-bill a finished generation), which multiplied a
+  long-form chunk's worst case past the Celery soft limit. Retry only what fails
+  fast; name the flag for the decision (`retryable`), not the weather.
+- **An SDK's exception contract is only as stable as its version constraint.**
+  google-genai is floored, not pinned, and its transport errors are raw `requests`
+  exceptions. A test that drives the *real* SDK against a local server that hangs
+  up is the guard; a closed `127.0.0.1` port is not portable (WSL drops it,
+  turning the test into a 120s timeout).
+- **The CRAP gate's "coverage command exited 1" hides which half failed.** Locally
+  it was (a) `DATABASE_URL` on the RLS role instead of the superuser (sync-ORM tests
+  hit RLS), then (b) jest exiting 1 only under load. When the full command is
+  unusable, `--coverage-command "cp <lcov> \"$QUARTERMASTER_COVERAGE_DIR/lcov.info\""`
+  feeds it a targeted lcov; say in the PR that it is a lower bound.
+- **`patch("pkg.mod.genai.Client")` patches the shared `google.genai` module.** A
+  wrapper that constructs `genai.Client` inside the patch recurses into itself;
+  capture the real class before patching.

@@ -62,7 +62,13 @@ const draftEpisode = {
   id: 'ep1',
   episode_metadata: { title: 'Test Episode', description: 'desc' },
   generation_status: 'draft',
-  generation_progress: {} as { progress?: number; error_message?: string; status?: string },
+  generation_progress: {} as {
+    progress?: number
+    error_message?: string
+    status?: string
+    content_flags?: Array<{ kind: string; match: string; turn: number; speaker: string }>
+    content_review?: string | null
+  },
   s3_url: null as string | null,
   project_id: 'p1',
   tts_config_id: null as string | null,
@@ -1223,5 +1229,109 @@ describe('EpisodePage in-app event tracking', () => {
       expect(screen.getByRole('button', { name: /download mp3/i })).not.toBeDisabled()
     })
     expect(showErrorToast).not.toHaveBeenCalled()
+  })
+})
+
+describe('EpisodePage content review (#576)', () => {
+  const flags = [
+    { kind: 'domain', match: 'totally-legit.example', turn: 0, speaker: 'host' },
+    { kind: 'promotion', match: 'use code SAVE20', turn: 3, speaker: 'guest' },
+  ]
+  const heldEpisode = {
+    ...completeEpisode,
+    generation_progress: { content_flags: flags, content_review: 'pending' },
+  }
+  const approvedEpisode = {
+    ...completeEpisode,
+    generation_progress: { content_flags: flags, content_review: 'approved' },
+  }
+  const isApprove = (url: string, init?: RequestInit) =>
+    url === '/api/proxy/episodes/ep1/content-review/approve' && init?.method === 'POST'
+
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
+  it('renders the held-for-review notice and every flag', async () => {
+    global.fetch = mockEpisodeFetchRouter({ episode: heldEpisode })
+    render(<EpisodePage />)
+
+    expect(await screen.findByText('Held for review — not published')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(/RSS feed and platform distribution/)
+    const items = screen.getAllByRole('listitem').map((li) => li.textContent)
+    expect(items).toContain('domain: totally-legit.example — host, turn 1')
+    expect(items).toContain('promotion: use code SAVE20 — guest, turn 4')
+    expect(screen.getByRole('button', { name: 'Approve for publishing' })).toBeEnabled()
+  })
+
+  it('POSTs to the proxy approve URL and hides the notice after a 200', async () => {
+    const fetchMock = withOverride(
+      mockEpisodeFetchRouter({ episode: heldEpisode }),
+      isApprove,
+      () => Promise.resolve({ ok: true, json: async () => approvedEpisode })
+    )
+    global.fetch = fetchMock
+    render(<EpisodePage />)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve for publishing' }))
+
+    expect(await screen.findByText('Content flags reviewed and approved')).toBeInTheDocument()
+    expect(screen.queryByText('Held for review — not published')).not.toBeInTheDocument()
+    expect(fetchMock).toHaveBeenCalledWith('/api/proxy/episodes/ep1/content-review/approve', {
+      method: 'POST',
+    })
+  })
+
+  it('shows the response detail and keeps the notice when approval fails', async () => {
+    global.fetch = withOverride(
+      mockEpisodeFetchRouter({ episode: heldEpisode }),
+      isApprove,
+      () =>
+        Promise.resolve({
+          ok: false,
+          statusText: 'Conflict',
+          json: async () => ({ detail: 'Episode has no content awaiting review' }),
+        })
+    )
+    render(<EpisodePage />)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve for publishing' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Failed to approve: Episode has no content awaiting review'
+    )
+    expect(screen.getByText('Held for review — not published')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Approve for publishing' })).toBeEnabled()
+  })
+
+  it('shows a network error when the approve request throws', async () => {
+    global.fetch = withOverride(
+      mockEpisodeFetchRouter({ episode: heldEpisode }),
+      isApprove,
+      () => Promise.reject(new Error('boom'))
+    )
+    render(<EpisodePage />)
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Approve for publishing' }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Failed to approve: Network error')
+  })
+
+  it('renders no notice for an episode without flags', async () => {
+    global.fetch = mockEpisodeFetchRouter({ episode: completeEpisode })
+    render(<EpisodePage />)
+    await screen.findByText('Test Episode')
+
+    expect(screen.queryByText('Held for review — not published')).not.toBeInTheDocument()
+    expect(screen.queryByText('Content flags reviewed and approved')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve for publishing' })).not.toBeInTheDocument()
+  })
+
+  it('shows the reviewed-and-approved line and no button for an approved episode', async () => {
+    global.fetch = mockEpisodeFetchRouter({ episode: approvedEpisode })
+    render(<EpisodePage />)
+
+    expect(await screen.findByText('Content flags reviewed and approved')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve for publishing' })).not.toBeInTheDocument()
   })
 })

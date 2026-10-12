@@ -39,6 +39,18 @@ interface GenerationProgress {
   status?: string
   stage?: string
   error_message?: string
+  // Set by the backend's script screening (#576): a script that mentions a
+  // domain or promotion its sources don't support is held from the RSS feed
+  // and platform distribution until the owner approves it.
+  content_flags?: ContentFlag[]
+  content_review?: "pending" | "approved" | null
+}
+
+interface ContentFlag {
+  kind: "domain" | "promotion"
+  match: string
+  turn: number
+  speaker: "host" | "guest"
 }
 
 interface Episode {
@@ -737,6 +749,12 @@ export default function EpisodePage() {
                 </p>
               )}
 
+            <ContentReviewNotice
+              key={episode.id}
+              episode={episode}
+              onApproved={applyEpisode}
+            />
+
             {audioUrl && (
               <div className="mt-4 space-y-2">
                 <audio
@@ -1205,6 +1223,87 @@ export default function EpisodePage() {
         )}
       </div>
     </div>
+  )
+}
+
+function ContentReviewNotice({
+  episode,
+  onApproved,
+}: {
+  episode: Episode
+  onApproved: (episode: Episode) => void
+}) {
+  const [approving, setApproving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const flags = episode.generation_progress?.content_flags ?? []
+  const review = episode.generation_progress?.content_review
+
+  if (review === "approved" && flags.length > 0) {
+    return (
+      <p className="text-sm text-muted-foreground mb-4">
+        Content flags reviewed and approved
+      </p>
+    )
+  }
+  if (review !== "pending") return null
+
+  const approve = async () => {
+    setApproving(true)
+    setError(null)
+    try {
+      const response = await fetch(
+        `/api/proxy/episodes/${episode.id}/content-review/approve`,
+        { method: "POST" }
+      )
+      const body: unknown = await response.json().catch(() => null)
+      if (response.ok) {
+        onApproved(body as Episode)
+      } else {
+        setError(extractApiErrorDetail(body, response.statusText || "Request failed"))
+      }
+    } catch {
+      setError("Network error")
+    } finally {
+      setApproving(false)
+    }
+  }
+
+  return (
+    <section
+      role="status"
+      aria-labelledby="content-review-heading"
+      className="mb-4 rounded-md border border-destructive/50 bg-destructive/5 p-4 space-y-3"
+    >
+      <h3
+        id="content-review-heading"
+        className="flex items-center gap-2 font-semibold text-destructive"
+      >
+        <HugeiconsIcon icon={Alert02Icon} size={18} aria-hidden="true" />
+        Held for review — not published
+      </h3>
+      <p className="text-sm text-foreground">
+        The script mentions things its sources don&apos;t support, which may be injected
+        promotion. It is kept out of the RSS feed and platform distribution until you
+        approve it.
+      </p>
+      <ul className="text-sm text-muted-foreground list-disc pl-5 space-y-1">
+        {flags.map((flag, i) => (
+          <li key={i}>
+            {flag.kind}: <span className="font-mono text-foreground">{flag.match}</span>
+            {" — "}
+            {flag.speaker}, turn {flag.turn + 1}
+          </li>
+        ))}
+      </ul>
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          Failed to approve: {error}
+        </p>
+      )}
+      <Button onClick={approve} disabled={approving} size="sm">
+        {approving ? "Approving..." : "Approve for publishing"}
+      </Button>
+    </section>
   )
 }
 

@@ -12,9 +12,10 @@ malformed response is a caught exception rather than a silently mangled
 transcript.
 """
 import logging
-from typing import Type, TypeVar
+from typing import Optional, Type, TypeVar
 
 import openai
+import requests
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
@@ -38,13 +39,30 @@ class ScriptSchemaError(EngineError):
 class ProviderError(EngineError):
     """The provider call itself failed — auth, rate limit, timeout, 5xx.
 
-    Normalising these matters because the caller's response differs by kind: a
-    schema failure is retried once here (the same input rarely parses on the
-    third try), while a provider failure is somebody else's outage and belongs
-    to the Celery task's existing backoff. Leaking
-    ``openai.RateLimitError`` / ``google.genai.errors.ClientError`` would make
-    #543 import both SDKs just to tell those two cases apart.
+    ``retryable`` marks a failure the engine retries in place with a short
+    backoff (#574), so one 503 on chunk 7 does not throw away chunks 1-6. It is
+    set only for failures that come back fast: a rate limit, a 5xx, a refused or
+    dropped connection. Those almost always generated nothing; the exception is
+    a response body cut off mid-read, which may follow a finished (billed)
+    generation — retried anyway, because it is rare and costs no timeout to
+    detect. A failure that will recur on
+    every attempt (bad key, unknown model, rejected request) is not retryable,
+    and neither is a timeout: each one costs the full provider timeout, and the
+    provider may have finished — and billed — the generation anyway. Those
+    reach the Celery task, whose backoff is the right tool for a slow outage.
+    Leaking ``openai.RateLimitError`` / ``google.genai.errors.ClientError``
+    would make every caller import both SDKs just to tell these cases apart.
     """
+
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+
+
+# 408/409/429 are the only 4xx a retry can fix (409 is a conflict both
+# providers document as retryable); every 5xx is the provider's side.
+def _is_retryable_status(code: Optional[int]) -> bool:
+    return code is not None and (code in (408, 409, 429) or code >= 500)
 
 
 def generate_json(
@@ -105,8 +123,30 @@ def _generate_gemini(
             ),
         )
     except genai_errors.APIError as exc:
-        raise ProviderError(f"Gemini call failed: {exc}") from exc
+        raise ProviderError(
+            f"Gemini call failed: {exc}", retryable=_is_retryable_status(exc.code)
+        ) from exc
+    except requests.RequestException as exc:
+        # The locked google-genai (1.2.0) sends over `requests` and wraps only
+        # HTTP status errors in APIError, so transport failures arrive here raw.
+        # pyproject only floors the SDK, so a bump could move it to httpx;
+        # test_a_dropped_gemini_connection_... drives the real SDK and fails
+        # first if this clause stops seeing its transport errors.
+        raise ProviderError(
+            f"Gemini call failed: {exc}", retryable=_gemini_transport_retryable(exc)
+        ) from exc
+    return _parse_gemini_reply(response, schema)
 
+
+def _gemini_transport_retryable(exc: requests.RequestException) -> bool:
+    # Timeout is checked first: ConnectTimeout is also a ConnectionError.
+    # A body cut off mid-read is ChunkedEncodingError, which is neither.
+    return not isinstance(exc, requests.Timeout) and isinstance(
+        exc, (requests.ConnectionError, requests.exceptions.ChunkedEncodingError)
+    )
+
+
+def _parse_gemini_reply(response: types.GenerateContentResponse, schema: Type[T]) -> T:
     try:
         text = response.text
     except ValueError as exc:
@@ -138,6 +178,10 @@ def _generate_openai(
         # Do not "fix" this to match the * 1000 above: that would be a
         # 120,000-second timeout, i.e. no timeout at all.
         timeout=settings.OPENAI_API_TIMEOUT,
+        # The SDK retries 429/5xx twice by default. The engine owns that policy
+        # for both providers (#574); leaving this on would stack two retry
+        # loops and multiply the worst-case time per chunk.
+        max_retries=0,
     )
     # `creativity` is deliberately not forwarded: GPT-5-family models reject any
     # non-default `temperature` with `unsupported_value`, so sending it would
@@ -153,7 +197,9 @@ def _generate_openai(
             response_format=schema,
         )
     except openai.OpenAIError as exc:
-        raise ProviderError(f"OpenAI call failed: {exc}") from exc
+        raise ProviderError(
+            f"OpenAI call failed: {exc}", retryable=_openai_retryable(exc)
+        ) from exc
 
     message = completion.choices[0].message
     if message.parsed is None:
@@ -161,3 +207,13 @@ def _generate_openai(
             f"OpenAI did not return the requested schema: {message.refusal!r}"
         )
     return message.parsed
+
+
+def _openai_retryable(exc: openai.OpenAIError) -> bool:
+    # APITimeoutError subclasses APIConnectionError, so it is excluded
+    # explicitly: a timeout is not retried here (see ProviderError).
+    if isinstance(exc, openai.APIStatusError):
+        return _is_retryable_status(exc.status_code)
+    return isinstance(exc, openai.APIConnectionError) and not isinstance(
+        exc, openai.APITimeoutError
+    )

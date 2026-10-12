@@ -660,26 +660,258 @@ def test_openai_api_error_becomes_a_provider_error():
             generate_script(SOURCES, ConversationConfig())
 
 
-def test_a_provider_failure_is_not_retried_here():
-    """A provider outage is not a bad reply. Burning the second paid attempt on
-    it helps nobody — the Celery task's own backoff owns that retry."""
+# --------------------------------------------------------------------------
+# Retryable provider failures are retried in-engine (#574)
+# --------------------------------------------------------------------------
+
+def _gemini_error(code: int, status: str):
     from google.genai import errors as genai_errors
+
+    cls = genai_errors.ServerError if code >= 500 else genai_errors.ClientError
+    return cls(code, _gemini_error_response(status.lower(), status))
+
+
+def gemini_with(*outcomes):
+    """A Gemini client whose calls return each outcome in turn: a payload dict
+    becomes a real response, an exception is raised."""
+    client = MagicMock()
+    client.models.generate_content = create_autospec(
+        _real_gemini_generate_content(),
+        side_effect=[
+            o if isinstance(o, BaseException) else _gemini_response(o)
+            for o in outcomes
+        ],
+    )
+    return client
+
+
+@pytest.fixture(autouse=True)
+def no_backoff():
+    """Every test: a retryable error raised anywhere here must not sleep.
+
+    ``src.engine.script.time`` is the stdlib module itself, so this patches
+    ``time.sleep`` process-wide for the duration of each test."""
+    with patch("src.engine.script.time.sleep") as sleep:
+        yield sleep
+
+
+def test_a_retryable_failure_mid_episode_does_not_regenerate_earlier_chunks(
+    no_backoff,
+):
+    """The #574 regression: a 503 on a middle chunk used to discard every chunk
+    already paid for, and the task retry then bought them all again."""
+    parts = load_fixture("long_form")
+    client = gemini_with(
+        parts[0], _gemini_error(503, "UNAVAILABLE"), parts[1], parts[2]
+    )
+
+    with patch.object(settings, "ENGINE_MAX_CHUNKS", 3), patch(
+        "src.engine.llm.genai.Client", return_value=client
+    ):
+        script = generate_script(
+            [_chunkable_source()], ConversationConfig(), longform=True
+        )
+
+    calls = client.models.generate_content.call_args_list
+    # One call per chunk plus the single retry: chunk 1 was not re-bought.
+    assert len(calls) == len(parts) + 1
+    # The retry re-sent chunk 2's request as it was, rolling summary of chunk 1
+    # included, rather than starting the episode over.
+    assert calls[2].kwargs["contents"] == calls[1].kwargs["contents"]
+    assert parts[0]["summary"] in calls[2].kwargs["contents"]
+    assert len(script.turns) == sum(len(p["turns"]) for p in parts)
+    no_backoff.assert_called_once()
+
+
+def test_a_rate_limit_is_retried_with_backoff_then_succeeds(no_backoff):
+    client = gemini_with(
+        _gemini_error(429, "RESOURCE_EXHAUSTED"), load_fixture("short_form")
+    )
+
+    with patch("src.engine.llm.genai.Client", return_value=client):
+        generate_script(SOURCES, ConversationConfig())
+
+    assert client.models.generate_content.call_count == 2
+    assert no_backoff.call_args.args[0] > 0
+
+
+def test_a_persistent_retryable_failure_gives_up_after_the_bound(no_backoff):
+    """Bounded: a sustained outage still reaches the Celery task, whose own
+    backoff is the right tool for minutes-long incidents."""
+    from src.engine.llm import ProviderError
+    from src.engine.script import _BACKOFF_SECONDS
+
+    attempts = len(_BACKOFF_SECONDS) + 1
+    client = gemini_with(*[_gemini_error(503, "UNAVAILABLE")] * attempts)
+
+    with patch("src.engine.llm.genai.Client", return_value=client):
+        with pytest.raises(ProviderError) as raised:
+            generate_script(SOURCES, ConversationConfig())
+
+    assert raised.value.retryable
+    assert client.models.generate_content.call_count == attempts
+    assert [c.args[0] for c in no_backoff.call_args_list] == list(_BACKOFF_SECONDS)
+
+
+@pytest.mark.parametrize("code,status", [
+    (400, "INVALID_ARGUMENT"),
+    (401, "UNAUTHENTICATED"),
+    (403, "PERMISSION_DENIED"),
+    (404, "NOT_FOUND"),
+])
+def test_a_permanent_provider_failure_is_not_retried(no_backoff, code, status):
+    """A revoked key or a wrong model id fails identically on every attempt;
+    retrying it only delays the error."""
+    from src.engine.llm import ProviderError
+
+    client = gemini_with(_gemini_error(code, status))
+
+    with patch("src.engine.llm.genai.Client", return_value=client):
+        with pytest.raises(ProviderError) as raised:
+            generate_script(SOURCES, ConversationConfig())
+
+    assert not raised.value.retryable
+    assert client.models.generate_content.call_count == 1
+    no_backoff.assert_not_called()
+
+
+@pytest.mark.parametrize("exc_name,retryable,calls", [
+    ("ConnectionError", True, 3),
+    ("ChunkedEncodingError", True, 3),  # body cut off mid-read
+    ("ReadTimeout", False, 1),
+    ("ConnectTimeout", False, 1),  # also a ConnectionError: Timeout wins
+    ("InvalidURL", False, 1),
+])
+def test_gemini_transport_failures_are_wrapped_and_classified(
+    no_backoff, exc_name, retryable, calls
+):
+    """google-genai's transport is ``requests``, and it wraps only HTTP status
+    errors in APIError, so these used to escape ``generate_json`` raw. A
+    timeout is wrapped but not retried: each one already cost the full
+    provider timeout, and the provider may have billed the generation."""
+    import requests
+
+    from src.engine.llm import ProviderError
+
+    error = getattr(requests.exceptions, exc_name)("boom")
+    client = gemini_with(*[error] * calls)
+
+    with patch("src.engine.llm.genai.Client", return_value=client):
+        with pytest.raises(ProviderError, match="Gemini call failed") as raised:
+            generate_script(SOURCES, ConversationConfig())
+
+    assert raised.value.retryable is retryable
+    assert client.models.generate_content.call_count == calls
+
+
+@pytest.fixture
+def hang_up_server():
+    """A local listener that accepts each connection and closes it at once —
+    a dropped connection on demand. A closed port is not used because some
+    hosts (WSL) drop rather than refuse it, which turns into a 120s timeout."""
+    import socket
+    import threading
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+
+    def hang_up():
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            conn.close()
+
+    threading.Thread(target=hang_up, daemon=True).start()
+    yield f"http://127.0.0.1:{server.getsockname()[1]}/"
+    server.close()
+
+
+def test_a_dropped_gemini_connection_through_the_real_sdk_is_a_retryable_provider_error(
+    no_backoff, hang_up_server
+):
+    """Drift guard for the ``except requests.RequestException`` in llm.py.
+
+    pyproject floors google-genai (``>=1.2.0``) instead of pinning it, and that
+    clause only works while the SDK's transport is ``requests``. This drives the
+    real, installed SDK against a local server that hangs up — no network — so
+    a bump to an httpx-based release fails here instead of letting raw
+    transport errors escape the engine unclassified.
+    """
+    import requests
+    from google import genai
+    from google.genai import types
+
+    from src.engine.llm import ProviderError
+
+    real_client = genai.Client  # captured before the patch replaces it
+
+    def hang_up_client(**kwargs):
+        options = kwargs.pop("http_options")
+        return real_client(
+            **kwargs,
+            http_options=types.HttpOptions(
+                base_url=hang_up_server, timeout=options.timeout
+            ),
+        )
+
+    with patch("src.engine.llm.genai.Client", side_effect=hang_up_client):
+        with pytest.raises(ProviderError) as raised:
+            generate_script(SOURCES, ConversationConfig())
+
+    assert isinstance(raised.value.__cause__, requests.ConnectionError), (
+        "google-genai no longer raises requests exceptions for a dropped "
+        "connection; update the transport except clause in "
+        "src/engine/llm.py:_generate_gemini"
+    )
+    assert raised.value.retryable
+    assert no_backoff.call_count == 2  # retried, then gave up after the bound
+
+
+@pytest.mark.parametrize("make_error,retryable", [
+    (lambda sdk: sdk.APITimeoutError(request=MagicMock()), False),
+    (lambda sdk: sdk.APIConnectionError(request=MagicMock()), True),
+    (lambda sdk: sdk.ConflictError(
+        "conflict", response=MagicMock(status_code=409), body=None), True),
+    (lambda sdk: sdk.RateLimitError(
+        "slow down", response=MagicMock(status_code=429), body=None), True),
+    (lambda sdk: sdk.InternalServerError(
+        "oops", response=MagicMock(status_code=503), body=None), True),
+    (lambda sdk: sdk.AuthenticationError(
+        "bad key", response=MagicMock(status_code=401), body=None), False),
+    (lambda sdk: sdk.BadRequestError(
+        "bad model", response=MagicMock(status_code=400), body=None), False),
+])
+def test_openai_failures_are_classified(no_backoff, make_error, retryable):
+    import openai as openai_sdk
 
     from src.engine.llm import ProviderError
 
     client = MagicMock()
-    client.models.generate_content = create_autospec(
-        _real_gemini_generate_content(),
-        side_effect=genai_errors.ServerError(503, _gemini_error_response(
-            "unavailable", "UNAVAILABLE"
-        )),
+    client.chat.completions.parse = create_autospec(
+        _real_openai_parse(), side_effect=make_error(openai_sdk)
     )
 
-    with patch("src.engine.llm.genai.Client", return_value=client):
-        with pytest.raises(ProviderError):
+    with patch.object(settings, "ENGINE_LLM_PROVIDER", "openai"), patch(
+        "src.engine.llm.openai.OpenAI", return_value=client
+    ):
+        with pytest.raises(ProviderError) as raised:
             generate_script(SOURCES, ConversationConfig())
 
-    assert client.models.generate_content.call_count == 1
+    assert raised.value.retryable is retryable
+
+
+def test_the_openai_sdk_does_not_retry_underneath_the_engine():
+    """openai-python retries 429/5xx twice by default. Leaving that on under the
+    engine's own retry would multiply worst-case wall time per chunk."""
+    with patch.object(settings, "ENGINE_LLM_PROVIDER", "openai"), use_openai(
+        load_fixture("short_form")
+    ) as client_cls:
+        generate_script(SOURCES, ConversationConfig())
+
+    assert client_cls.call_args.kwargs["max_retries"] == 0
 
 
 # --------------------------------------------------------------------------

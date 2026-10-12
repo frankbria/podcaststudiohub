@@ -13,11 +13,12 @@ Replaces ``podcastfy.content_generator.ContentGenerator``. Three things change:
 """
 import logging
 import re
+import time
 from typing import Callable, Dict, List, Optional, Union
 
 from src.config import settings
 from src.engine import prompts
-from src.engine.llm import EngineError, ScriptSchemaError, generate_json
+from src.engine.llm import EngineError, ProviderError, ScriptSchemaError, generate_json
 from src.engine.models import ConversationConfig, Script, Turn
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,16 @@ _SEAM_TURNS = 2
 # One retry. A second failure is a signal about the input or the model, not bad
 # luck, and each attempt is a paid call.
 _ATTEMPTS = 2
+
+# Waits before each retry of a retryable provider failure (#574): what keeps a
+# 503 on chunk 7 from discarding chunks 1-6, which were paid for. Only failures
+# that return fast are retryable (see ProviderError for the one billed edge), so
+# this adds at most ~10s of sleep plus a few quick round trips per chunk; a
+# timeout is never retried here, because each one already spent the full
+# provider timeout of the Celery soft time limit. An outage that outlasts this
+# belongs to the task's own backoff. In-process only, so a worker restart still
+# starts the episode over.
+_BACKOFF_SECONDS = (2, 8)
 
 
 class ScriptValidationError(EngineError):
@@ -108,16 +119,15 @@ def generate_script(
 def _attempt(
     *, system: str, user: str, conversation: ConversationConfig, validate: bool
 ) -> Script:
-    """Call the provider, retrying once if the reply is unusable."""
+    """Call the provider, retrying once if the reply is unusable.
+
+    Retryable provider failures are retried separately, in ``_call``; they do
+    not use up this budget, which is for replies that arrived but were bad.
+    """
     failure: Optional[EngineError] = None
     for attempt in range(_ATTEMPTS):
         try:
-            script = generate_json(
-                system=system,
-                user=user,
-                schema=Script,
-                creativity=conversation.creativity,
-            )
+            script = _call(system, user, conversation)
             if validate:
                 _validate(script)
             return script
@@ -130,6 +140,25 @@ def _attempt(
                 exc,
             )
     raise failure
+
+
+def _call(system: str, user: str, conversation: ConversationConfig) -> Script:
+    """One provider request, retrying retryable failures with a fixed backoff."""
+    for delay in (*_BACKOFF_SECONDS, None):
+        try:
+            return generate_json(
+                system=system,
+                user=user,
+                schema=Script,
+                creativity=conversation.creativity,
+            )
+        except ProviderError as exc:
+            if not exc.retryable or delay is None:
+                raise
+            logger.warning(
+                "Retryable provider failure, retrying in %ss: %s", delay, exc
+            )
+            time.sleep(delay)
 
 
 def _render_system(

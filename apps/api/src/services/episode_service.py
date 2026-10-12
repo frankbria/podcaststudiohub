@@ -21,7 +21,10 @@ from ..models.content_source import ContentSource
 from ..models.episode_composition import EpisodeComposition
 from ..models.storage_deletion_outbox import StorageDeletionOutbox
 from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
+import asyncio
+
 from ..tasks.maintenance import drain_storage_deletion_outbox
+from ..tasks.rss_refresh import refresh_project_rss_feed
 from ..utils.datetime_utils import to_naive_utc
 
 logger = logging.getLogger(__name__)
@@ -309,6 +312,26 @@ async def set_episode_system_fields(
 		setattr(episode, field, value)
 
 	await db.commit()
+	return episode
+
+
+async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
+	"""Release an episode held by output screening for publication (#576).
+
+	The flags stay on the record; only the review state changes. The project's
+	feed is then rebuilt so the episode appears in it (the hold had left it out).
+	"""
+	progress = dict(episode.generation_progress or {})
+	if progress.get("content_review") != "pending":
+		raise HTTPException(
+			status_code=status.HTTP_409_CONFLICT,
+			detail="This episode has no content flags awaiting review.",
+		)
+	# A new dict, not an in-place edit: plain JSONB columns do not track mutation.
+	episode.generation_progress = {**progress, "content_review": "approved"}
+	await db.commit()
+	# Synchronous and documented never to raise, so it runs off the event loop.
+	await asyncio.to_thread(refresh_project_rss_feed, episode.project_id, episode.user_id)
 	return episode
 
 

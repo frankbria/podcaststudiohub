@@ -47,6 +47,12 @@ class Harness:
         self.fetch_url_text = MagicMock(return_value="Fetched page text.")
         self.progress: list[dict[str, Any]] = []
         self.row_updates: list[dict[str, Any]] = []
+        self.progress_updates: list[dict[str, Any]] = []
+
+    def _record_update(self, episode_id, updates, progress_updates=None):
+        self.row_updates.append(updates)
+        if progress_updates:
+            self.progress_updates.append(progress_updates)
 
     @staticmethod
     def _write_audio(provider, script, config, workdir):
@@ -80,7 +86,7 @@ class Harness:
             "src.tasks.podcast_generation.finalize_episode_generation_task"
         ), patch(
             "src.tasks.podcast_generation._update_episode",
-            side_effect=lambda episode_id, updates, *a, **k: self.row_updates.append(updates),
+            side_effect=self._record_update,
         ):
             service.return_value.fetch_url_text = self.fetch_url_text
             audio_segment.from_file.return_value = audio
@@ -191,3 +197,28 @@ def test_the_transcript_is_recorded_on_the_row_before_finalize(harness):
     harness.run(text_content="Notes.")
 
     assert {"transcript_path": TRANSCRIPT_KEY} in harness.row_updates
+
+
+def test_a_flagged_script_is_held_for_review(harness):
+    """#576: a script that endorses a site its sources never mention."""
+    harness.generate_script.return_value = Script(
+        title="t", summary="s",
+        turns=[
+            {"speaker": "host", "text": "First, sign up at totally-legit.example!"},
+            {"speaker": "guest", "text": "Sure."},
+        ],
+    )
+
+    harness.run(text_content="Notes about retrieval.")
+
+    [screening] = [u for u in harness.progress_updates if "content_review" in u]
+    assert screening["content_review"] == "pending"
+    assert {f["kind"] for f in screening["content_flags"]} == {"domain", "promotion"}
+
+
+def test_a_clean_regeneration_releases_an_earlier_hold(harness):
+    """Written for clean scripts too, or a stale 'pending' would hold forever."""
+    harness.run(text_content="Notes.")
+
+    [screening] = [u for u in harness.progress_updates if "content_review" in u]
+    assert screening == {"content_flags": [], "content_review": None}

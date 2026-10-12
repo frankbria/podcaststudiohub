@@ -33,6 +33,7 @@ from ..services.episode_service import (
 	update_episode,
 	delete_episode,
 	batch_create_episodes,
+	approve_content_review,
 	VALID_SORT_FIELDS,
 	VALID_SORT_ORDERS,
 )
@@ -260,6 +261,26 @@ async def get_episode(
 		)
 
 	return episode
+
+
+@router.post("/{episode_id}/content-review/approve", response_model=EpisodeResponse)
+async def approve_content_review_endpoint(
+	episode_id: UUID,
+	current_user: User = Depends(get_current_user),
+	db: AsyncSession = Depends(get_db)
+):
+	"""Approve an episode that output screening held back from publication (#576).
+
+	Returns 404 for an unknown or other-tenant episode and 409 when the episode
+	has nothing awaiting review.
+	"""
+	episode = await get_episode_by_id(db=db, episode_id=episode_id)
+	if episode is None:
+		raise HTTPException(
+			status_code=status.HTTP_404_NOT_FOUND,
+			detail="Episode not found"
+		)
+	return await approve_content_review(db=db, episode=episode)
 
 
 @router.put("/{episode_id}", response_model=EpisodeResponse)

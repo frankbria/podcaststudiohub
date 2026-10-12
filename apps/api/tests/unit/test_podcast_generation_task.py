@@ -571,3 +571,13 @@ class TestResolveCompositionTimeline:
 			timeline = pg.resolve_composition_timeline(uuid4(), "/tmp/gen.mp3")
 
 		assert timeline == [{"file_path": "/tmp/gen.mp3", "segment_type": "main_content"}]
+
+
+@pytest.fixture(autouse=True)
+def _pin_the_podcastfy_engine(monkeypatch):
+	"""These tests mock podcastfy and exercise its path, which since #543 is the
+	ENGINE=podcastfy rollback (the native engine is the default and has its own
+	tests). #543's second PR removes podcastfy and these tests with it."""
+	from src.config import settings
+
+	monkeypatch.setattr(settings, "ENGINE", "podcastfy")

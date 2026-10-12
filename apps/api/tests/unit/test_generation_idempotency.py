@@ -197,3 +197,13 @@ def test_retry_of_in_progress_run_proceeds():
     result, mock_gen = _run_with_status("generating", retries=1)
     mock_gen.assert_called_once()
     assert result["status"] == "success"
+
+
+@pytest.fixture(autouse=True)
+def _pin_the_podcastfy_engine(monkeypatch):
+    """These tests mock podcastfy and exercise its path, which since #543 is the
+    ENGINE=podcastfy rollback (the native engine is the default and has its own
+    tests). #543's second PR removes podcastfy and these tests with it."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "ENGINE", "podcastfy")

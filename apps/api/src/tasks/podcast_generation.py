@@ -338,6 +338,12 @@ def _load_native_inputs(episode_id: str) -> tuple:
         return str(episode.user_id), tts.provider, dict(tts.config or {})
 
 
+def _stored_transcript_path(episode_id: str) -> Optional[str]:
+    with SyncSessionLocal() as db:
+        episode = db.get(Episode, uuid_module.UUID(episode_id))
+        return episode.transcript_path if episode is not None else None
+
+
 def _generate_audio(
     task: Task,
     episode_id: str,
@@ -365,9 +371,10 @@ def _generate_audio(
         conversation_config=conversation_config, longform=longform,
     )
     # podcastfy does not return the transcript path when generating audio; the
-    # transcript is a temp artifact deleted with the run dir after upload, so
-    # persist None rather than a fabricated path (#309).
-    return audio_file_path, None
+    # transcript is a temp artifact deleted with the run dir after upload (#309).
+    # Keep whatever the row already names (a native run's stored transcript):
+    # writing None would orphan that object for the delete flows (#543).
+    return audio_file_path, _stored_transcript_path(episode_id)
 
 
 def _collect_sources(text_content: Optional[str], urls: Optional[List[str]]) -> List[str]:

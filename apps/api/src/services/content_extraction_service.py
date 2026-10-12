@@ -138,12 +138,14 @@ class ContentExtractionService:
 		# A YouTube page is the video's transcript, not its watch-page HTML (the
 		# behaviour podcastfy had, #543). The request goes to YouTube's own API
 		# host, not the user-supplied URL, so the SSRF path below does not apply.
-		video_id = _youtube_video_id(url)
+		extractor = self.website_extractor
+		# Normalised first: urlparse finds no host in a scheme-less URL, so
+		# "youtube.com/watch?v=…" would otherwise miss the transcript branch.
+		current_url = extractor.normalize_url(url)
+		video_id = _youtube_video_id(current_url)
 		if video_id:
 			return _youtube_transcript(video_id)
-		extractor = self.website_extractor
 		headers = {"User-Agent": extractor.user_agent}
-		current_url = extractor.normalize_url(url)
 
 		for _ in range(_MAX_REDIRECT_HOPS + 1):
 			resolved = validate_public_url(

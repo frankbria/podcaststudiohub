@@ -935,3 +935,17 @@ def test_a_lookalike_host_is_not_treated_as_youtube(extraction_service, url):
 def test_a_youtube_url_without_a_video_id_is_refused(extraction_service):
 	with pytest.raises(ValueError, match="video id"):
 		extraction_service.fetch_url_text("https://www.youtube.com/feed/trending")
+
+
+def test_a_scheme_less_youtube_url_still_yields_its_transcript(extraction_service):
+	"""urlparse finds no host without a scheme; the URL is normalised first,
+	exactly as the HTML path already does (#543 bot review)."""
+	get_transcript = _transcript_api([{"text": "Hello.", "start": 0.0, "duration": 1.0}])
+	with patch(
+		"src.services.content_extraction_service.YouTubeTranscriptApi.get_transcript",
+		get_transcript,
+	), patch("src.services.content_extraction_service.pinned_session") as http:
+		text = extraction_service.fetch_url_text("youtube.com/watch?v=dQw4w9WgXcQ")
+
+	assert text == "Hello."
+	http.assert_not_called()

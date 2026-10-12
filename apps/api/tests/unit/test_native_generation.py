@@ -221,3 +221,16 @@ def test_the_transcript_is_recorded_on_the_row_before_finalize(harness):
     harness.run(text_content="Notes.")
 
     assert {"transcript_path": TRANSCRIPT_KEY} in harness.row_updates
+
+
+def test_a_rollback_regeneration_keeps_the_stored_transcript_linked(harness, monkeypatch):
+    """podcastfy writes no transcript. Overwriting a native run's transcript_path
+    with None would orphan the stored object (#543 bot review)."""
+    monkeypatch.setattr(settings, "ENGINE", "podcastfy")
+    harness.podcastfy.generate_podcast.return_value = "/tmp/rollback.mp3"
+    with patch(
+        "src.tasks.podcast_generation._stored_transcript_path", return_value=TRANSCRIPT_KEY
+    ):
+        result = harness.run(text_content="Notes.")
+
+    assert result["transcript_path"] == TRANSCRIPT_KEY

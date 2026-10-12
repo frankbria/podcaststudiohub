@@ -172,8 +172,10 @@ def validate_uuid(uuid_str: str) -> bool:
     Returns:
         True if valid UUID format, False otherwise
     """
+    # fullmatch, not match + '$': '$' also matches just before a trailing
+    # newline, so "<uuid>\n" used to pass (#575).
     uuid_pattern = re.compile(
-        r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$',
+        r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}',
         re.IGNORECASE
     )
-    return bool(uuid_pattern.match(uuid_str))
+    return bool(uuid_pattern.fullmatch(uuid_str))

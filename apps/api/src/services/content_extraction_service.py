@@ -79,7 +79,7 @@ class ContentExtractionService:
 		self.website_extractor = WebsiteExtractor()
 		self.pdf_extractor = PDFExtractor()
 
-	def _fetch_and_extract_safely(self, url: str) -> str:
+	def fetch_url_text(self, url: str) -> str:
 		"""
 		Fetch and extract URL content with SSRF-safe manual redirect handling.
 
@@ -197,7 +197,7 @@ class ContentExtractionService:
 			# Extract content with SSRF-safe, redirect-validating fetch.
 			logger.info(f"Extracting content from URL: {url}")
 			extracted_text = await asyncio.to_thread(
-				self._fetch_and_extract_safely,
+				self.fetch_url_text,
 				url
 			)
 

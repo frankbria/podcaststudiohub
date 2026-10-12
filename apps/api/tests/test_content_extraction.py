@@ -122,7 +122,7 @@ async def test_extract_from_url_success(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service, '_fetch_and_extract_safely', return_value=extracted_text):
+		 patch.object(extraction_service, 'fetch_url_text', return_value=extracted_text):
 
 		mock_get.return_value = url_content_source
 
@@ -166,7 +166,7 @@ async def test_extract_from_url_blocks_ssrf(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service, '_fetch_and_extract_safely') as mock_extract:
+		 patch.object(extraction_service, 'fetch_url_text') as mock_extract:
 
 		mock_get.return_value = url_content_source
 
@@ -190,7 +190,7 @@ def _mock_pinned_session(*responses):
 	return session
 
 
-def test_fetch_and_extract_safely_blocks_redirect_to_internal(extraction_service):
+def test_fetch_url_text_blocks_redirect_to_internal(extraction_service):
 	"""SSRF: a redirect whose target is internal must be blocked mid-fetch (issue #206)."""
 	redirect = Mock()
 	redirect.status_code = 302
@@ -201,10 +201,10 @@ def test_fetch_and_extract_safely_blocks_redirect_to_internal(extraction_service
 		return_value=_mock_pinned_session(redirect),
 	):
 		with pytest.raises(SSRFValidationError):
-			extraction_service._fetch_and_extract_safely("https://93.184.216.34/start")
+			extraction_service.fetch_url_text("https://93.184.216.34/start")
 
 
-def test_fetch_and_extract_safely_follows_safe_redirect(extraction_service):
+def test_fetch_url_text_follows_safe_redirect(extraction_service):
 	"""A redirect to another public URL is followed and its content extracted."""
 	redirect = Mock()
 	redirect.status_code = 302
@@ -218,12 +218,12 @@ def test_fetch_and_extract_safely_follows_safe_redirect(extraction_service):
 		"src.services.content_extraction_service.pinned_session",
 		return_value=_mock_pinned_session(redirect, ok),
 	):
-		result = extraction_service._fetch_and_extract_safely("https://93.184.216.34/start")
+		result = extraction_service.fetch_url_text("https://93.184.216.34/start")
 
 	assert "Hello world content" in result
 
 
-def test_fetch_and_extract_safely_pins_validated_ip(extraction_service):
+def test_fetch_url_text_pins_validated_ip(extraction_service):
 	"""The fetch must connect via a session pinned to the guard-validated IP (#234)."""
 	ok = Mock()
 	ok.status_code = 200
@@ -234,7 +234,7 @@ def test_fetch_and_extract_safely_pins_validated_ip(extraction_service):
 		"src.services.content_extraction_service.pinned_session",
 		return_value=_mock_pinned_session(ok),
 	) as mock_pinned:
-		result = extraction_service._fetch_and_extract_safely("https://93.184.216.34/start")
+		result = extraction_service.fetch_url_text("https://93.184.216.34/start")
 
 	assert "pinned content" in result
 	# pinned_session was given the validated IP literal (here the host itself).
@@ -253,7 +253,7 @@ async def test_extract_from_url_404_error(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=http_error):
+		 patch.object(extraction_service, 'fetch_url_text', side_effect=http_error):
 
 		mock_get.return_value = url_content_source
 
@@ -281,7 +281,7 @@ async def test_extract_from_url_timeout(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=timeout_error):
+		 patch.object(extraction_service, 'fetch_url_text', side_effect=timeout_error):
 
 		mock_get.return_value = url_content_source
 
@@ -307,7 +307,7 @@ async def test_extract_from_url_403_error(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source'), \
-		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=http_error):
+		 patch.object(extraction_service, 'fetch_url_text', side_effect=http_error):
 
 		mock_get.return_value = url_content_source
 
@@ -330,7 +330,7 @@ async def test_extract_from_url_500_error(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source'), \
-		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=http_error):
+		 patch.object(extraction_service, 'fetch_url_text', side_effect=http_error):
 
 		mock_get.return_value = url_content_source
 
@@ -734,7 +734,7 @@ async def test_status_transition_url_success(
 	"""Test extraction status transitions: pending → extracting → complete."""
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service, '_fetch_and_extract_safely', return_value="content"):
+		 patch.object(extraction_service, 'fetch_url_text', return_value="content"):
 
 		mock_get.return_value = url_content_source
 
@@ -759,7 +759,7 @@ async def test_status_transition_url_failure(
 	"""Test extraction status transitions: pending → extracting → failed."""
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=Timeout()):
+		 patch.object(extraction_service, 'fetch_url_text', side_effect=Timeout()):
 
 		mock_get.return_value = url_content_source
 
@@ -811,7 +811,7 @@ async def test_database_update_error_message(
 	"""Test error_message column is updated on failure."""
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service, '_fetch_and_extract_safely', side_effect=Timeout()):
+		 patch.object(extraction_service, 'fetch_url_text', side_effect=Timeout()):
 
 		mock_get.return_value = url_content_source
 
@@ -834,7 +834,7 @@ async def test_database_update_clears_error_on_success(
 
 	with patch('src.services.content_extraction_service.get_content_source_by_id') as mock_get, \
 		 patch('src.services.content_extraction_service.update_content_source') as mock_update, \
-		 patch.object(extraction_service, '_fetch_and_extract_safely', return_value="content"):
+		 patch.object(extraction_service, 'fetch_url_text', return_value="content"):
 
 		mock_get.return_value = url_content_source
 
@@ -876,3 +876,76 @@ def test_extraction_result_empty_content():
 	result = ExtractionResult(success=True, content="")
 
 	assert result.word_count == 0
+
+
+# YouTube sources (#543): podcastfy turned a YouTube URL into the video's
+# transcript; an HTML scrape of the watch page yields navigation and consent
+# text instead. fetch_url_text is the one fetch both extraction and the native
+# engine use, so YouTube is handled there.
+
+def _transcript_api(entries):
+	from unittest.mock import create_autospec
+	from youtube_transcript_api import YouTubeTranscriptApi
+
+	return create_autospec(YouTubeTranscriptApi.get_transcript, return_value=entries)
+
+
+@pytest.mark.parametrize("url,video_id", [
+	("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+	("https://youtube.com/watch?v=dQw4w9WgXcQ&t=42s", "dQw4w9WgXcQ"),
+	("https://youtu.be/dQw4w9WgXcQ?si=abc", "dQw4w9WgXcQ"),
+	("https://m.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+])
+def test_a_youtube_url_yields_its_transcript_not_the_watch_page(extraction_service, url, video_id):
+	get_transcript = _transcript_api([
+		{"text": "Welcome back.", "start": 0.0, "duration": 1.0},
+		{"text": "[Music]", "start": 1.0, "duration": 1.0},
+		{"text": "Retrieval grounds answers.", "start": 2.0, "duration": 1.0},
+	])
+	with patch(
+		"src.services.content_extraction_service.YouTubeTranscriptApi.get_transcript",
+		get_transcript,
+	), patch("src.services.content_extraction_service.pinned_session") as http:
+		text = extraction_service.fetch_url_text(url)
+
+	assert text == "Welcome back. Retrieval grounds answers."
+	assert get_transcript.call_args.args[0] == video_id
+	http.assert_not_called()  # no scrape of the watch page
+
+
+@pytest.mark.parametrize("url", [
+	"https://youtube.com.evil.test/watch?v=dQw4w9WgXcQ",
+	"https://notyoutube.com/watch?v=dQw4w9WgXcQ",
+])
+def test_a_lookalike_host_is_not_treated_as_youtube(extraction_service, url):
+	get_transcript = _transcript_api([])
+	with patch(
+		"src.services.content_extraction_service.YouTubeTranscriptApi.get_transcript",
+		get_transcript,
+	), patch(
+		"src.services.content_extraction_service.validate_public_url",
+		side_effect=SSRFValidationError("stop before any network call"),
+	):
+		with pytest.raises(SSRFValidationError):
+			extraction_service.fetch_url_text(url)
+
+	get_transcript.assert_not_called()
+
+
+def test_a_youtube_url_without_a_video_id_is_refused(extraction_service):
+	with pytest.raises(ValueError, match="video id"):
+		extraction_service.fetch_url_text("https://www.youtube.com/feed/trending")
+
+
+def test_a_scheme_less_youtube_url_still_yields_its_transcript(extraction_service):
+	"""urlparse finds no host without a scheme; the URL is normalised first,
+	exactly as the HTML path already does (#543 bot review)."""
+	get_transcript = _transcript_api([{"text": "Hello.", "start": 0.0, "duration": 1.0}])
+	with patch(
+		"src.services.content_extraction_service.YouTubeTranscriptApi.get_transcript",
+		get_transcript,
+	), patch("src.services.content_extraction_service.pinned_session") as http:
+		text = extraction_service.fetch_url_text("youtube.com/watch?v=dQw4w9WgXcQ")
+
+	assert text == "Hello."
+	http.assert_not_called()

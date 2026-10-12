@@ -16,7 +16,7 @@ import logging
 import os
 import tempfile
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 from uuid import UUID
 
 import requests
@@ -26,6 +26,7 @@ from requests.exceptions import RequestException, Timeout, HTTPError
 
 from podcastfy.content_parser.website_extractor import WebsiteExtractor
 from podcastfy.content_parser.pdf_extractor import PDFExtractor
+from youtube_transcript_api import YouTubeTranscriptApi
 
 from ..config import settings
 from ..models import ContentSource
@@ -37,6 +38,39 @@ from .storage_service import StorageService
 
 
 logger = logging.getLogger(__name__)
+
+# Exact hosts, not substrings: podcastfy matched "youtube.com" anywhere in the
+# URL, so youtube.com.evil.test counted as YouTube.
+_YOUTUBE_HOSTS = frozenset(
+	{"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
+)
+# Caption-only cues podcastfy's youtube_transcriber dropped from the text.
+_CAPTION_CUES = frozenset({"[music]"})
+
+
+def _youtube_video_id(url: str) -> Optional[str]:
+	"""The video id of a YouTube URL, or None when the URL is not YouTube."""
+	parsed = urlparse(url)
+	host = parsed.hostname  # already lowercased by urlparse; None for no host
+	if host not in _YOUTUBE_HOSTS:
+		return None
+	if host == "youtu.be":
+		video_id = parsed.path.strip("/").split("/")[0]
+	elif parsed.path.startswith("/shorts/"):
+		video_id = parsed.path.split("/")[2]
+	else:
+		video_id = parse_qs(parsed.query).get("v", [""])[0]
+	if not video_id:
+		raise ValueError(f"YouTube URL has no video id: {url}")
+	return video_id
+
+
+def _youtube_transcript(video_id: str) -> str:
+	entries = YouTubeTranscriptApi.get_transcript(video_id)
+	return " ".join(
+		entry["text"] for entry in entries
+		if entry["text"].strip().lower() not in _CAPTION_CUES
+	)
 
 # Redirect status codes that carry a Location header to follow.
 _REDIRECT_STATUS = (301, 302, 303, 307, 308)
@@ -79,7 +113,7 @@ class ContentExtractionService:
 		self.website_extractor = WebsiteExtractor()
 		self.pdf_extractor = PDFExtractor()
 
-	def _fetch_and_extract_safely(self, url: str) -> str:
+	def fetch_url_text(self, url: str) -> str:
 		"""
 		Fetch and extract URL content with SSRF-safe manual redirect handling.
 
@@ -99,10 +133,19 @@ class ContentExtractionService:
 		Raises:
 			SSRFValidationError: If the URL (or a redirect target) is internal.
 			requests.RequestException: On network/HTTP errors.
+			ValueError: For a YouTube URL that names no video.
 		"""
+		# A YouTube page is the video's transcript, not its watch-page HTML (the
+		# behaviour podcastfy had, #543). The request goes to YouTube's own API
+		# host, not the user-supplied URL, so the SSRF path below does not apply.
 		extractor = self.website_extractor
-		headers = {"User-Agent": extractor.user_agent}
+		# Normalised first: urlparse finds no host in a scheme-less URL, so
+		# "youtube.com/watch?v=…" would otherwise miss the transcript branch.
 		current_url = extractor.normalize_url(url)
+		video_id = _youtube_video_id(current_url)
+		if video_id:
+			return _youtube_transcript(video_id)
+		headers = {"User-Agent": extractor.user_agent}
 
 		for _ in range(_MAX_REDIRECT_HOPS + 1):
 			resolved = validate_public_url(
@@ -157,36 +200,10 @@ class ContentExtractionService:
 		Raises:
 			ValueError: If content source not found or not URL type
 		"""
-		# Retrieve content source
-		content_source = await get_content_source_by_id(db, content_source_id)
-		if not content_source:
-			raise ValueError(f"Content source {content_source_id} not found")
-
-		# Validate source type
-		if content_source.source_type != 'url':
-			raise ValueError(
-				f"Content source {content_source_id} is type '{content_source.source_type}', "
-				"expected 'url'"
-			)
-
-		# Extract URL from source_data
+		content_source = await self._url_source(db, content_source_id)
 		url = content_source.source_data.get('url')
-		if not url:
-			error_msg = "URL source missing 'url' field in source_data"
-			logger.error(f"Content source {content_source_id}: {error_msg}")
-			await self._update_extraction_failed(db, content_source, error_msg)
-			return ExtractionResult(success=False, error_message=error_msg)
-
-		# SSRF guard: re-validate the host at dispatch time (block unresolvable
-		# hosts here too — this is the actual fetch path, so a host that fails
-		# the lookup but resolves to an internal IP must not slip through).
-		try:
-			validate_public_url(
-				url, allowed_ports={80, 443}, block_on_resolution_failure=True
-			)
-		except SSRFValidationError as exc:
-			error_msg = "URL is not allowed: targets a non-public address."
-			logger.warning(f"Blocked SSRF extraction for {url}: {exc}")
+		error_msg = self._precheck_url(url, content_source_id)
+		if error_msg:
 			await self._update_extraction_failed(db, content_source, error_msg)
 			return ExtractionResult(success=False, error_message=error_msg)
 
@@ -197,38 +214,67 @@ class ContentExtractionService:
 			# Extract content with SSRF-safe, redirect-validating fetch.
 			logger.info(f"Extracting content from URL: {url}")
 			extracted_text = await asyncio.to_thread(
-				self._fetch_and_extract_safely,
+				self.fetch_url_text,
 				url
 			)
 
 			# Update with success
 			await self._update_extraction_complete(db, content_source, extracted_text)
+		except Exception as e:  # noqa: BLE001 — every extraction failure must end as a recorded 'failed' status with a user-facing message, never an unhandled error leaving the source 'extracting'; _extraction_error_message logs each kind (logger.exception for the unexpected)
+			error_msg = self._extraction_error_message(e, url)
+			await self._update_extraction_failed(db, content_source, error_msg)
+			return ExtractionResult(success=False, error_message=error_msg)
 
-			logger.info(
-				f"Successfully extracted {len(extracted_text)} characters from {url}"
+		logger.info(
+			f"Successfully extracted {len(extracted_text)} characters from {url}"
+		)
+		return ExtractionResult(success=True, content=extracted_text)
+
+	async def _url_source(self, db: AsyncSession, content_source_id: UUID):
+		"""The content source, which must exist and be a URL source."""
+		content_source = await get_content_source_by_id(db, content_source_id)
+		if not content_source:
+			raise ValueError(f"Content source {content_source_id} not found")
+		if content_source.source_type != 'url':
+			raise ValueError(
+				f"Content source {content_source_id} is type '{content_source.source_type}', "
+				"expected 'url'"
 			)
-			return ExtractionResult(success=True, content=extracted_text)
+		return content_source
 
+	def _precheck_url(self, url: Optional[str], content_source_id: UUID) -> Optional[str]:
+		"""Why ``url`` must not be fetched at all, or None when it may be."""
+		if not url:
+			error_msg = "URL source missing 'url' field in source_data"
+			logger.error(f"Content source {content_source_id}: {error_msg}")
+			return error_msg
+		# SSRF guard: re-validate the host at dispatch time (block unresolvable
+		# hosts here too — this is the actual fetch path, so a host that fails
+		# the lookup but resolves to an internal IP must not slip through).
+		try:
+			validate_public_url(
+				url, allowed_ports={80, 443}, block_on_resolution_failure=True
+			)
 		except SSRFValidationError as exc:
+			logger.warning(f"Blocked SSRF extraction for {url}: {exc}")
+			return "URL is not allowed: targets a non-public address."
+		return None
+
+	def _extraction_error_message(self, exc: Exception, url: str) -> str:
+		"""Log a failed fetch the way its kind deserves and return the user message."""
+		if isinstance(exc, SSRFValidationError):
 			# A redirect target resolved to an internal address mid-fetch.
-			error_msg = "URL is not allowed: targets a non-public address."
 			logger.warning(f"Blocked SSRF redirect during extraction of {url}: {exc}")
-			await self._update_extraction_failed(db, content_source, error_msg)
-			return ExtractionResult(success=False, error_message=error_msg)
-
-		except RequestException as e:
+			return "URL is not allowed: targets a non-public address."
+		if isinstance(exc, RequestException):
 			# Handle HTTP/network errors
-			error_msg = self._format_request_error(e, url)
+			error_msg = self._format_request_error(exc, url)
 			logger.error(f"Request error extracting {url}: {error_msg}")
-			await self._update_extraction_failed(db, content_source, error_msg)
-			return ExtractionResult(success=False, error_message=error_msg)
-
-		except Exception as e:
-			# Handle unexpected errors
-			error_msg = f"Unexpected error extracting content: {str(e)}"
-			logger.exception(f"Error extracting {url}: {error_msg}")
-			await self._update_extraction_failed(db, content_source, error_msg)
-			return ExtractionResult(success=False, error_message=error_msg)
+			return error_msg
+		# Handle unexpected errors
+		error_msg = f"Unexpected error extracting content: {str(exc)}"
+		logger.exception(f"Error extracting {url}: {error_msg}")
+		return error_msg
 
 	async def extract_from_pdf(
 		self,

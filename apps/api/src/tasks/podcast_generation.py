@@ -1,6 +1,8 @@
 """
-Celery tasks for podcast generation
-Wraps the existing podcastfy CLI functionality
+Celery tasks for podcast generation.
+
+generate_podcast_task runs the in-repo engine (src/engine) by default, or
+podcastfy when settings.ENGINE is "podcastfy" (#543).
 """
 import os
 import shutil
@@ -8,6 +10,7 @@ import tempfile
 import time
 import uuid as uuid_module
 import logging
+from pathlib import Path
 from celery import Task, chain
 from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy import select
@@ -18,8 +21,13 @@ from pydub import AudioSegment
 from src.worker import celery_app
 from src.config import settings
 from src.database import SyncSessionLocal
+from src.engine import EngineError, generate_script
+from src.engine.transcript import persist_transcript
+from src.engine.tts import synthesise
+from src.engine.tts.base import VoiceConfig
 from src.models.audio_snippet import AudioSnippet
 from src.models.episode import Episode
+from src.services.content_extraction_service import ContentExtractionService
 from src.tasks.callbacks import _update_episode, _utcnow_iso, _queue_orphaned_storage
 from src.tasks.idempotency import acquire_generation_lock, release_generation_lock
 from src.tasks.rss_refresh import refresh_project_rss_feed
@@ -236,6 +244,498 @@ def _upload_to_s3_with_retries(
     }
 
 
+def _report_progress(task: Task, episode_id: str, stage: str, progress: int, status: str) -> None:
+    task.update_state(
+        state='PROGRESS',
+        meta={
+            'episode_id': episode_id,
+            'stage': stage,
+            'progress': progress,
+            'status': status,
+        }
+    )
+
+
+def _claim_generation(episode_id: str, task_id: str, retries: Optional[int]) -> Optional[Dict[str, Any]]:
+    """Return a skipped result for a duplicate delivery, else take the run lock.
+
+    Idempotency guard (issue #295): short-circuit before any paid work so a
+    broker-redelivered duplicate or double-dispatch cannot re-run the paid
+    LLM/TTS pipeline. A genuine retry (same task_id) is allowed through.
+    """
+    is_retry = bool(retries)  # Celery's request.retries: None or a non-negative count
+    status = _load_generation_status(episode_id)
+    if status == "complete":
+        logger.info("Episode %s already complete; skipping duplicate generation", episode_id)
+        return _skipped_result("already complete")
+    if status in _IN_PROGRESS_STATUSES and not is_retry:
+        logger.warning(
+            "Episode %s already in progress (status=%s); skipping duplicate run",
+            episode_id, status,
+        )
+        return _skipped_result(f"already in progress ({status})")
+    if not acquire_generation_lock(episode_id, task_id):
+        logger.warning(
+            "Episode %s generation lock held by another run; skipping concurrent duplicate",
+            episode_id,
+        )
+        return _skipped_result("concurrent run in progress")
+    return None
+
+
+def _reject_unavailable_provider(tts_model: str) -> None:
+    # ElevenLabs is unavailable on this path until the #543 cut-over.
+    # #542 moved the dependency to elevenlabs>=2.x for Text-to-Dialogue, and
+    # 2.x removed `client.generate()` -- the one call podcastfy's provider
+    # makes. Failing here with the reason beats an AttributeError raised
+    # from inside site-packages after the LLM has already been paid for.
+    #
+    # Deliberately called AFTER the idempotency short-circuits: raising
+    # before them would turn a redelivery of an already-complete episode
+    # into a failure, and the retries-exhausted handler would then overwrite
+    # a completed episode's status with 'failed'.
+    if tts_model == "elevenlabs" and not _uses_native_engine():
+        raise RuntimeError(
+            "ElevenLabs generation is temporarily unavailable: the engine "
+            "rewrite (#542) requires elevenlabs>=2.x, which removed the API "
+            "podcastfy uses. It returns when #543 replaces podcastfy. "
+            "Select another TTS provider for this episode in the meantime."
+        )
+
+
+# podcastfy 0.4.1's own voices for an episode with no TTS configuration, kept so
+# unconfigured episodes sound the same across the #543 cut-over. The model is
+# left to the engine's verified default (ENGINE_OPENAI_TTS_MODEL).
+_DEFAULT_TTS_CONFIG = {"voice_1": "echo", "voice_2": "shimmer"}
+
+
+def _uses_native_engine() -> bool:
+    return settings.ENGINE == "native"
+
+
+def _effective_tts(episode: Episode):
+    """The episode's TTS configuration, else its project's default (#217)."""
+    if episode.tts_config is not None:
+        return episode.tts_config
+    return episode.project.default_tts_config if episode.project else None
+
+
+def _load_native_inputs(episode_id: str) -> tuple:
+    """Return ``(user_id, tts_provider, tts_config)`` for the native engine.
+
+    Read from the episode row rather than passed by the router: the router
+    sends podcastfy's renamed provider and nested voice shape, and the row is
+    the one source of truth for both engines. An episode with no TTS
+    configuration gets podcastfy's own default voices.
+    """
+    with SyncSessionLocal() as db:
+        episode = db.get(Episode, uuid_module.UUID(episode_id))
+        if episode is None or episode.user_id is None:
+            raise EngineError(f"Episode {episode_id} has no owner to store its transcript under")
+        tts = _effective_tts(episode)
+        if tts is None:
+            return str(episode.user_id), "openai", dict(_DEFAULT_TTS_CONFIG)
+        return str(episode.user_id), tts.provider, dict(tts.config or {})
+
+
+def _stored_transcript_path(episode_id: str) -> Optional[str]:
+    with SyncSessionLocal() as db:
+        episode = db.get(Episode, uuid_module.UUID(episode_id))
+        return episode.transcript_path if episode is not None else None
+
+
+def _generate_audio(
+    task: Task,
+    episode_id: str,
+    run_dir: str,
+    *,
+    urls: Optional[List[str]],
+    text_content: Optional[str],
+    image_paths: Optional[List[str]],
+    topic: Optional[str],
+    tts_model: str,
+    conversation_config: Optional[Dict[str, Any]],
+    longform: bool,
+) -> tuple:
+    """Run the selected engine; return ``(audio_path, transcript_path)``."""
+    if _uses_native_engine():
+        return _run_native_engine(
+            task, episode_id, run_dir,
+            urls=urls, text_content=text_content, image_paths=image_paths,
+            topic=topic, conversation_config=conversation_config, longform=longform,
+        )
+    audio_file_path = _run_podcastfy(
+        task, episode_id, run_dir,
+        urls=urls, text_content=text_content, image_paths=image_paths,
+        topic=topic, tts_model=tts_model,
+        conversation_config=conversation_config, longform=longform,
+    )
+    # podcastfy does not return the transcript path when generating audio; the
+    # transcript is a temp artifact deleted with the run dir after upload (#309).
+    # Keep whatever the row already names (a native run's stored transcript):
+    # writing None would orphan that object for the delete flows (#543).
+    return audio_file_path, _stored_transcript_path(episode_id)
+
+
+def _collect_sources(text_content: Optional[str], urls: Optional[List[str]]) -> List[str]:
+    """The engine's text inputs: extracted/pasted text, then pending URLs.
+
+    podcastfy fetched URL sources itself; the engine takes text, so pending
+    URLs go through the same SSRF-guarded fetch as extraction (#206, #543).
+    """
+    sources = [text_content] if text_content else []
+    if urls:
+        extractor = ContentExtractionService()
+        sources += [extractor.fetch_url_text(url) for url in urls]
+    return sources
+
+
+def _run_native_engine(
+    task: Task,
+    episode_id: str,
+    run_dir: str,
+    *,
+    urls: Optional[List[str]],
+    text_content: Optional[str],
+    image_paths: Optional[List[str]],
+    topic: Optional[str],
+    conversation_config: Optional[Dict[str, Any]],
+    longform: bool,
+) -> tuple:
+    """Script, voice and store an episode with the in-repo engine (#543)."""
+    if image_paths or topic:
+        # No source type produces either today (see test_dependency_reachability);
+        # refuse rather than silently generate without them.
+        raise EngineError("Image and topic sources are not supported by the engine")
+    user_id, tts_provider, tts_config = _load_native_inputs(episode_id)
+    # Resolved before any paid call, so a misconfigured episode fails for free.
+    VoiceConfig.from_tts_config(tts_config, provider=tts_provider)
+
+    sources = _collect_sources(text_content, urls)
+    _report_progress(task, episode_id, 'extraction', 33, 'Content extracted successfully')
+
+    # Stage 2: Transcript Generation (33-66%), reported per long-form part.
+    def on_progress(stage: str, percent: int) -> None:
+        _report_progress(
+            task, episode_id, 'transcript', 33 + round(percent * 33 / 100),
+            'Generating podcast transcript...',
+        )
+
+    _report_progress(task, episode_id, 'transcript', 33, 'Generating podcast transcript...')
+    script = generate_script(
+        sources, conversation_config, longform=longform, on_progress=on_progress
+    )
+
+    # Stage 3: Audio Synthesis (66-100%)
+    _report_progress(task, episode_id, 'audio', 66, 'Synthesizing audio...')
+    audio_path = synthesise(tts_provider, script, tts_config, Path(run_dir))
+    transcript_path = persist_transcript(script, user_id, episode_id)
+    # Recorded on the row immediately, not left for finalize: if the episode is
+    # deleted while generation is still running, or finalize fails for good,
+    # the delete flows can only queue a transcript the row already names.
+    _update_episode(episode_id, {"transcript_path": transcript_path})
+    return str(audio_path), transcript_path
+
+
+def _run_podcastfy(
+    task: Task,
+    episode_id: str,
+    run_dir: str,
+    *,
+    urls: Optional[List[str]],
+    text_content: Optional[str],
+    image_paths: Optional[List[str]],
+    topic: Optional[str],
+    tts_model: str,
+    conversation_config: Optional[Dict[str, Any]],
+    longform: bool,
+) -> str:
+    """Generate with podcastfy and return the audio path inside ``run_dir``."""
+    from podcastfy.client import generate_podcast
+
+    # Update progress after extraction
+    _report_progress(task, episode_id, 'extraction', 33, 'Content extracted successfully')
+
+    # Stage 2: Transcript Generation (33-66%)
+    _report_progress(task, episode_id, 'transcript', 33, 'Generating podcast transcript...')
+
+    # Route engine output (audio + transcript) into a per-run temp dir via
+    # podcastfy's supported text_to_speech.output_directories config (deep-
+    # merged into its defaults). Otherwise podcastfy writes to persistent
+    # data/audio + data/transcripts, which nothing ever cleans up (issue #309).
+    engine_conversation_config = dict(conversation_config or {})
+    engine_tts_config = dict(engine_conversation_config.get("text_to_speech") or {})
+    engine_tts_config["output_directories"] = {
+        "audio": run_dir,
+        "transcripts": run_dir,
+    }
+    engine_conversation_config["text_to_speech"] = engine_tts_config
+
+    # Generate the podcast using existing CLI.
+    # podcastfy 0.4.1 has no `file`/`youtube_urls` kwargs: YouTube URLs flow
+    # through `urls`, and file/PDF sources are pre-extracted into `text`.
+    result = generate_podcast(
+        urls=urls,
+        text=text_content,
+        image_paths=image_paths,
+        topic=topic,
+        tts_model=tts_model,
+        conversation_config=engine_conversation_config,
+        longform=longform,
+    )
+
+    _report_progress(task, episode_id, 'transcript', 66, 'Transcript generated successfully')
+
+    # Stage 3: Audio Synthesis (66-100%)
+    _report_progress(task, episode_id, 'audio', 66, 'Synthesizing audio...')
+    return result
+
+
+def _measure_audio(audio_file_path: str) -> tuple:
+    """Return ``(file_size_bytes, duration_seconds)`` for the generated file."""
+    file_size_bytes = os.path.getsize(audio_file_path)
+    audio = AudioSegment.from_file(audio_file_path)
+    return file_size_bytes, len(audio) / 1000.0
+
+
+def _dispatch_downstream(
+    episode_id: str,
+    generation_result: Dict[str, Any],
+    *,
+    enable_composition: bool,
+    composition_timeline: Optional[List[Dict[str, Any]]],
+    enable_distribution: bool,
+    platforms: Optional[Dict[str, Dict[str, Any]]],
+) -> None:
+    """Hand a successful generation to the workflow chain or to finalization."""
+    # Determine whether to use the enhanced workflow chain
+    # (composition/distribution) or the simpler finalization task.
+    use_workflow_chain = enable_composition or (
+        enable_distribution and bool(platforms)
+    )
+    if use_workflow_chain:
+        _dispatch_workflow_chain(
+            episode_id, generation_result,
+            enable_composition=enable_composition,
+            composition_timeline=composition_timeline,
+            enable_distribution=enable_distribution,
+            platforms=platforms,
+        )
+    else:
+        _finalize_or_fall_back(episode_id, generation_result)
+
+
+def _persist_generation_metadata(episode_id: str, generation_result: Dict[str, Any]) -> tuple:
+    """Write file metadata before the chain runs; return ``(user_id, project_id)``.
+
+    The chain's callbacks only write S3 fields/status, so without this any
+    episode generated with composition or distribution would lose
+    file_path/transcript_path/duration_seconds/file_size_bytes that the default
+    finalize path records (issue #211).
+    """
+    user_id: Optional[str] = None
+    project_id = None
+    try:
+        with SyncSessionLocal() as db:
+            episode = db.get(Episode, uuid_module.UUID(episode_id))
+            if episode is not None:
+                project_id = episode.project_id
+            if episode is not None and episode.user_id is not None:
+                user_id = str(episode.user_id)
+                episode.file_path = generation_result["audio_file_path"]
+                episode.transcript_path = generation_result.get("transcript_path")
+                episode.duration_seconds = generation_result["duration_seconds"]
+                episode.file_size_bytes = generation_result["file_size_bytes"]
+                db.commit()
+    except Exception as persist_err:  # noqa: BLE001 — the audio is already generated; failing to persist its metadata must not abort the workflow dispatch that follows
+        logger.error(
+            "Episode %s: failed to persist generation metadata before "
+            "workflow dispatch: %s",
+            episode_id, persist_err,
+        )
+    return user_id, project_id
+
+
+def _timeline_for(
+    enable_composition: bool,
+    composition_timeline: Optional[List[Dict[str, Any]]],
+    project_id,
+    audio_file_path: str,
+) -> Optional[List[Dict[str, Any]]]:
+    # The router never supplies a timeline (the generated file's path
+    # doesn't exist at dispatch time), so resolve it here; a caller-
+    # supplied timeline wins (issue #313).
+    if enable_composition and not composition_timeline:
+        return resolve_composition_timeline(project_id, audio_file_path)
+    return composition_timeline
+
+
+def _dispatch_workflow_chain(
+    episode_id: str,
+    generation_result: Dict[str, Any],
+    *,
+    enable_composition: bool,
+    composition_timeline: Optional[List[Dict[str, Any]]],
+    enable_distribution: bool,
+    platforms: Optional[Dict[str, Dict[str, Any]]],
+) -> None:
+    audio_file_path = generation_result["audio_file_path"]
+    user_id, project_id = _persist_generation_metadata(episode_id, generation_result)
+
+    # Fail closed: without a resolved user_id the upload chain would write
+    # a non-tenant-scoped key (podcasts/user-/episode-…), the exact layout
+    # bug this path is meant to prevent (issue #215). Skip dispatch rather
+    # than orphan an object outside podcasts/user-*/.
+    if not user_id:
+        logger.critical(
+            "Episode %s: workflow dispatch skipped — user_id could not be "
+            "resolved, refusing to upload outside the tenant prefix",
+            episode_id,
+        )
+        return
+
+    composition_timeline = _timeline_for(
+        enable_composition, composition_timeline, project_id, audio_file_path
+    )
+
+    # Trigger the full workflow: S3 upload → [composition] → [distribution]
+    # Isolated try/except so a broker hiccup cannot mark a successful
+    # generation as "failed" or orphan the audio file.
+    logger.info(
+        "Episode %s: triggering workflow chain "
+        "(composition=%s, distribution=%s, platforms=%s)",
+        episode_id, enable_composition, enable_distribution,
+        list(platforms or {}),
+    )
+    try:
+        build_generation_workflow(
+            episode_id=episode_id,
+            audio_file_path=audio_file_path,
+            user_id=user_id,
+            s3_bucket=settings.AWS_S3_BUCKET,
+            enable_composition=enable_composition,
+            composition_timeline=composition_timeline,
+            enable_distribution=enable_distribution,
+            platforms=platforms,
+        ).apply_async()
+    except Exception as broker_err:  # noqa: BLE001 — generation already succeeded, so a broker failure of any kind must be recorded loudly and never re-mark a successful run as failed
+        logger.critical(
+            "Celery broker unavailable after successful generation for "
+            "episode %s — workflow chain could not be dispatched: %s",
+            episode_id, broker_err,
+        )
+
+
+def _finalize_or_fall_back(episode_id: str, generation_result: Dict[str, Any]) -> None:
+    # Default path: simple S3 upload + DB update via finalization task.
+    # Isolated try/except: a broker hiccup must not mark a successful
+    # generation as "failed" or orphan the audio file.
+    try:
+        finalize_episode_generation_task.delay(
+            episode_id=episode_id,
+            generation_result=generation_result,
+        )
+    except Exception as broker_err:  # noqa: BLE001 — a broker hiccup must not orphan a successful generation, so any dispatch failure falls through to the synchronous finalization below
+        logger.critical(
+            "Celery broker unavailable after successful generation for "
+            "episode %s — falling back to synchronous finalization: %s",
+            episode_id, broker_err,
+        )
+        try:
+            finalize_episode_generation_task(
+                episode_id=episode_id,
+                generation_result=generation_result,
+            )
+        except Exception as sync_err:  # noqa: BLE001 — this is the fallback's fallback: the synchronous path has failed too, so there is nothing left to try and the only correct action is to record it
+            logger.critical(
+                "Synchronous finalization also failed for episode %s: %s",
+                episode_id, sync_err,
+            )
+
+
+def _fail_on_soft_timeout(
+    task: Task, episode_id: str, task_id: str, run_dir: Optional[str], lock_held: bool
+) -> Dict[str, Any]:
+    # Hit the soft time limit (e.g. a long-form run exceeding the ceiling).
+    # SoftTimeLimitExceeded subclasses BaseException, so it bypasses the broad
+    # `except Exception` handler; the task catches it explicitly and treats it
+    # as terminal — retrying would just hit the limit again. Persist 'failed' to
+    # the DB so the episode does not stay stuck at 'queued' (issue #294).
+    msg = "Generation exceeded the soft time limit"
+    logger.error("Podcast generation soft-timeout for episode %s", episode_id)
+    if run_dir:
+        shutil.rmtree(run_dir, ignore_errors=True)
+    _update_episode(
+        episode_id,
+        updates={"generation_status": "failed"},
+        progress_updates={
+            "status": "failed",
+            "error_message": msg,
+            "failed_at": _utcnow_iso(),
+        },
+    )
+    task.update_state(
+        state='FAILURE',
+        meta={
+            'episode_id': episode_id,
+            'stage': 'failed',
+            'progress': 0,
+            'status': f'Generation failed: {msg}',
+        },
+    )
+    if lock_held:
+        release_generation_lock(episode_id, task_id)
+    return {
+        "status": "failed",
+        "audio_file_path": None,
+        "transcript_path": None,
+        "duration_seconds": 0,
+        "file_size_bytes": 0,
+        "error": msg,
+    }
+
+
+def _retry_or_fail(
+    task: Task, e: Exception, episode_id: str, task_id: str,
+    run_dir: Optional[str], lock_held: bool,
+) -> None:
+    """Retry the task, or record the permanent failure; always raises."""
+    logger.warning(
+        f"Podcast generation error for episode {episode_id}, "
+        f"attempt {task.request.retries + 1}/{task.max_retries + 1}: {e}"
+    )
+    # Each attempt creates its own run dir (a retry re-executes the whole
+    # task body), so this attempt's partial artifacts are dead weight (#309).
+    if run_dir:
+        shutil.rmtree(run_dir, ignore_errors=True)
+    # Celery re-raises the original exception when retry(exc=...) is out of
+    # attempts, so the `except MaxRetriesExceededError` this replaces never
+    # ran: the #294 status write and the lock release were stranded, and every
+    # exhausted generation leaked its Redis lock until TTL (#520). Raising is
+    # what records FAILURE and fires the router's link_error.
+    if task.request.retries >= task.max_retries:
+        logger.error(
+            f"Podcast generation failed after {task.max_retries} retries "
+            f"for episode {episode_id}: {e}"
+        )
+        # Persist 'failed' to the DB; the result backend alone would leave the
+        # episode stuck at 'queued' (issue #294).
+        _update_episode(
+            episode_id,
+            updates={"generation_status": "failed"},
+            progress_updates={
+                "status": "failed",
+                "error_message": f"Generation failed after retries: {e}",
+                "failed_at": _utcnow_iso(),
+            },
+        )
+        if lock_held:
+            release_generation_lock(episode_id, task_id)
+        raise e
+    _report_progress(task, episode_id, 'retrying', 0, f'Retrying after error: {str(e)}')
+    raise task.retry(exc=e, countdown=calculate_backoff(task.request.retries))
+
+
 @celery_app.task(
     bind=True,
     name="generate_podcast",
@@ -265,7 +765,7 @@ def generate_podcast_task(
     platforms: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Generate a podcast episode using the existing Podcastfy CLI.
+    Generate a podcast episode with the engine selected by ``settings.ENGINE``.
 
     This task wraps the existing generate_podcast() function from the CLI
     and provides progress tracking for the GUI.
@@ -282,7 +782,8 @@ def generate_podcast_task(
         text_content: Raw text content (also carries pre-extracted file/PDF content)
         image_paths: List of image file paths
         topic: Topic for content generation (uses web search)
-        tts_model: TTS provider (openai, elevenlabs, gemini, etc.)
+        tts_model: podcastfy's TTS provider key (ENGINE=podcastfy only; the native
+            engine reads the episode's stored TTS configuration itself)
         conversation_config: Custom conversation configuration
         longform: Whether to generate long-form content
         enable_composition: Whether to merge audio snippets after generation
@@ -295,366 +796,68 @@ def generate_podcast_task(
         {
             "status": "success" | "failed",
             "audio_file_path": str,
-            "transcript_path": None,  # engine transcript is a temp artifact (#309)
+            "transcript_path": Optional[str],  # stored transcript (native engine); None on podcastfy
             "duration_seconds": float,
             "file_size_bytes": int,
             "error": Optional[str]
         }
     """
     task_id = self.request.id or "unknown"
-    is_retry = (self.request.retries or 0) > 0
     lock_held = False
     run_dir: Optional[str] = None
 
     try:
-        # Idempotency guard (issue #295): short-circuit before any paid work so a
-        # broker-redelivered duplicate or double-dispatch cannot re-run the paid
-        # LLM/TTS pipeline. A genuine retry (same task_id) is allowed through.
-        status = _load_generation_status(episode_id)
-        if status == "complete":
-            logger.info("Episode %s already complete; skipping duplicate generation", episode_id)
-            return _skipped_result("already complete")
-        if status in _IN_PROGRESS_STATUSES and not is_retry:
-            logger.warning(
-                "Episode %s already in progress (status=%s); skipping duplicate run",
-                episode_id, status,
-            )
-            return _skipped_result(f"already in progress ({status})")
-        if not acquire_generation_lock(episode_id, task_id):
-            logger.warning(
-                "Episode %s generation lock held by another run; skipping concurrent duplicate",
-                episode_id,
-            )
-            return _skipped_result("concurrent run in progress")
+        skipped = _claim_generation(episode_id, task_id, self.request.retries)
+        if skipped is not None:
+            return skipped
         lock_held = True
 
-        # ElevenLabs is unavailable on this path until the #543 cut-over.
-        # #542 moved the dependency to elevenlabs>=2.x for Text-to-Dialogue, and
-        # 2.x removed `client.generate()` -- the one call podcastfy's provider
-        # makes. Failing here with the reason beats an AttributeError raised
-        # from inside site-packages after the LLM has already been paid for.
-        #
-        # Deliberately AFTER the idempotency short-circuits above: raising
-        # before them would turn a redelivery of an already-complete episode
-        # into a failure, and the retries-exhausted handler would then overwrite
-        # a completed episode's status with 'failed'.
-        if tts_model == "elevenlabs":
-            raise RuntimeError(
-                "ElevenLabs generation is temporarily unavailable: the engine "
-                "rewrite (#542) requires elevenlabs>=2.x, which removed the API "
-                "podcastfy uses. It returns when #543 replaces podcastfy. "
-                "Select another TTS provider for this episode in the meantime."
-            )
+        _reject_unavailable_provider(tts_model)
         # Record in-progress state so subsequent deliveries observe in-flight work
         # and the status no longer jumps straight from 'queued' to a terminal value.
         _update_episode(episode_id, {"generation_status": "generating"})
 
         # Stage 1: Content Extraction (0-33%)
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'extraction',
-                'progress': 0,
-                'status': 'Extracting content from sources...'
-            }
-        )
+        _report_progress(self, episode_id, 'extraction', 0, 'Extracting content from sources...')
 
-        from podcastfy.client import generate_podcast
-
-        # Update progress after extraction
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'extraction',
-                'progress': 33,
-                'status': 'Content extracted successfully'
-            }
-        )
-
-        # Stage 2: Transcript Generation (33-66%)
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'transcript',
-                'progress': 33,
-                'status': 'Generating podcast transcript...'
-            }
-        )
-
-        # Route engine output (audio + transcript) into a per-run temp dir via
-        # podcastfy's supported text_to_speech.output_directories config (deep-
-        # merged into its defaults). Otherwise podcastfy writes to persistent
-        # data/audio + data/transcripts, which nothing ever cleans up (issue #309).
         run_dir = tempfile.mkdtemp(prefix=GENERATION_RUN_DIR_PREFIX)
-        engine_conversation_config = dict(conversation_config or {})
-        engine_tts_config = dict(engine_conversation_config.get("text_to_speech") or {})
-        engine_tts_config["output_directories"] = {
-            "audio": run_dir,
-            "transcripts": run_dir,
-        }
-        engine_conversation_config["text_to_speech"] = engine_tts_config
-
-        # Generate the podcast using existing CLI.
-        # podcastfy 0.4.1 has no `file`/`youtube_urls` kwargs: YouTube URLs flow
-        # through `urls`, and file/PDF sources are pre-extracted into `text`.
-        result = generate_podcast(
-            urls=urls,
-            text=text_content,
-            image_paths=image_paths,
-            topic=topic,
-            tts_model=tts_model,
-            conversation_config=engine_conversation_config,
-            longform=longform,
+        audio_file_path, transcript_path = _generate_audio(
+            self, episode_id, run_dir,
+            urls=urls, text_content=text_content, image_paths=image_paths,
+            topic=topic, tts_model=tts_model,
+            conversation_config=conversation_config, longform=longform,
         )
-
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'transcript',
-                'progress': 66,
-                'status': 'Transcript generated successfully'
-            }
-        )
-
-        # Stage 3: Audio Synthesis (66-100%)
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'audio',
-                'progress': 66,
-                'status': 'Synthesizing audio...'
-            }
-        )
-
-        # Extract file information
-        audio_file_path = result
-        file_size_bytes = os.path.getsize(audio_file_path)
-
-        # Get audio duration
-        audio = AudioSegment.from_file(audio_file_path)
-        duration_seconds = len(audio) / 1000.0
+        file_size_bytes, duration_seconds = _measure_audio(audio_file_path)
 
         # Completion
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'complete',
-                'progress': 100,
-                'status': 'Podcast generated successfully'
-            }
-        )
+        _report_progress(self, episode_id, 'complete', 100, 'Podcast generated successfully')
 
         generation_result = {
             "status": "success",
             "audio_file_path": audio_file_path,
-            # podcastfy does not return the transcript path when generating
-            # audio; the transcript is a temp artifact deleted with the run dir
-            # after upload, so persist None rather than a fabricated path (#309).
-            "transcript_path": None,
+            # The engine's persisted transcript (S3 key or local path); None on
+            # podcastfy, which discards its own (#309, #543).
+            "transcript_path": transcript_path,
             "duration_seconds": duration_seconds,
             "file_size_bytes": file_size_bytes,
             "error": None
         }
 
-        # Determine whether to use the enhanced workflow chain
-        # (composition/distribution) or the simpler finalization task.
-        use_workflow_chain = enable_composition or (
-            enable_distribution and bool(platforms)
+        _dispatch_downstream(
+            episode_id, generation_result,
+            enable_composition=enable_composition,
+            composition_timeline=composition_timeline,
+            enable_distribution=enable_distribution,
+            platforms=platforms,
         )
-
-        if use_workflow_chain:
-            # Persist the generated file metadata before handing off to the
-            # workflow chain. The chain's callbacks only write S3 fields/status, so
-            # without this any episode generated with composition or distribution
-            # would lose file_path/transcript_path/duration_seconds/file_size_bytes
-            # that the default finalize path records (issue #211).
-            user_id: Optional[str] = None
-            project_id = None
-            try:
-                with SyncSessionLocal() as db:
-                    episode = db.get(Episode, uuid_module.UUID(episode_id))
-                    if episode is not None:
-                        project_id = episode.project_id
-                    if episode is not None and episode.user_id is not None:
-                        user_id = str(episode.user_id)
-                        episode.file_path = audio_file_path
-                        episode.transcript_path = generation_result.get("transcript_path")
-                        episode.duration_seconds = duration_seconds
-                        episode.file_size_bytes = file_size_bytes
-                        db.commit()
-            except Exception as persist_err:  # noqa: BLE001 — the audio is already generated; failing to persist its metadata must not abort the workflow dispatch that follows
-                logger.error(
-                    "Episode %s: failed to persist generation metadata before "
-                    "workflow dispatch: %s",
-                    episode_id, persist_err,
-                )
-
-            # Fail closed: without a resolved user_id the upload chain would write
-            # a non-tenant-scoped key (podcasts/user-/episode-…), the exact layout
-            # bug this path is meant to prevent (issue #215). Skip dispatch rather
-            # than orphan an object outside podcasts/user-*/.
-            if not user_id:
-                logger.critical(
-                    "Episode %s: workflow dispatch skipped — user_id could not be "
-                    "resolved, refusing to upload outside the tenant prefix",
-                    episode_id,
-                )
-                if lock_held:
-                    release_generation_lock(episode_id, task_id)
-                return generation_result
-
-            # The router never supplies a timeline (the generated file's path
-            # doesn't exist at dispatch time), so resolve it here; a caller-
-            # supplied timeline wins (issue #313).
-            if enable_composition and not composition_timeline:
-                composition_timeline = resolve_composition_timeline(
-                    project_id, audio_file_path
-                )
-
-            # Trigger the full workflow: S3 upload → [composition] → [distribution]
-            # Isolated try/except so a broker hiccup cannot mark a successful
-            # generation as "failed" or orphan the audio file.
-            logger.info(
-                "Episode %s: triggering workflow chain "
-                "(composition=%s, distribution=%s, platforms=%s)",
-                episode_id, enable_composition, enable_distribution,
-                list(platforms.keys()) if platforms else [],
-            )
-            try:
-                build_generation_workflow(
-                    episode_id=episode_id,
-                    audio_file_path=audio_file_path,
-                    user_id=user_id,
-                    s3_bucket=settings.AWS_S3_BUCKET,
-                    enable_composition=enable_composition,
-                    composition_timeline=composition_timeline,
-                    enable_distribution=enable_distribution,
-                    platforms=platforms,
-                ).apply_async()
-            except Exception as broker_err:  # noqa: BLE001 — generation already succeeded, so a broker failure of any kind must be recorded loudly and never re-mark a successful run as failed
-                logger.critical(
-                    "Celery broker unavailable after successful generation for "
-                    "episode %s — workflow chain could not be dispatched: %s",
-                    episode_id, broker_err,
-                )
-        else:
-            # Default path: simple S3 upload + DB update via finalization task.
-            # Isolated try/except: a broker hiccup must not mark a successful
-            # generation as "failed" or orphan the audio file.
-            try:
-                finalize_episode_generation_task.delay(
-                    episode_id=episode_id,
-                    generation_result=generation_result,
-                )
-            except Exception as broker_err:  # noqa: BLE001 — a broker hiccup must not orphan a successful generation, so any dispatch failure falls through to the synchronous finalization below
-                logger.critical(
-                    "Celery broker unavailable after successful generation for "
-                    "episode %s — falling back to synchronous finalization: %s",
-                    episode_id, broker_err,
-                )
-                try:
-                    finalize_episode_generation_task(
-                        episode_id=episode_id,
-                        generation_result=generation_result,
-                    )
-                except Exception as sync_err:  # noqa: BLE001 — this is the fallback's fallback: the synchronous path has failed too, so there is nothing left to try and the only correct action is to record it
-                    logger.critical(
-                        "Synchronous finalization also failed for episode %s: %s",
-                        episode_id, sync_err,
-                    )
-
-        if lock_held:
-            release_generation_lock(episode_id, task_id)
+        release_generation_lock(episode_id, task_id)
         return generation_result
 
     except SoftTimeLimitExceeded:
-        # Hit the soft time limit (e.g. a long-form run exceeding the ceiling).
-        # SoftTimeLimitExceeded subclasses BaseException, so it bypasses the broad
-        # `except Exception` below; catch it explicitly and treat it as terminal —
-        # retrying would just hit the limit again. Persist 'failed' to the DB so the
-        # episode does not stay stuck at 'queued' (issue #294).
-        msg = "Generation exceeded the soft time limit"
-        logger.error("Podcast generation soft-timeout for episode %s", episode_id)
-        if run_dir:
-            shutil.rmtree(run_dir, ignore_errors=True)
-        _update_episode(
-            episode_id,
-            updates={"generation_status": "failed"},
-            progress_updates={
-                "status": "failed",
-                "error_message": msg,
-                "failed_at": _utcnow_iso(),
-            },
-        )
-        self.update_state(
-            state='FAILURE',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'failed',
-                'progress': 0,
-                'status': f'Generation failed: {msg}',
-            },
-        )
-        if lock_held:
-            release_generation_lock(episode_id, task_id)
-        return {
-            "status": "failed",
-            "audio_file_path": None,
-            "transcript_path": None,
-            "duration_seconds": 0,
-            "file_size_bytes": 0,
-            "error": msg,
-        }
+        return _fail_on_soft_timeout(self, episode_id, task_id, run_dir, lock_held)
 
     except Exception as e:  # noqa: BLE001 — this is the task's retry classification point; every failure must resolve to retry-or-permanent-failed so the episode never stays 'queued'
-        logger.warning(
-            f"Podcast generation error for episode {episode_id}, "
-            f"attempt {self.request.retries + 1}/{self.max_retries + 1}: {e}"
-        )
-        # Each attempt creates its own run dir (a retry re-executes the whole
-        # task body), so this attempt's partial artifacts are dead weight (#309).
-        if run_dir:
-            shutil.rmtree(run_dir, ignore_errors=True)
-        # Celery re-raises the original exception when retry(exc=...) is out of
-        # attempts, so the `except MaxRetriesExceededError` this replaces never
-        # ran: the #294 status write and the lock release were stranded, and every
-        # exhausted generation leaked its Redis lock until TTL (#520). Raising is
-        # what records FAILURE and fires the router's link_error.
-        if self.request.retries >= self.max_retries:
-            logger.error(
-                f"Podcast generation failed after {self.max_retries} retries "
-                f"for episode {episode_id}: {e}"
-            )
-            # Persist 'failed' to the DB; the result backend alone would leave the
-            # episode stuck at 'queued' (issue #294).
-            _update_episode(
-                episode_id,
-                updates={"generation_status": "failed"},
-                progress_updates={
-                    "status": "failed",
-                    "error_message": f"Generation failed after retries: {e}",
-                    "failed_at": _utcnow_iso(),
-                },
-            )
-            if lock_held:
-                release_generation_lock(episode_id, task_id)
-            raise
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'episode_id': episode_id,
-                'stage': 'retrying',
-                'progress': 0,
-                'status': f'Retrying after error: {str(e)}'
-            }
-        )
-        raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
+        _retry_or_fail(self, e, episode_id, task_id, run_dir, lock_held)
 
 
 @celery_app.task(

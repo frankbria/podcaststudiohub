@@ -29,6 +29,7 @@ from src.tasks.s3_upload import (
     upload_to_s3_task,
 )
 from src.tasks.retry_utils import calculate_backoff
+from src.utils.validators import validate_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,13 @@ def _persist_local_audio(audio_file_path: str, episode_id: str) -> str:
     permanently undownloadable once /tmp is cleared (issue #292). Returns the
     persistent path (or the original path unchanged if it is already inside the
     storage dir).
+
+    ``episode_id`` is joined into a real filesystem path, where ``..`` is
+    honoured and an absolute component replaces the storage root, so anything
+    but a UUID is refused before the filesystem is touched (#575).
     """
+    if not validate_uuid(str(episode_id)):
+        raise ValueError(f"episode_id is not a valid UUID: {episode_id!r}")
     storage_dir = settings.LOCAL_AUDIO_STORAGE_PATH
     os.makedirs(storage_dir, exist_ok=True)
     dest = os.path.join(storage_dir, f"episode-{episode_id}.mp3")

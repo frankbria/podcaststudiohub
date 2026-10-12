@@ -22,8 +22,10 @@ from src.engine.models import Script
 MAX_FLAGS = 20
 
 # Final labels that make "word.word" a domain. A closed set rather than "any
-# two letters": spoken tech names like Node.js or ASP.NET would otherwise flag
-# every engineering episode. "example"/"test" are the RFC 2606 reserved names.
+# two letters": spoken tech names like Node.js or Vue.js would otherwise flag
+# every engineering episode. (A name that is also a real domain, like ASP.NET,
+# can still match; the source check clears it whenever the source mentions it.)
+# "example"/"test" are the RFC 2606 reserved names.
 _TLDS = frozenset({
     "com", "net", "org", "io", "co", "ai", "app", "dev", "info", "biz", "xyz",
     "me", "tv", "shop", "store", "site", "online", "link", "click", "top",

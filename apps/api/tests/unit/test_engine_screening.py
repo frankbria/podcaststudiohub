@@ -73,6 +73,7 @@ def test_ordinary_speech_is_not_flagged():
         "Let's check out the next idea. Subscribe to the idea, not the hype.",
         "Visit the archive in your head: 3.5 percent was the number. e.g. ranking.",
         "Version 2.0 shipped. Mr. Smith agreed, i.e. it works.",
+        "We rewrote the front end in Vue.js and the server in Node.js.",
     )
 
     assert screen_script(script, [SOURCE]) == []

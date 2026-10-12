@@ -18,7 +18,7 @@ written from, and flags:
 
 | Kind | Rule |
 |---|---|
-| `domain` | A domain spoken in the script (bare, `www.`, or a full URL) that no source mentions. Only names ending in a common TLD count, so spoken tech names (`Node.js`, `ASP.NET`) never trip it. |
+| `domain` | A domain spoken in the script (bare, `www.`, or a full URL) that no source mentions. Only names ending in a common TLD count, so spoken tech names like `Node.js` or `Vue.js` never trip it (a name that is also a real domain, such as `asp.net`, can; the source check clears it whenever a source mentions it). |
 | `promotion` | One of a deliberately tight list of phrases ("use code", "promo code", "discount code", "coupon code", "sign up at", "buy now", "sponsored by", "affiliate link", "limited-time offer") that no source uses. Quoting a source that says it is fine. |
 
 At most 20 flags are kept per episode. The list is tight on purpose: a flag

@@ -9,7 +9,7 @@ Verifies that:
 """
 
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 
@@ -19,17 +19,10 @@ from botocore.exceptions import ClientError
 from celery.exceptions import Retry
 
 
-def _mock_podcastfy_modules():
-	"""Return mocked podcastfy client + modules dict for sys.modules patching."""
-	mock_podcastfy = types.ModuleType("podcastfy")
-	mock_client_module = types.ModuleType("podcastfy.client")
-	mock_gen = MagicMock(return_value="/tmp/output.mp3")
-	mock_client_module.generate_podcast = mock_gen
-	mock_podcastfy.client = mock_client_module
-	return mock_gen, {
-		"podcastfy": mock_podcastfy,
-		"podcastfy.client": mock_client_module,
-	}
+def _failing_engine(error):
+	"""Autospecced engine boundary that raises ``error`` when called."""
+	from src.tasks.podcast_generation import _run_native_engine
+	return create_autospec(_run_native_engine, side_effect=error)
 
 
 # ============================================================================
@@ -436,11 +429,10 @@ class TestGeneratePodcastTaskRetry:
 		"""Exceptions during generation must trigger self.retry()."""
 		from src.tasks.podcast_generation import generate_podcast_task
 
-		mock_gen, mock_modules = _mock_podcastfy_modules()
-		mock_gen.side_effect = RuntimeError("LLM API unavailable")
+		mock_engine = _failing_engine(RuntimeError("LLM API unavailable"))
 
 		with (
-			patch_modules(mock_modules),
+			patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
 			patch.object(generate_podcast_task, "update_state"),
 			# The fixed episode id below would otherwise hit the real Redis
 			# lock and collide with a key left by an earlier run.
@@ -466,11 +458,10 @@ class TestGeneratePodcastTaskRetry:
 		"""First retry countdown must be 5 seconds."""
 		from src.tasks.podcast_generation import generate_podcast_task
 
-		mock_gen, mock_modules = _mock_podcastfy_modules()
-		mock_gen.side_effect = RuntimeError("LLM API unavailable")
+		mock_engine = _failing_engine(RuntimeError("LLM API unavailable"))
 
 		with (
-			patch_modules(mock_modules),
+			patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
 			patch.object(generate_podcast_task, "update_state"),
 			patch("src.tasks.podcast_generation.acquire_generation_lock", return_value=True),
 			patch("src.tasks.podcast_generation.release_generation_lock"),
@@ -501,8 +492,7 @@ class TestGeneratePodcastTaskRetry:
 		"""
 		from src.tasks.podcast_generation import generate_podcast_task
 
-		mock_gen, mock_modules = _mock_podcastfy_modules()
-		mock_gen.side_effect = RuntimeError("Persistent failure")
+		mock_engine = _failing_engine(RuntimeError("Persistent failure"))
 
 		generate_podcast_task.push_request(
 			retries=generate_podcast_task.max_retries,
@@ -511,7 +501,7 @@ class TestGeneratePodcastTaskRetry:
 		)
 		try:
 			with (
-				patch_modules(mock_modules),
+				patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
 				patch.object(generate_podcast_task, "update_state"),
 				patch("src.tasks.podcast_generation._load_generation_status", return_value=None),
 				patch("src.tasks.podcast_generation.acquire_generation_lock", return_value=True),
@@ -684,13 +674,3 @@ class TestFinalizeEpisodeGenerationTaskRetry:
 
 		assert mock_db.get.call_count == 2, "cleanup get() must still be attempted"
 		mock_db.commit.assert_not_called()
-
-
-@pytest.fixture(autouse=True)
-def _pin_the_podcastfy_engine(monkeypatch):
-	"""These tests mock podcastfy and exercise its path, which since #543 is the
-	ENGINE=podcastfy rollback (the native engine is the default and has its own
-	tests). #543's second PR removes podcastfy and these tests with it."""
-	from src.config import settings
-
-	monkeypatch.setattr(settings, "ENGINE", "podcastfy")

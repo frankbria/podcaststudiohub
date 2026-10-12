@@ -7,19 +7,14 @@ already-complete or in-flight episodes before any paid call, and (3) use a Redis
 lock to block concurrent/duplicate in-flight runs while self-healing via TTL.
 """
 
-import types
 from unittest.mock import MagicMock, create_autospec, patch
 from uuid import uuid4
 
 import pytest
 from redis.exceptions import RedisError
 
-from tests.module_patching import patch_modules
-
-from podcastfy.client import generate_podcast as real_generate_podcast
-
 from src.tasks import idempotency
-from src.tasks.podcast_generation import generate_podcast_task
+from src.tasks.podcast_generation import _run_native_engine, generate_podcast_task
 
 
 # ---------------------------------------------------------------------------
@@ -127,20 +122,9 @@ def test_acquire_still_fails_open_on_a_redis_client_error():
 # Phase 3: entry guard short-circuits before any paid work
 # ---------------------------------------------------------------------------
 
-def _mock_podcastfy(return_value="/tmp/out.mp3"):
-    mock_client = MagicMock()
-    mock_client.generate_podcast = create_autospec(
-        real_generate_podcast, return_value=return_value
-    )
-    mod = types.ModuleType("podcastfy")
-    mod.client = mock_client
-    return mock_client, {"podcastfy": mod, "podcastfy.client": mock_client}
-
-
 def _run_with_status(status, *, retries=0, acquire=True):
     """Run the task with a stubbed DB status / lock and return (result, mock_gen)."""
-    mock_client, mock_modules = _mock_podcastfy()
-    mock_gen = mock_client.generate_podcast
+    mock_gen = create_autospec(_run_native_engine, return_value=("/tmp/out.mp3", None))
 
     audio = MagicMock()
     audio.__len__ = MagicMock(return_value=60000)
@@ -152,7 +136,7 @@ def _run_with_status(status, *, retries=0, acquire=True):
              patch("src.tasks.podcast_generation.acquire_generation_lock", return_value=acquire), \
              patch("src.tasks.podcast_generation.release_generation_lock"), \
              patch("src.tasks.podcast_generation._update_episode"), \
-             patch_modules(mock_modules), \
+             patch("src.tasks.podcast_generation._run_native_engine", mock_gen), \
              patch("src.tasks.podcast_generation.os.path.getsize", return_value=1024), \
              patch("src.tasks.podcast_generation.AudioSegment") as mock_audio, \
              patch("src.tasks.podcast_generation.finalize_episode_generation_task"):
@@ -164,7 +148,7 @@ def _run_with_status(status, *, retries=0, acquire=True):
 
 
 def test_complete_episode_short_circuits_without_paid_work():
-    """A 'complete' episode must return early and never call generate_podcast()."""
+    """A 'complete' episode must return early and never call the engine."""
     result, mock_gen = _run_with_status("complete")
     mock_gen.assert_not_called()
     assert result["status"] in ("skipped", "success")
@@ -197,13 +181,3 @@ def test_retry_of_in_progress_run_proceeds():
     result, mock_gen = _run_with_status("generating", retries=1)
     mock_gen.assert_called_once()
     assert result["status"] == "success"
-
-
-@pytest.fixture(autouse=True)
-def _pin_the_podcastfy_engine(monkeypatch):
-    """These tests mock podcastfy and exercise its path, which since #543 is the
-    ENGINE=podcastfy rollback (the native engine is the default and has its own
-    tests). #543's second PR removes podcastfy and these tests with it."""
-    from src.config import settings
-
-    monkeypatch.setattr(settings, "ENGINE", "podcastfy")

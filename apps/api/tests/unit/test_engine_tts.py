@@ -642,38 +642,11 @@ def test_live_edge(tmp_path):
 # The ElevenLabs window
 # --------------------------------------------------------------------------
 
-def test_live_task_fails_fast_and_legibly_on_elevenlabs():
-    """#542 moved the dependency to elevenlabs>=2.x for Text-to-Dialogue, and
-    2.x removed `client.generate()` — the one call podcastfy's provider makes.
-    Until #543 replaces podcastfy, that path cannot work; it should say so
-    rather than surface an AttributeError from inside site-packages after the
-    LLM has already been paid for.
-    """
-    import ast
-
-    tree = ast.parse(Path("src/tasks/podcast_generation.py").read_text())
-    messages = [
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    ]
-    guard = [m for m in messages if "temporarily unavailable" in m]
-
-    assert guard, "no fail-fast guard for the ElevenLabs window"
-    assert any("#543" in m for m in messages), "the guard should name the issue"
-
-
-def test_podcastfy_elevenlabs_provider_is_indeed_broken_under_the_new_sdk():
-    """Guards the premise of the guard above. If a future elevenlabs release
-    restores `generate()`, or podcastfy is gone, this fails and the fail-fast
-    branch should be revisited rather than left misleading people.
-    """
+def test_the_installed_elevenlabs_sdk_has_text_to_dialogue():
+    """The ElevenLabs backend is built on Text-to-Dialogue, which exists only in
+    elevenlabs>=2.x. A resolver picking a 1.x release would break it at call time."""
     from elevenlabs.client import ElevenLabs
 
-    assert not hasattr(ElevenLabs(api_key="test"), "generate"), (
-        "elevenlabs restored .generate(); podcastfy's ElevenLabs path may work "
-        "again — re-check the guard in src/tasks/podcast_generation.py"
-    )
     assert hasattr(ElevenLabs(api_key="test"), "text_to_dialogue")
 
 
@@ -834,24 +807,6 @@ def test_an_explicit_voice_still_wins_over_the_fallback(workdir):
     voices = VoiceConfig.from_tts_config(GEMINI_CONFIG, "gemini_multi")
 
     assert (voices.host_voice, voices.guest_voice) == ("Kore", "Charon")
-
-
-# --------------------------------------------------------------------------
-# The guard must not break idempotency
-# --------------------------------------------------------------------------
-
-def test_elevenlabs_guard_sits_after_the_idempotency_short_circuits():
-    """Raising before them would turn a redelivery of an already-complete
-    episode into a failure, and the retries-exhausted handler would then
-    overwrite a completed episode's status with 'failed'."""
-    source = Path("src/tasks/podcast_generation.py").read_text()
-
-    guard = source.index("ElevenLabs generation is temporarily unavailable")
-    already_complete = source.index('_skipped_result("already complete")')
-    lock = source.index('_skipped_result("concurrent run in progress")')
-
-    assert already_complete < guard, "guard runs before the duplicate check"
-    assert lock < guard, "guard runs before the concurrency lock"
 
 
 # --------------------------------------------------------------------------

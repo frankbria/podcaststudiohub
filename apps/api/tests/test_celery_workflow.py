@@ -10,14 +10,21 @@ infrastructure is required.
 import uuid
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
-from tests.module_patching import patch_modules
+from src.tasks.podcast_generation import _run_native_engine
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _fake_engine(audio_path=None, side_effect=None):
+    """Stand in for the engine, autospecced so a call the real one rejects fails."""
+    return create_autospec(
+        _run_native_engine, return_value=(audio_path, None), side_effect=side_effect
+    )
+
 
 def _make_mock_episode(episode_id: str, user_id: str = None) -> MagicMock:
     """Return a MagicMock that behaves like an Episode ORM object."""
@@ -84,25 +91,20 @@ class TestFullWorkflowChain:
 
     def test_workflow_chain_dispatched_when_composition_enabled(self):
         """When enable_composition=True, build_generation_workflow is called."""
-        import types
-
         episode_id = str(uuid.uuid4())
         mock_audio_path = "/tmp/test_podcast.mp3"
 
         mock_audio_segment = MagicMock()
         mock_audio_segment.__len__ = MagicMock(return_value=60_000)
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+        mock_engine = _fake_engine(mock_audio_path)
 
         mock_chain = MagicMock()
 
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
@@ -143,10 +145,7 @@ class TestFullWorkflowChain:
         mock_audio_segment = MagicMock()
         mock_audio_segment.__len__ = MagicMock(return_value=60_000)
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+        mock_engine = _fake_engine(mock_audio_path)
 
         mock_chain = MagicMock()
         session = _mock_session_with_episode()
@@ -162,7 +161,7 @@ class TestFullWorkflowChain:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
@@ -190,8 +189,6 @@ class TestFullWorkflowChain:
 
     def test_workflow_chain_dispatched_when_distribution_enabled(self):
         """When enable_distribution=True with platforms, build_generation_workflow is called."""
-        import types
-
         episode_id = str(uuid.uuid4())
         mock_audio_path = "/tmp/dist_test.mp3"
         platforms = {"spotify": {"oauth_tokens": {}}, "webhook": {"url": "https://hook.example.com"}}
@@ -199,17 +196,14 @@ class TestFullWorkflowChain:
         mock_audio_segment = MagicMock()
         mock_audio_segment.__len__ = MagicMock(return_value=120_000)
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+        mock_engine = _fake_engine(mock_audio_path)
 
         mock_chain = MagicMock()
 
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=2000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
@@ -241,18 +235,13 @@ class TestFullWorkflowChain:
         runs would otherwise lose file_path/transcript_path/duration_seconds/
         file_size_bytes that the default finalize path records (issue #211).
         """
-        import types
-
         episode_id = str(uuid.uuid4())
         platforms = {"webhook": {"url": "https://hook.example.com"}}
 
         mock_audio_segment = MagicMock()
         mock_audio_segment.__len__ = MagicMock(return_value=120_000)  # 120.0s
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(return_value="/tmp/dist_meta.mp3")
+        mock_engine = _fake_engine("/tmp/dist_meta.mp3")
 
         mock_episode = MagicMock()
         mock_session = MagicMock()
@@ -263,7 +252,7 @@ class TestFullWorkflowChain:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=2000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=MagicMock()),
@@ -287,23 +276,18 @@ class TestFullWorkflowChain:
 
     def test_finalize_task_used_when_no_composition_or_distribution(self):
         """Default path (no composition, no distribution) uses finalize_episode_generation_task."""
-        import types
-
         episode_id = str(uuid.uuid4())
         mock_audio_path = "/tmp/simple.mp3"
 
         mock_audio_segment = MagicMock()
         mock_audio_segment.__len__ = MagicMock(return_value=60_000)
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+        mock_engine = _fake_engine(mock_audio_path)
 
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
@@ -327,23 +311,18 @@ class TestFullWorkflowChain:
 
     def test_finalize_task_used_when_distribution_enabled_but_no_platforms(self):
         """enable_distribution=True but platforms=None falls back to finalize task."""
-        import types
-
         episode_id = str(uuid.uuid4())
         mock_audio_path = "/tmp/no_platforms.mp3"
 
         mock_audio_segment = MagicMock()
         mock_audio_segment.__len__ = MagicMock(return_value=60_000)
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+        mock_engine = _fake_engine(mock_audio_path)
 
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
@@ -599,8 +578,6 @@ class TestConditionalComposition:
 
     def test_generate_task_passes_composition_timeline(self):
         """Task passes composition_timeline to build_generation_workflow."""
-        import types
-
         episode_id = str(uuid.uuid4())
         timeline = [
             {"file_path": "/tmp/intro.mp3", "normalize": True},
@@ -610,17 +587,14 @@ class TestConditionalComposition:
         mock_audio_segment = MagicMock()
         mock_audio_segment.__len__ = MagicMock(return_value=60_000)
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(return_value="/tmp/audio.mp3")
+        mock_engine = _fake_engine("/tmp/audio.mp3")
 
         mock_chain = MagicMock()
 
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain) as mock_builder,
@@ -650,14 +624,9 @@ class TestErrorHandling:
 
     def test_workflow_chain_not_called_on_generation_failure(self):
         """If podcast generation fails, build_generation_workflow is never called."""
-        import types
-
         episode_id = str(uuid.uuid4())
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(side_effect=RuntimeError("LLM API error"))
+        mock_engine = _fake_engine(side_effect=RuntimeError("LLM API error"))
 
         from src.tasks.podcast_generation import generate_podcast_task
 
@@ -668,7 +637,7 @@ class TestErrorHandling:
         )
         try:
             with (
-                patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+                patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
                 patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
                 patch("src.tasks.podcast_generation.finalize_episode_generation_task"),
                 patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=_mock_session_with_episode()),
@@ -683,22 +652,18 @@ class TestErrorHandling:
         finally:
             generate_podcast_task.pop_request()
 
+        mock_engine.assert_called_once()
         mock_builder.assert_not_called()
 
     def test_broker_error_during_workflow_dispatch_does_not_fail_generation(self):
         """A broker failure when dispatching the workflow chain does not change generation result."""
-        import types
-
         episode_id = str(uuid.uuid4())
         mock_audio_path = "/tmp/podcast.mp3"
 
         mock_audio_segment = MagicMock()
         mock_audio_segment.__len__ = MagicMock(return_value=60_000)
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(return_value=mock_audio_path)
+        mock_engine = _fake_engine(mock_audio_path)
 
         mock_chain = MagicMock()
         mock_chain.apply_async.side_effect = ConnectionError("Redis unavailable")
@@ -706,7 +671,7 @@ class TestErrorHandling:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow", return_value=mock_chain),
@@ -729,17 +694,12 @@ class TestErrorHandling:
         """Fail closed: if the episode/user_id cannot be resolved, the upload
         chain is never dispatched, so nothing is written outside the
         podcasts/user-*/ tenant prefix (issue #215)."""
-        import types
-
         episode_id = str(uuid.uuid4())
 
         mock_audio_segment = MagicMock()
         mock_audio_segment.__len__ = MagicMock(return_value=60_000)
 
-        mock_client = MagicMock()
-        mock_podcastfy = types.ModuleType("podcastfy")
-        mock_podcastfy.client = mock_client
-        mock_client.generate_podcast = MagicMock(return_value="/tmp/audio.mp3")
+        mock_engine = _fake_engine("/tmp/audio.mp3")
 
         # Lookup returns no episode → user_id stays unresolved.
         mock_session = MagicMock()
@@ -750,7 +710,7 @@ class TestErrorHandling:
         from src.tasks.podcast_generation import generate_podcast_task
 
         with (
-            patch_modules({"podcastfy": mock_podcastfy, "podcastfy.client": mock_client}),
+            patch("src.tasks.podcast_generation._run_native_engine", mock_engine),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
             patch("src.tasks.podcast_generation.build_generation_workflow") as mock_builder,
@@ -944,7 +904,7 @@ class TestFailurePathsWriteDbStatus:
 
         ep_id = str(uuid.uuid4())
         pg.generate_podcast_task.request.update(id="soft-tl", retries=0)
-        with patch("podcastfy.client.generate_podcast", side_effect=SoftTimeLimitExceeded()), \
+        with patch("src.tasks.podcast_generation._run_native_engine", _fake_engine(side_effect=SoftTimeLimitExceeded())), \
              patch.object(pg.generate_podcast_task, "update_state", MagicMock()), \
              patch("src.tasks.podcast_generation._update_episode") as mock_upd:
             result = pg.generate_podcast_task.run(episode_id=ep_id)
@@ -965,7 +925,7 @@ class TestFailurePathsWriteDbStatus:
         # original error, so the 'failed' write must happen before it does (#520).
         task.push_request(retries=task.max_retries, called_directly=False, id="retry-exh")
         try:
-            with patch("podcastfy.client.generate_podcast", side_effect=RuntimeError("boom")), \
+            with patch("src.tasks.podcast_generation._run_native_engine", _fake_engine(side_effect=RuntimeError("boom"))), \
                  patch.object(task, "update_state", MagicMock()), \
                  patch("src.tasks.podcast_generation._update_episode") as mock_upd:
                 with pytest.raises(RuntimeError, match="boom"):
@@ -977,13 +937,3 @@ class TestFailurePathsWriteDbStatus:
         # write is the last call, validated below.
         mock_upd.assert_called()
         assert mock_upd.call_args.kwargs["updates"]["generation_status"] == "failed"
-
-
-@pytest.fixture(autouse=True)
-def _pin_the_podcastfy_engine(monkeypatch):
-    """These tests mock podcastfy and exercise its path, which since #543 is the
-    ENGINE=podcastfy rollback (the native engine is the default and has its own
-    tests). #543's second PR removes podcastfy and these tests with it."""
-    from src.config import settings
-
-    monkeypatch.setattr(settings, "ENGINE", "podcastfy")

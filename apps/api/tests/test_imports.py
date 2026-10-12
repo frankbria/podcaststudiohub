@@ -1,20 +1,20 @@
 """
-Tests to verify podcastfy is properly installed and importable without sys.path manipulation.
+Tests to verify the generation engine is importable without sys.path manipulation.
 GAP-030: Remove fragile sys.path manipulation from Celery tasks.
 """
 
 
-def test_podcastfy_imports():
-	"""Verify podcastfy can be imported without sys.path manipulation."""
-	from podcastfy.client import generate_podcast
-	from podcastfy.content_generator import ContentGenerator
-	from podcastfy.content_parser.website_extractor import WebsiteExtractor
-	from podcastfy.content_parser.pdf_extractor import PDFExtractor
+def test_generation_engine_imports():
+	"""The engine and the libraries it needs import cleanly (#543)."""
+	import pymupdf
+	import youtube_transcript_api
+	from src.engine import generate_script
+	from src.engine.tts import synthesise
+	from src.services.text_extraction import html_to_text, pdf_to_text
 
-	assert callable(generate_podcast)
-	assert ContentGenerator is not None
-	assert WebsiteExtractor is not None
-	assert PDFExtractor is not None
+	assert callable(generate_script) and callable(synthesise)
+	assert callable(html_to_text) and callable(pdf_to_text)
+	assert pymupdf is not None and youtube_transcript_api is not None
 
 
 def test_podcast_generation_task_imports():

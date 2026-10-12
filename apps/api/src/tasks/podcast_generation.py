@@ -368,6 +368,19 @@ def _generate_audio(
     return audio_file_path, None
 
 
+def _collect_sources(text_content: Optional[str], urls: Optional[List[str]]) -> List[str]:
+    """The engine's text inputs: extracted/pasted text, then pending URLs.
+
+    podcastfy fetched URL sources itself; the engine takes text, so pending
+    URLs go through the same SSRF-guarded fetch as extraction (#206, #543).
+    """
+    sources = [text_content] if text_content else []
+    if urls:
+        extractor = ContentExtractionService()
+        sources += [extractor.fetch_url_text(url) for url in urls]
+    return sources
+
+
 def _run_native_engine(
     task: Task,
     episode_id: str,
@@ -389,12 +402,7 @@ def _run_native_engine(
     # Resolved before any paid call, so a misconfigured episode fails for free.
     VoiceConfig.from_tts_config(tts_config, provider=tts_provider)
 
-    # podcastfy fetched URL sources itself; the engine takes text, so pending
-    # URLs go through the same SSRF-guarded fetch as extraction (#206, #543).
-    sources = [text_content] if text_content else []
-    if urls:
-        extractor = ContentExtractionService()
-        sources += [extractor.fetch_url_text(url) for url in urls]
+    sources = _collect_sources(text_content, urls)
     _report_progress(task, episode_id, 'extraction', 33, 'Content extracted successfully')
 
     # Stage 2: Transcript Generation (33-66%), reported per long-form part.

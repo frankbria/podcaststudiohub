@@ -190,7 +190,7 @@ def _mock_pinned_session(*responses):
 	return session
 
 
-def testfetch_url_text_blocks_redirect_to_internal(extraction_service):
+def test_fetch_url_text_blocks_redirect_to_internal(extraction_service):
 	"""SSRF: a redirect whose target is internal must be blocked mid-fetch (issue #206)."""
 	redirect = Mock()
 	redirect.status_code = 302
@@ -204,7 +204,7 @@ def testfetch_url_text_blocks_redirect_to_internal(extraction_service):
 			extraction_service.fetch_url_text("https://93.184.216.34/start")
 
 
-def testfetch_url_text_follows_safe_redirect(extraction_service):
+def test_fetch_url_text_follows_safe_redirect(extraction_service):
 	"""A redirect to another public URL is followed and its content extracted."""
 	redirect = Mock()
 	redirect.status_code = 302
@@ -223,7 +223,7 @@ def testfetch_url_text_follows_safe_redirect(extraction_service):
 	assert "Hello world content" in result
 
 
-def testfetch_url_text_pins_validated_ip(extraction_service):
+def test_fetch_url_text_pins_validated_ip(extraction_service):
 	"""The fetch must connect via a session pinned to the guard-validated IP (#234)."""
 	ok = Mock()
 	ok.status_code = 200

@@ -25,7 +25,9 @@ from ..utils.datetime_utils import utcnow
 # tests/unit/test_storage_outbox_routing.py builds one with the real function,
 # so a layout change there fails here instead of silently leaking objects.
 _UUID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-_S3_TRANSCRIPT_KEY = re.compile(rf"podcasts/user-{_UUID}/episode-{_UUID}\.transcript\.json")
+_S3_TRANSCRIPT_KEY = re.compile(
+    rf"podcasts/user-{_UUID}/episode-{_UUID}\.transcript\.json", re.IGNORECASE
+)
 
 
 class StorageDeletionOutbox(Base):
@@ -63,8 +65,20 @@ class StorageDeletionOutbox(Base):
         this constructor.
         """
         if value and _S3_TRANSCRIPT_KEY.fullmatch(value):
+            if self.s3_key not in (None, value):
+                # One storage object per row: overwriting would silently drop
+                # the deletion the caller already queued in s3_key.
+                raise ValueError("Queue the transcript key in its own outbox row")
             self.s3_key = value
             return None
+        return value
+
+    @validates("s3_key")
+    def _one_object_per_row(self, _key, value):
+        # The other kwarg order: a transcript key already routed into s3_key
+        # must not be silently replaced by a second object.
+        if value and self.s3_key not in (None, value):
+            raise ValueError("Queue each storage object in its own outbox row")
         return value
 
     def __repr__(self) -> str:

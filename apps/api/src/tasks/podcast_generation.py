@@ -1,6 +1,8 @@
 """
-Celery tasks for podcast generation
-Wraps the existing podcastfy CLI functionality
+Celery tasks for podcast generation.
+
+generate_podcast_task runs the in-repo engine (src/engine) by default, or
+podcastfy when settings.ENGINE is "podcastfy" (#543).
 """
 import os
 import shutil
@@ -420,7 +422,12 @@ def _run_native_engine(
     # Stage 3: Audio Synthesis (66-100%)
     _report_progress(task, episode_id, 'audio', 66, 'Synthesizing audio...')
     audio_path = synthesise(tts_provider, script, tts_config, Path(run_dir))
-    return str(audio_path), persist_transcript(script, user_id, episode_id)
+    transcript_path = persist_transcript(script, user_id, episode_id)
+    # Recorded on the row immediately, not left for finalize: if the episode is
+    # deleted while generation is still running, or finalize fails for good,
+    # the delete flows can only queue a transcript the row already names.
+    _update_episode(episode_id, {"transcript_path": transcript_path})
+    return str(audio_path), transcript_path
 
 
 def _run_podcastfy(
@@ -782,7 +789,7 @@ def generate_podcast_task(
         {
             "status": "success" | "failed",
             "audio_file_path": str,
-            "transcript_path": None,  # engine transcript is a temp artifact (#309)
+            "transcript_path": Optional[str],  # stored transcript (native engine); None on podcastfy
             "duration_seconds": float,
             "file_size_bytes": int,
             "error": Optional[str]

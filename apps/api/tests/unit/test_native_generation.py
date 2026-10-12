@@ -51,6 +51,7 @@ class Harness:
         self.fetch_url_text = MagicMock(return_value="Fetched page text.")
         self.podcastfy = MagicMock()
         self.progress: list[dict[str, Any]] = []
+        self.row_updates: list[dict[str, Any]] = []
 
     @staticmethod
     def _write_audio(provider, script, config, workdir):
@@ -86,6 +87,9 @@ class Harness:
             "src.tasks.podcast_generation.AudioSegment"
         ) as audio_segment, patch(
             "src.tasks.podcast_generation.finalize_episode_generation_task"
+        ), patch(
+            "src.tasks.podcast_generation._update_episode",
+            side_effect=lambda episode_id, updates, *a, **k: self.row_updates.append(updates),
         ):
             service.return_value.fetch_url_text = self.fetch_url_text
             audio_segment.from_file.return_value = audio
@@ -209,3 +213,11 @@ def test_the_elevenlabs_guard_still_protects_the_podcastfy_path(harness, monkeyp
         harness.run(text_content="Notes.", tts_model="elevenlabs")
 
     harness.podcastfy.generate_podcast.assert_not_called()
+
+
+def test_the_transcript_is_recorded_on_the_row_before_finalize(harness):
+    """Otherwise a delete during generation, or a finalize that fails for good,
+    leaves a stored transcript no delete flow knows about (#543 review)."""
+    harness.run(text_content="Notes.")
+
+    assert {"transcript_path": TRANSCRIPT_KEY} in harness.row_updates

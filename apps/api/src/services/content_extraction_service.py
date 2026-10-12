@@ -16,7 +16,7 @@ import logging
 import os
 import tempfile
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 from uuid import UUID
 
 import requests
@@ -26,6 +26,7 @@ from requests.exceptions import RequestException, Timeout, HTTPError
 
 from podcastfy.content_parser.website_extractor import WebsiteExtractor
 from podcastfy.content_parser.pdf_extractor import PDFExtractor
+from youtube_transcript_api import YouTubeTranscriptApi
 
 from ..config import settings
 from ..models import ContentSource
@@ -37,6 +38,39 @@ from .storage_service import StorageService
 
 
 logger = logging.getLogger(__name__)
+
+# Exact hosts, not substrings: podcastfy matched "youtube.com" anywhere in the
+# URL, so youtube.com.evil.test counted as YouTube.
+_YOUTUBE_HOSTS = frozenset(
+	{"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"}
+)
+# Caption-only cues podcastfy's youtube_transcriber dropped from the text.
+_CAPTION_CUES = frozenset({"[music]"})
+
+
+def _youtube_video_id(url: str) -> Optional[str]:
+	"""The video id of a YouTube URL, or None when the URL is not YouTube."""
+	parsed = urlparse(url)
+	host = parsed.hostname  # already lowercased by urlparse; None for no host
+	if host not in _YOUTUBE_HOSTS:
+		return None
+	if host == "youtu.be":
+		video_id = parsed.path.strip("/").split("/")[0]
+	elif parsed.path.startswith("/shorts/"):
+		video_id = parsed.path.split("/")[2]
+	else:
+		video_id = parse_qs(parsed.query).get("v", [""])[0]
+	if not video_id:
+		raise ValueError(f"YouTube URL has no video id: {url}")
+	return video_id
+
+
+def _youtube_transcript(video_id: str) -> str:
+	entries = YouTubeTranscriptApi.get_transcript(video_id)
+	return " ".join(
+		entry["text"] for entry in entries
+		if entry["text"].strip().lower() not in _CAPTION_CUES
+	)
 
 # Redirect status codes that carry a Location header to follow.
 _REDIRECT_STATUS = (301, 302, 303, 307, 308)
@@ -99,7 +133,14 @@ class ContentExtractionService:
 		Raises:
 			SSRFValidationError: If the URL (or a redirect target) is internal.
 			requests.RequestException: On network/HTTP errors.
+			ValueError: For a YouTube URL that names no video.
 		"""
+		# A YouTube page is the video's transcript, not its watch-page HTML (the
+		# behaviour podcastfy had, #543). The request goes to YouTube's own API
+		# host, not the user-supplied URL, so the SSRF path below does not apply.
+		video_id = _youtube_video_id(url)
+		if video_id:
+			return _youtube_transcript(video_id)
 		extractor = self.website_extractor
 		headers = {"User-Agent": extractor.user_agent}
 		current_url = extractor.normalize_url(url)

@@ -876,3 +876,62 @@ def test_extraction_result_empty_content():
 	result = ExtractionResult(success=True, content="")
 
 	assert result.word_count == 0
+
+
+# YouTube sources (#543): podcastfy turned a YouTube URL into the video's
+# transcript; an HTML scrape of the watch page yields navigation and consent
+# text instead. fetch_url_text is the one fetch both extraction and the native
+# engine use, so YouTube is handled there.
+
+def _transcript_api(entries):
+	from unittest.mock import create_autospec
+	from youtube_transcript_api import YouTubeTranscriptApi
+
+	return create_autospec(YouTubeTranscriptApi.get_transcript, return_value=entries)
+
+
+@pytest.mark.parametrize("url,video_id", [
+	("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+	("https://youtube.com/watch?v=dQw4w9WgXcQ&t=42s", "dQw4w9WgXcQ"),
+	("https://youtu.be/dQw4w9WgXcQ?si=abc", "dQw4w9WgXcQ"),
+	("https://m.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+])
+def test_a_youtube_url_yields_its_transcript_not_the_watch_page(extraction_service, url, video_id):
+	get_transcript = _transcript_api([
+		{"text": "Welcome back.", "start": 0.0, "duration": 1.0},
+		{"text": "[Music]", "start": 1.0, "duration": 1.0},
+		{"text": "Retrieval grounds answers.", "start": 2.0, "duration": 1.0},
+	])
+	with patch(
+		"src.services.content_extraction_service.YouTubeTranscriptApi.get_transcript",
+		get_transcript,
+	), patch("src.services.content_extraction_service.pinned_session") as http:
+		text = extraction_service.fetch_url_text(url)
+
+	assert text == "Welcome back. Retrieval grounds answers."
+	assert get_transcript.call_args.args[0] == video_id
+	http.assert_not_called()  # no scrape of the watch page
+
+
+@pytest.mark.parametrize("url", [
+	"https://youtube.com.evil.test/watch?v=dQw4w9WgXcQ",
+	"https://notyoutube.com/watch?v=dQw4w9WgXcQ",
+])
+def test_a_lookalike_host_is_not_treated_as_youtube(extraction_service, url):
+	get_transcript = _transcript_api([])
+	with patch(
+		"src.services.content_extraction_service.YouTubeTranscriptApi.get_transcript",
+		get_transcript,
+	), patch(
+		"src.services.content_extraction_service.validate_public_url",
+		side_effect=SSRFValidationError("stop before any network call"),
+	):
+		with pytest.raises(SSRFValidationError):
+			extraction_service.fetch_url_text(url)
+
+	get_transcript.assert_not_called()
+
+
+def test_a_youtube_url_without_a_video_id_is_refused(extraction_service):
+	with pytest.raises(ValueError, match="video id"):
+		extraction_service.fetch_url_text("https://www.youtube.com/feed/trending")

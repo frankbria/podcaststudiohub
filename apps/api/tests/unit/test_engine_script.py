@@ -661,7 +661,7 @@ def test_openai_api_error_becomes_a_provider_error():
 
 
 # --------------------------------------------------------------------------
-# Transient provider failures are retried in-engine (#574)
+# Retryable provider failures are retried in-engine (#574)
 # --------------------------------------------------------------------------
 
 def _gemini_error(code: int, status: str):
@@ -687,19 +687,19 @@ def gemini_with(*outcomes):
 
 @pytest.fixture(autouse=True)
 def no_backoff():
-    """Every test: a transient error raised anywhere here must not sleep."""
+    """Every test: a retryable error raised anywhere here must not sleep."""
     with patch("src.engine.script.time.sleep") as sleep:
         yield sleep
 
 
-def test_a_transient_failure_mid_episode_does_not_regenerate_earlier_chunks(
+def test_a_retryable_failure_mid_episode_does_not_regenerate_earlier_chunks(
     no_backoff,
 ):
-    """The #574 regression: a 503 on the last chunk used to discard every chunk
+    """The #574 regression: a 503 on a middle chunk used to discard every chunk
     already paid for, and the task retry then bought them all again."""
     parts = load_fixture("long_form")
     client = gemini_with(
-        parts[0], parts[1], _gemini_error(503, "UNAVAILABLE"), parts[2]
+        parts[0], _gemini_error(503, "UNAVAILABLE"), parts[1], parts[2]
     )
 
     with patch.object(settings, "ENGINE_MAX_CHUNKS", 3), patch(
@@ -709,8 +709,13 @@ def test_a_transient_failure_mid_episode_does_not_regenerate_earlier_chunks(
             [_chunkable_source()], ConversationConfig(), longform=True
         )
 
-    # One call per chunk plus the single retry: chunks 1 and 2 were not re-bought.
-    assert client.models.generate_content.call_count == len(parts) + 1
+    calls = client.models.generate_content.call_args_list
+    # One call per chunk plus the single retry: chunk 1 was not re-bought.
+    assert len(calls) == len(parts) + 1
+    # The retry re-sent chunk 2's request as it was, rolling summary of chunk 1
+    # included, rather than starting the episode over.
+    assert calls[2].kwargs["contents"] == calls[1].kwargs["contents"]
+    assert parts[0]["summary"] in calls[2].kwargs["contents"]
     assert len(script.turns) == sum(len(p["turns"]) for p in parts)
     no_backoff.assert_called_once()
 
@@ -727,7 +732,7 @@ def test_a_rate_limit_is_retried_with_backoff_then_succeeds(no_backoff):
     assert no_backoff.call_args.args[0] > 0
 
 
-def test_a_persistent_transient_failure_gives_up_after_the_bound(no_backoff):
+def test_a_persistent_retryable_failure_gives_up_after_the_bound(no_backoff):
     """Bounded: a sustained outage still reaches the Celery task, whose own
     backoff is the right tool for minutes-long incidents."""
     from src.engine.llm import ProviderError
@@ -740,7 +745,7 @@ def test_a_persistent_transient_failure_gives_up_after_the_bound(no_backoff):
         with pytest.raises(ProviderError) as raised:
             generate_script(SOURCES, ConversationConfig())
 
-    assert raised.value.transient
+    assert raised.value.retryable
     assert client.models.generate_content.call_count == attempts
     assert [c.args[0] for c in no_backoff.call_args_list] == list(_BACKOFF_SECONDS)
 
@@ -762,35 +767,45 @@ def test_a_permanent_provider_failure_is_not_retried(no_backoff, code, status):
         with pytest.raises(ProviderError) as raised:
             generate_script(SOURCES, ConversationConfig())
 
-    assert not raised.value.transient
+    assert not raised.value.retryable
     assert client.models.generate_content.call_count == 1
     no_backoff.assert_not_called()
 
 
-@pytest.mark.parametrize("exc_name", ["ReadTimeout", "ConnectionError"])
-def test_a_gemini_transport_failure_is_a_transient_provider_error(
-    no_backoff, exc_name
+@pytest.mark.parametrize("exc_name,retryable,calls", [
+    ("ConnectionError", True, 3),
+    ("ChunkedEncodingError", True, 3),  # body cut off mid-read
+    ("ReadTimeout", False, 1),
+    ("ConnectTimeout", False, 1),  # also a ConnectionError: Timeout wins
+    ("InvalidURL", False, 1),
+])
+def test_gemini_transport_failures_are_wrapped_and_classified(
+    no_backoff, exc_name, retryable, calls
 ):
     """google-genai's transport is ``requests``, and it wraps only HTTP status
-    errors in APIError. A timeout or a dropped connection used to escape
-    ``generate_json`` raw, past the module's own contract."""
+    errors in APIError, so these used to escape ``generate_json`` raw. A
+    timeout is wrapped but not retried: each one already cost the full
+    provider timeout, and the provider may have billed the generation."""
     import requests
 
     from src.engine.llm import ProviderError
 
     error = getattr(requests.exceptions, exc_name)("boom")
-    client = gemini_with(*[error] * 3)
+    client = gemini_with(*[error] * calls)
 
     with patch("src.engine.llm.genai.Client", return_value=client):
         with pytest.raises(ProviderError, match="Gemini call failed") as raised:
             generate_script(SOURCES, ConversationConfig())
 
-    assert raised.value.transient
+    assert raised.value.retryable is retryable
+    assert client.models.generate_content.call_count == calls
 
 
-@pytest.mark.parametrize("make_error,transient", [
-    (lambda sdk: sdk.APITimeoutError(request=MagicMock()), True),
+@pytest.mark.parametrize("make_error,retryable", [
+    (lambda sdk: sdk.APITimeoutError(request=MagicMock()), False),
     (lambda sdk: sdk.APIConnectionError(request=MagicMock()), True),
+    (lambda sdk: sdk.ConflictError(
+        "conflict", response=MagicMock(status_code=409), body=None), True),
     (lambda sdk: sdk.RateLimitError(
         "slow down", response=MagicMock(status_code=429), body=None), True),
     (lambda sdk: sdk.InternalServerError(
@@ -800,7 +815,7 @@ def test_a_gemini_transport_failure_is_a_transient_provider_error(
     (lambda sdk: sdk.BadRequestError(
         "bad model", response=MagicMock(status_code=400), body=None), False),
 ])
-def test_openai_failures_are_classified(no_backoff, make_error, transient):
+def test_openai_failures_are_classified(no_backoff, make_error, retryable):
     import openai as openai_sdk
 
     from src.engine.llm import ProviderError
@@ -816,7 +831,7 @@ def test_openai_failures_are_classified(no_backoff, make_error, transient):
         with pytest.raises(ProviderError) as raised:
             generate_script(SOURCES, ConversationConfig())
 
-    assert raised.value.transient is transient
+    assert raised.value.retryable is retryable
 
 
 def test_the_openai_sdk_does_not_retry_underneath_the_engine():

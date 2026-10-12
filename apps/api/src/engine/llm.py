@@ -39,24 +39,27 @@ class ScriptSchemaError(EngineError):
 class ProviderError(EngineError):
     """The provider call itself failed — auth, rate limit, timeout, 5xx.
 
-    ``transient`` separates a blip worth retrying (rate limit, timeout, 5xx,
-    dropped connection) from a failure that will recur on every attempt (bad
-    key, unknown model, rejected request). The engine retries transient ones
-    itself with a short backoff (#574), so one 503 on chunk 7 does not throw
-    away chunks 1-6; anything longer reaches the Celery task's own backoff.
+    ``retryable`` marks a failure the engine retries in place with a short
+    backoff (#574), so one 503 on chunk 7 does not throw away chunks 1-6. It is
+    set only for failures that come back fast and generated nothing: a rate
+    limit, a 5xx, a refused or dropped connection. A failure that will recur on
+    every attempt (bad key, unknown model, rejected request) is not retryable,
+    and neither is a timeout: each one costs the full provider timeout, and the
+    provider may have finished — and billed — the generation anyway. Those
+    reach the Celery task, whose backoff is the right tool for a slow outage.
     Leaking ``openai.RateLimitError`` / ``google.genai.errors.ClientError``
     would make every caller import both SDKs just to tell these cases apart.
     """
 
-    def __init__(self, message: str, *, transient: bool = False):
+    def __init__(self, message: str, *, retryable: bool = False):
         super().__init__(message)
-        self.transient = transient
+        self.retryable = retryable
 
 
-# 408 Request Timeout and 429 Too Many Requests are the only 4xx a retry can
-# fix; every 5xx is the provider's side.
-def _is_transient_status(code: Optional[int]) -> bool:
-    return code is not None and (code in (408, 429) or code >= 500)
+# 408/409/429 are the only 4xx a retry can fix (409 is a conflict both
+# providers document as retryable); every 5xx is the provider's side.
+def _is_retryable_status(code: Optional[int]) -> bool:
+    return code is not None and (code in (408, 409, 429) or code >= 500)
 
 
 def generate_json(
@@ -118,13 +121,18 @@ def _generate_gemini(
         )
     except genai_errors.APIError as exc:
         raise ProviderError(
-            f"Gemini call failed: {exc}", transient=_is_transient_status(exc.code)
+            f"Gemini call failed: {exc}", retryable=_is_retryable_status(exc.code)
         ) from exc
-    except (requests.ConnectionError, requests.Timeout) as exc:
+    except requests.RequestException as exc:
         # The pinned google-genai sends over `requests` and wraps only HTTP
-        # status errors in APIError, so a timeout or a dropped connection
-        # arrives here raw. Re-check this if the pin moves to an httpx release.
-        raise ProviderError(f"Gemini call failed: {exc}", transient=True) from exc
+        # status errors in APIError, so transport failures arrive here raw.
+        # Timeout is checked first: ConnectTimeout is also a ConnectionError.
+        # A body cut off mid-read is ChunkedEncodingError, which is neither.
+        # Re-check all of this if the pin moves to an httpx-based release.
+        retryable = not isinstance(exc, requests.Timeout) and isinstance(
+            exc, (requests.ConnectionError, requests.exceptions.ChunkedEncodingError)
+        )
+        raise ProviderError(f"Gemini call failed: {exc}", retryable=retryable) from exc
 
     try:
         text = response.text
@@ -176,11 +184,16 @@ def _generate_openai(
             response_format=schema,
         )
     except openai.OpenAIError as exc:
-        transient = isinstance(exc, openai.APIConnectionError) or (
+        # APITimeoutError subclasses APIConnectionError, so it is excluded
+        # explicitly: a timeout is not retried here (see ProviderError).
+        retryable = (
+            isinstance(exc, openai.APIConnectionError)
+            and not isinstance(exc, openai.APITimeoutError)
+        ) or (
             isinstance(exc, openai.APIStatusError)
-            and _is_transient_status(exc.status_code)
+            and _is_retryable_status(exc.status_code)
         )
-        raise ProviderError(f"OpenAI call failed: {exc}", transient=transient) from exc
+        raise ProviderError(f"OpenAI call failed: {exc}", retryable=retryable) from exc
 
     message = completion.choices[0].message
     if message.parsed is None:

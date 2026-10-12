@@ -813,3 +813,11 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
 - **`patch("pkg.mod.genai.Client")` patches the shared `google.genai` module.** A
   wrapper that constructs `genai.Client` inside the patch recurses into itself;
   capture the real class before patching.
+
+## #575 — local audio path guard (PR #619)
+
+- **`$` in a Python regex matches before a trailing newline.** `re.match(r'^…$')`
+  accepted `"<uuid>\n"`; use `fullmatch` for whole-string validation.
+- **A demo can lie about its own input.** `"$(printf '…\n')"` strips trailing
+  newlines, so the "newline" demo run passed a clean UUID. Build edge-case inputs
+  inside the program under test, and print the `repr` of what it actually received.

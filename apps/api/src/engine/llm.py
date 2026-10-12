@@ -12,9 +12,10 @@ malformed response is a caught exception rather than a silently mangled
 transcript.
 """
 import logging
-from typing import Type, TypeVar
+from typing import Optional, Type, TypeVar
 
 import openai
+import requests
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
@@ -38,13 +39,24 @@ class ScriptSchemaError(EngineError):
 class ProviderError(EngineError):
     """The provider call itself failed — auth, rate limit, timeout, 5xx.
 
-    Normalising these matters because the caller's response differs by kind: a
-    schema failure is retried once here (the same input rarely parses on the
-    third try), while a provider failure is somebody else's outage and belongs
-    to the Celery task's existing backoff. Leaking
-    ``openai.RateLimitError`` / ``google.genai.errors.ClientError`` would make
-    #543 import both SDKs just to tell those two cases apart.
+    ``transient`` separates a blip worth retrying (rate limit, timeout, 5xx,
+    dropped connection) from a failure that will recur on every attempt (bad
+    key, unknown model, rejected request). The engine retries transient ones
+    itself with a short backoff (#574), so one 503 on chunk 7 does not throw
+    away chunks 1-6; anything longer reaches the Celery task's own backoff.
+    Leaking ``openai.RateLimitError`` / ``google.genai.errors.ClientError``
+    would make every caller import both SDKs just to tell these cases apart.
     """
+
+    def __init__(self, message: str, *, transient: bool = False):
+        super().__init__(message)
+        self.transient = transient
+
+
+# 408 Request Timeout and 429 Too Many Requests are the only 4xx a retry can
+# fix; every 5xx is the provider's side.
+def _is_transient_status(code: Optional[int]) -> bool:
+    return code is not None and (code in (408, 429) or code >= 500)
 
 
 def generate_json(
@@ -105,7 +117,14 @@ def _generate_gemini(
             ),
         )
     except genai_errors.APIError as exc:
-        raise ProviderError(f"Gemini call failed: {exc}") from exc
+        raise ProviderError(
+            f"Gemini call failed: {exc}", transient=_is_transient_status(exc.code)
+        ) from exc
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        # The pinned google-genai sends over `requests` and wraps only HTTP
+        # status errors in APIError, so a timeout or a dropped connection
+        # arrives here raw. Re-check this if the pin moves to an httpx release.
+        raise ProviderError(f"Gemini call failed: {exc}", transient=True) from exc
 
     try:
         text = response.text
@@ -138,6 +157,10 @@ def _generate_openai(
         # Do not "fix" this to match the * 1000 above: that would be a
         # 120,000-second timeout, i.e. no timeout at all.
         timeout=settings.OPENAI_API_TIMEOUT,
+        # The SDK retries 429/5xx twice by default. The engine owns that policy
+        # for both providers (#574); leaving this on would stack two retry
+        # loops and multiply the worst-case time per chunk.
+        max_retries=0,
     )
     # `creativity` is deliberately not forwarded: GPT-5-family models reject any
     # non-default `temperature` with `unsupported_value`, so sending it would
@@ -153,7 +176,11 @@ def _generate_openai(
             response_format=schema,
         )
     except openai.OpenAIError as exc:
-        raise ProviderError(f"OpenAI call failed: {exc}") from exc
+        transient = isinstance(exc, openai.APIConnectionError) or (
+            isinstance(exc, openai.APIStatusError)
+            and _is_transient_status(exc.status_code)
+        )
+        raise ProviderError(f"OpenAI call failed: {exc}", transient=transient) from exc
 
     message = completion.choices[0].message
     if message.parsed is None:

@@ -213,3 +213,9 @@ def test_validate_uuid_empty():
 
 def test_validate_uuid_extra_chars():
 	assert validate_uuid("550e8400-e29b-41d4-a716-446655440000-extra") is False
+
+
+def test_validate_uuid_rejects_a_trailing_newline():
+	"""``re.match`` with ``$`` also matches just before a final newline, so the
+	old pattern accepted "<uuid>\\n" (#575 review)."""
+	assert validate_uuid("550e8400-e29b-41d4-a716-446655440000\n") is False

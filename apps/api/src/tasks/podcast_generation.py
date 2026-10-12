@@ -92,7 +92,8 @@ def _persist_local_audio(audio_file_path: str, episode_id: str) -> str:
     honoured and an absolute component replaces the storage root, so anything
     but a UUID is refused before the filesystem is touched (#575).
     """
-    if not validate_uuid(str(episode_id)):
+    episode_id = str(episode_id)  # join exactly the string that was validated
+    if not validate_uuid(episode_id):
         raise ValueError(f"episode_id is not a valid UUID: {episode_id!r}")
     storage_dir = settings.LOCAL_AUDIO_STORAGE_PATH
     os.makedirs(storage_dir, exist_ok=True)

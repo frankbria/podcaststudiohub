@@ -124,11 +124,13 @@ def _generate_gemini(
             f"Gemini call failed: {exc}", retryable=_is_retryable_status(exc.code)
         ) from exc
     except requests.RequestException as exc:
-        # The pinned google-genai sends over `requests` and wraps only HTTP
-        # status errors in APIError, so transport failures arrive here raw.
+        # The locked google-genai (1.2.0) sends over `requests` and wraps only
+        # HTTP status errors in APIError, so transport failures arrive here raw.
         # Timeout is checked first: ConnectTimeout is also a ConnectionError.
         # A body cut off mid-read is ChunkedEncodingError, which is neither.
-        # Re-check all of this if the pin moves to an httpx-based release.
+        # pyproject only floors the SDK, so a bump could move it to httpx;
+        # test_a_dropped_gemini_connection_... drives the real SDK and fails
+        # first if this clause stops seeing its transport errors.
         retryable = not isinstance(exc, requests.Timeout) and isinstance(
             exc, (requests.ConnectionError, requests.exceptions.ChunkedEncodingError)
         )

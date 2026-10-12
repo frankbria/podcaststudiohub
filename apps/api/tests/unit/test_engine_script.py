@@ -687,7 +687,10 @@ def gemini_with(*outcomes):
 
 @pytest.fixture(autouse=True)
 def no_backoff():
-    """Every test: a retryable error raised anywhere here must not sleep."""
+    """Every test: a retryable error raised anywhere here must not sleep.
+
+    ``src.engine.script.time`` is the stdlib module itself, so this patches
+    ``time.sleep`` process-wide for the duration of each test."""
     with patch("src.engine.script.time.sleep") as sleep:
         yield sleep
 
@@ -799,6 +802,72 @@ def test_gemini_transport_failures_are_wrapped_and_classified(
 
     assert raised.value.retryable is retryable
     assert client.models.generate_content.call_count == calls
+
+
+@pytest.fixture
+def hang_up_server():
+    """A local listener that accepts each connection and closes it at once —
+    a dropped connection on demand. A closed port is not used because some
+    hosts (WSL) drop rather than refuse it, which turns into a 120s timeout."""
+    import socket
+    import threading
+
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen()
+
+    def hang_up():
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            conn.close()
+
+    threading.Thread(target=hang_up, daemon=True).start()
+    yield f"http://127.0.0.1:{server.getsockname()[1]}/"
+    server.close()
+
+
+def test_a_dropped_gemini_connection_through_the_real_sdk_is_a_retryable_provider_error(
+    no_backoff, hang_up_server
+):
+    """Drift guard for the ``except requests.RequestException`` in llm.py.
+
+    pyproject floors google-genai (``>=1.2.0``) instead of pinning it, and that
+    clause only works while the SDK's transport is ``requests``. This drives the
+    real, installed SDK against a local server that hangs up — no network — so
+    a bump to an httpx-based release fails here instead of letting raw
+    transport errors escape the engine unclassified.
+    """
+    import requests
+    from google import genai
+    from google.genai import types
+
+    from src.engine.llm import ProviderError
+
+    real_client = genai.Client  # captured before the patch replaces it
+
+    def hang_up_client(**kwargs):
+        options = kwargs.pop("http_options")
+        return real_client(
+            **kwargs,
+            http_options=types.HttpOptions(
+                base_url=hang_up_server, timeout=options.timeout
+            ),
+        )
+
+    with patch("src.engine.llm.genai.Client", side_effect=hang_up_client):
+        with pytest.raises(ProviderError) as raised:
+            generate_script(SOURCES, ConversationConfig())
+
+    assert isinstance(raised.value.__cause__, requests.ConnectionError), (
+        "google-genai no longer raises requests exceptions for a dropped "
+        "connection; update the transport except clause in "
+        "src/engine/llm.py:_generate_gemini"
+    )
+    assert raised.value.retryable
+    assert no_backoff.call_count == 2  # retried, then gave up after the bound
 
 
 @pytest.mark.parametrize("make_error,retryable", [

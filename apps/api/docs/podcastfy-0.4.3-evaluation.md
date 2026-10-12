@@ -1,5 +1,7 @@
 # Podcastfy 0.4.1 → 0.4.3 upgrade evaluation (issue #363)
 
+> **Historical (2026-10-12).** podcastfy was removed in #543; the in-repo engine (`apps/api/src/engine/`) replaced it. Kept as the record of why; nothing here describes the current system.
+
 **Date**: 2026-07-13
 **Verdict**: **Defer.** Stay pinned on `podcastfy==0.4.1`. The upgrade breaks app
 startup out of the box (undeclared `playwright` import), delivers no functional

@@ -3,11 +3,9 @@
 The engine's own layers are tested in test_engine_script / test_engine_tts /
 test_engine_transcript against faked SDKs. Here the engine entry points are
 faked with ``create_autospec`` against the *real* functions, so a call the
-real signature would reject fails the test, and podcastfy is mocked so any
-call into it is visible. ``_load_native_inputs`` (the episode-row read) is
+real signature would reject fails the test. ``_load_native_inputs`` (the episode-row read) is
 faked here and tested against the real database in test_native_inputs.py.
 """
-import types
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, create_autospec, patch
@@ -15,13 +13,11 @@ from uuid import uuid4
 
 import pytest
 
-from src.config import settings
 from src.engine import generate_script as real_generate_script
 from src.engine.models import Script
 from src.engine.transcript import persist_transcript as real_persist_transcript
 from src.engine.tts import synthesise as real_synthesise
 from src.tasks.podcast_generation import generate_podcast_task
-from tests.module_patching import patch_modules
 
 SCRIPT = Script(
     title="Grounding",
@@ -36,7 +32,7 @@ TRANSCRIPT_KEY = "podcasts/user-u/episode-e.transcript.json"
 
 
 class Harness:
-    """Fakes for every boundary the native branch crosses, plus a podcastfy spy."""
+    """Fakes for every boundary the native branch crosses."""
 
     def __init__(self):
         self.user_id = str(uuid4())
@@ -49,7 +45,6 @@ class Harness:
             real_persist_transcript, return_value=TRANSCRIPT_KEY
         )
         self.fetch_url_text = MagicMock(return_value="Fetched page text.")
-        self.podcastfy = MagicMock()
         self.progress: list[dict[str, Any]] = []
         self.row_updates: list[dict[str, Any]] = []
 
@@ -60,16 +55,12 @@ class Harness:
         return out
 
     def run(self, **kwargs: Any) -> dict[str, Any]:
-        podcastfy_module = types.ModuleType("podcastfy")
-        podcastfy_module.client = self.podcastfy
         audio = MagicMock()
         audio.__len__ = MagicMock(return_value=60000)
         kwargs.setdefault("episode_id", str(uuid4()))
         with patch.object(
             generate_podcast_task, "update_state",
             side_effect=lambda **kw: self.progress.append(kw.get("meta", {})),
-        ), patch_modules(
-            {"podcastfy": podcastfy_module, "podcastfy.client": self.podcastfy}
         ), patch(
             "src.tasks.podcast_generation.generate_script", self.generate_script
         ), patch(
@@ -101,10 +92,6 @@ def harness():
     return Harness()
 
 
-def test_native_is_the_default_engine():
-    assert settings.ENGINE == "native"
-
-
 def test_native_path_runs_the_engine_end_to_end(harness):
     episode_id = str(uuid4())
     template = {"word_count": 600, "conversation_style": ["engaging"]}
@@ -117,7 +104,6 @@ def test_native_path_runs_the_engine_end_to_end(harness):
         longform=True,
     )
 
-    harness.podcastfy.generate_podcast.assert_not_called()
     # Pending URL sources are fetched through the SSRF-guarded service (#543).
     harness.fetch_url_text.assert_called_once_with("https://example.com/post")
     call = harness.generate_script.call_args
@@ -167,7 +153,7 @@ def test_unsupported_inputs_are_refused_before_any_paid_call(harness, kwargs):
 
 
 def test_elevenlabs_is_available_on_the_native_path(harness):
-    """The #542 fail-fast guard is about podcastfy's broken ElevenLabs call only."""
+    """ElevenLabs runs through the engine's own backend (#542), not a fail-fast guard."""
     harness.tts_provider = "elevenlabs"
     harness.tts_config = {"model": "eleven_v3", "voice_1_id": "a", "voice_2_id": "b"}
 
@@ -195,24 +181,8 @@ def test_script_progress_is_reported_between_33_and_66(harness):
     assert all(33 <= p <= 66 for p in transcript)
 
 
-def test_engine_podcastfy_is_the_rollback_switch(harness, monkeypatch):
-    monkeypatch.setattr(settings, "ENGINE", "podcastfy")
-    harness.podcastfy.generate_podcast.return_value = "/tmp/rollback.mp3"
-
-    result = harness.run(text_content="Notes.")
-
-    harness.podcastfy.generate_podcast.assert_called_once()
-    harness.generate_script.assert_not_called()
-    assert result["transcript_path"] is None  # podcastfy discards its transcript
 
 
-def test_the_elevenlabs_guard_still_protects_the_podcastfy_path(harness, monkeypatch):
-    monkeypatch.setattr(settings, "ENGINE", "podcastfy")
-
-    with pytest.raises(Exception):
-        harness.run(text_content="Notes.", tts_model="elevenlabs")
-
-    harness.podcastfy.generate_podcast.assert_not_called()
 
 
 def test_the_transcript_is_recorded_on_the_row_before_finalize(harness):
@@ -221,16 +191,3 @@ def test_the_transcript_is_recorded_on_the_row_before_finalize(harness):
     harness.run(text_content="Notes.")
 
     assert {"transcript_path": TRANSCRIPT_KEY} in harness.row_updates
-
-
-def test_a_rollback_regeneration_keeps_the_stored_transcript_linked(harness, monkeypatch):
-    """podcastfy writes no transcript. Overwriting a native run's transcript_path
-    with None would orphan the stored object (#543 bot review)."""
-    monkeypatch.setattr(settings, "ENGINE", "podcastfy")
-    harness.podcastfy.generate_podcast.return_value = "/tmp/rollback.mp3"
-    with patch(
-        "src.tasks.podcast_generation._stored_transcript_path", return_value=TRANSCRIPT_KEY
-    ):
-        result = harness.run(text_content="Notes.")
-
-    assert result["transcript_path"] == TRANSCRIPT_KEY

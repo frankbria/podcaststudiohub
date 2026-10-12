@@ -1,5 +1,7 @@
 # Effort review: forking / vendoring podcastfy
 
+> **Historical (2026-10-12).** podcastfy was removed in #543; the in-repo engine (`apps/api/src/engine/`) replaced it. Kept as the record of why; nothing here describes the current system.
+
 **Date:** 2026-08-13 (counts updated 2026-09-09) · **Issue:** #446 · **Companion:** [podcastfy-advisory-reachability.md](./podcastfy-advisory-reachability.md)
 
 Requested so the fork decision can be made on its own merits rather than being forced by

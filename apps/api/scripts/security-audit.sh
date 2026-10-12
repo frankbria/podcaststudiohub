@@ -2,16 +2,10 @@
 # pip-audit gate over the locked dependency closure (#306).
 # Run from apps/api: bash scripts/security-audit.sh
 #
-# pip-audit writes a JSON report; scripts/pip_audit_gate.py decides what blocks (#518):
-#   - litellm advisories WARN and never block. litellm is capped by podcastfy==0.4.1
-#     and never imported — tests/test_dependency_reachability.py fails CI the moment
-#     any litellm module loads with the generation engine. That test is the
-#     compensating control; the per-CVE ID list it replaces was hand-patched six
-#     times and added no safety.
-#   - the other capped advisories stay enumerated, one per line, in TRIAGED in the
-#     gate script, each assessed in docs/podcastfy-advisory-reachability.md (#446).
-#   - anything else fails, as does a missing/unparseable report or an unaudited package.
-# The whole cap goes away with the engine replacement (#538 / #543).
+# pip-audit writes a JSON report; scripts/pip_audit_gate.py decides what blocks:
+# any advisory fails, as does a missing/unparseable report or an unaudited package.
+# Its allowlists are empty since #543 removed podcastfy, whose version caps were
+# the only reason advisories were ever let through (#306, #446, #518).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

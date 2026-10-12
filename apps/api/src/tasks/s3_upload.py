@@ -17,8 +17,9 @@ from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
 
-# Per-run directory prefix used by generate_podcast_task to route podcastfy's
-# audio + transcript output under the system temp dir (issue #309). Cleanup
+# Per-run directory prefix used by generate_podcast_task for the engine's
+# audio output under the system temp dir (issue #309). The value predates the
+# #543 cut-over and is kept so cleanup still recognises older run dirs. Cleanup
 # recognizes this prefix and removes the whole run dir, not just the uploaded
 # file, so the transcript beside it cannot leak.
 GENERATION_RUN_DIR_PREFIX = "podcastfy-run-"

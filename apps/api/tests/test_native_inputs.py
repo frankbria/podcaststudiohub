@@ -110,15 +110,3 @@ def test_an_unknown_episode_is_refused():
     with pytest.raises(EngineError):
         _load_native_inputs(str(uuid.uuid4()))
 
-
-def test_the_stored_transcript_path_is_read_back_for_a_rollback_run(make_episode):
-    from src.tasks.podcast_generation import _stored_transcript_path
-
-    episode_id, user_id = make_episode()
-    key = f"podcasts/user-{user_id}/episode-{episode_id}.transcript.json"
-    with SyncSessionLocal() as db:
-        db.get(Episode, uuid.UUID(episode_id)).transcript_path = key
-        db.commit()
-
-    assert _stored_transcript_path(episode_id) == key
-    assert _stored_transcript_path(str(uuid.uuid4())) is None

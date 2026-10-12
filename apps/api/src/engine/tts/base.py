@@ -57,11 +57,10 @@ class VoiceConfig(BaseModel):
     ``language_code`` for the Google pair. This normalises those spellings once
     so no backend has to guess which key its provider used.
 
-    Note what is *not* here: podcastfy's nested
-    ``text_to_speech.<provider>.default_voices.{question,answer}`` shape. That
-    nesting exists only because podcastfy reads it, and the translation shim at
-    ``src/routers/generation.py:58`` exists only to produce it. Both can go at
-    the #543 cut-over.
+    Note what is *not* here: the previous engine's nested
+    ``text_to_speech.<provider>.default_voices.{question,answer}`` shape. Since
+    #543 nothing reads it; the router's leftover translation shim that still
+    produces it is inert and tracked for removal in #623.
     """
 
     model_config = ConfigDict(extra="ignore")

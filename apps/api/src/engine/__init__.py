@@ -2,7 +2,7 @@
 
 Step 1 (#541) is the script layer: sources in, a validated ``Script`` out, with
 prompts versioned in this repo and provider SDKs called directly. TTS is #542;
-the live Celery task still calls podcastfy until #543 cuts it over.
+#543 made this the live generation path and removed podcastfy.
 
 Nothing under this package may import the dependency tree podcastfy pulled in —
 that is the point of owning it. ``tests/test_dependency_reachability.py`` holds

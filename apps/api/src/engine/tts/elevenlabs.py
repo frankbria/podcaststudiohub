@@ -12,8 +12,8 @@ It is also the only path that honours audio tags (``[laughs]``, ``[curious]``),
 and only on v3 models.
 
 Requires ``elevenlabs>=2.x``: ``text_to_dialogue`` does not exist in 1.x, and
-2.x dropped ``generate()``. podcastfy pins ``<2``, which is why `pyproject.toml`
-carries an override and why podcastfy's own ElevenLabs path is broken until #543.
+2.x dropped ``generate()``, the call the previous engine (podcastfy, capped at
+``<2``) relied on; that cap is gone with it (#543).
 """
 import logging
 from pathlib import Path

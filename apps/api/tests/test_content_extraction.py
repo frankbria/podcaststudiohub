@@ -407,7 +407,7 @@ async def test_extract_from_pdf_success(
 		 patch('src.services.content_extraction_service.settings.AWS_S3_BUCKET', 'test-bucket'), \
 		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
 		 patch('src.services.content_extraction_service.os.unlink') as mock_unlink, \
-		 patch.object(extraction_service.pdf_extractor, 'extract_content', return_value=extracted_text):
+		 patch('src.services.content_extraction_service.pdf_to_text', autospec=True, return_value=extracted_text) as mock_pdf_to_text:
 
 		mock_storage = mock_storage_cls.return_value
 		mock_storage.download_file = AsyncMock(return_value="/tmp/downloaded.pdf")
@@ -426,7 +426,7 @@ async def test_extract_from_pdf_success(
 		assert download_args[0] == pdf_content_source.source_data['s3_key']
 
 		# The downloaded temp path is what gets extracted (not a data/uploads path)
-		extract_path = extraction_service.pdf_extractor.extract_content.call_args[0][0]
+		extract_path = mock_pdf_to_text.call_args[0][0]
 		assert extract_path == download_args[1]
 
 		# Temp file is always cleaned up
@@ -456,7 +456,7 @@ async def test_extract_from_pdf_file_not_found(
 		 patch('src.services.content_extraction_service.settings.AWS_S3_BUCKET', 'test-bucket'), \
 		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
 		 patch('src.services.content_extraction_service.os.unlink') as mock_unlink, \
-		 patch.object(extraction_service.pdf_extractor, 'extract_content', side_effect=file_error):
+		 patch('src.services.content_extraction_service.pdf_to_text', autospec=True, side_effect=file_error):
 
 		mock_storage = mock_storage_cls.return_value
 		mock_storage.download_file = AsyncMock(return_value="/tmp/downloaded.pdf")
@@ -494,7 +494,7 @@ async def test_extract_from_pdf_corrupted_file(
 		 patch('src.services.content_extraction_service.settings.AWS_S3_BUCKET', 'test-bucket'), \
 		 patch('src.services.content_extraction_service.StorageService') as mock_storage_cls, \
 		 patch('src.services.content_extraction_service.os.unlink') as mock_unlink, \
-		 patch.object(extraction_service.pdf_extractor, 'extract_content', side_effect=extraction_error):
+		 patch('src.services.content_extraction_service.pdf_to_text', autospec=True, side_effect=extraction_error):
 
 		mock_storage = mock_storage_cls.return_value
 		mock_storage.download_file = AsyncMock(return_value="/tmp/downloaded.pdf")
@@ -884,10 +884,14 @@ def test_extraction_result_empty_content():
 # engine use, so YouTube is handled there.
 
 def _transcript_api(entries):
+	"""A YouTubeTranscriptApi class whose instances' fetch() returns ``entries``."""
 	from unittest.mock import create_autospec
 	from youtube_transcript_api import YouTubeTranscriptApi
+	from youtube_transcript_api import FetchedTranscriptSnippet
 
-	return create_autospec(YouTubeTranscriptApi.get_transcript, return_value=entries)
+	api = create_autospec(YouTubeTranscriptApi)
+	api.return_value.fetch.return_value = [FetchedTranscriptSnippet(**e) for e in entries]
+	return api
 
 
 @pytest.mark.parametrize("url,video_id", [
@@ -897,19 +901,19 @@ def _transcript_api(entries):
 	("https://m.youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
 ])
 def test_a_youtube_url_yields_its_transcript_not_the_watch_page(extraction_service, url, video_id):
-	get_transcript = _transcript_api([
+	api = _transcript_api([
 		{"text": "Welcome back.", "start": 0.0, "duration": 1.0},
 		{"text": "[Music]", "start": 1.0, "duration": 1.0},
 		{"text": "Retrieval grounds answers.", "start": 2.0, "duration": 1.0},
 	])
 	with patch(
-		"src.services.content_extraction_service.YouTubeTranscriptApi.get_transcript",
-		get_transcript,
+		"src.services.content_extraction_service.YouTubeTranscriptApi",
+		api,
 	), patch("src.services.content_extraction_service.pinned_session") as http:
 		text = extraction_service.fetch_url_text(url)
 
 	assert text == "Welcome back. Retrieval grounds answers."
-	assert get_transcript.call_args.args[0] == video_id
+	assert api.return_value.fetch.call_args.args[0] == video_id
 	http.assert_not_called()  # no scrape of the watch page
 
 
@@ -918,10 +922,10 @@ def test_a_youtube_url_yields_its_transcript_not_the_watch_page(extraction_servi
 	"https://notyoutube.com/watch?v=dQw4w9WgXcQ",
 ])
 def test_a_lookalike_host_is_not_treated_as_youtube(extraction_service, url):
-	get_transcript = _transcript_api([])
+	api = _transcript_api([])
 	with patch(
-		"src.services.content_extraction_service.YouTubeTranscriptApi.get_transcript",
-		get_transcript,
+		"src.services.content_extraction_service.YouTubeTranscriptApi",
+		api,
 	), patch(
 		"src.services.content_extraction_service.validate_public_url",
 		side_effect=SSRFValidationError("stop before any network call"),
@@ -929,7 +933,7 @@ def test_a_lookalike_host_is_not_treated_as_youtube(extraction_service, url):
 		with pytest.raises(SSRFValidationError):
 			extraction_service.fetch_url_text(url)
 
-	get_transcript.assert_not_called()
+	api.return_value.fetch.assert_not_called()
 
 
 def test_a_youtube_url_without_a_video_id_is_refused(extraction_service):
@@ -940,12 +944,23 @@ def test_a_youtube_url_without_a_video_id_is_refused(extraction_service):
 def test_a_scheme_less_youtube_url_still_yields_its_transcript(extraction_service):
 	"""urlparse finds no host without a scheme; the URL is normalised first,
 	exactly as the HTML path already does (#543 bot review)."""
-	get_transcript = _transcript_api([{"text": "Hello.", "start": 0.0, "duration": 1.0}])
+	api = _transcript_api([{"text": "Hello.", "start": 0.0, "duration": 1.0}])
 	with patch(
-		"src.services.content_extraction_service.YouTubeTranscriptApi.get_transcript",
-		get_transcript,
+		"src.services.content_extraction_service.YouTubeTranscriptApi",
+		api,
 	), patch("src.services.content_extraction_service.pinned_session") as http:
 		text = extraction_service.fetch_url_text("youtube.com/watch?v=dQw4w9WgXcQ")
 
 	assert text == "Hello."
 	http.assert_not_called()
+
+
+def test_a_temp_pdf_that_cannot_be_removed_is_logged_not_raised(tmp_path, caplog):
+	from src.services.content_extraction_service import _remove_temp_file
+
+	path = tmp_path / "x.pdf"
+	path.write_bytes(b"%PDF")
+	with patch("src.services.content_extraction_service.os.unlink", side_effect=OSError("busy")):
+		_remove_temp_file(str(path))  # must not raise
+
+	assert "Failed to remove temp PDF file" in caplog.text

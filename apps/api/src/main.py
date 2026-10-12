@@ -28,14 +28,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Verify critical dependencies are available at startup"""
     try:
-        from podcastfy.client import generate_podcast  # noqa: F401
-        from podcastfy.content_parser.website_extractor import WebsiteExtractor  # noqa: F401
-        from podcastfy.content_parser.pdf_extractor import PDFExtractor  # noqa: F401
-        logger.info("Podcastfy dependencies verified")
+        from src.engine import generate_script  # noqa: F401
+        from src.engine.tts import synthesise  # noqa: F401
+        import pymupdf  # noqa: F401
+        import youtube_transcript_api  # noqa: F401
+        logger.info("Generation engine dependencies verified")
     except ImportError as e:
-        logger.critical(f"Failed to import podcastfy: {e}")
+        logger.critical(f"Failed to import the generation engine: {e}")
         logger.critical("Run: uv sync to install dependencies")
-        raise RuntimeError("Podcastfy not installed") from e
+        raise RuntimeError("Generation engine dependencies not installed") from e
     yield
 
 

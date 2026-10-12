@@ -723,7 +723,10 @@ class TestGeneratePodcastTaskChaining:
 
         with (
             patch("src.tasks.podcast_generation.finalize_episode_generation_task") as mock_finalize,
-            patch("podcastfy.client.generate_podcast", return_value=mock_audio_path),
+            patch(
+                "src.tasks.podcast_generation._run_native_engine",
+                autospec=True, return_value=(mock_audio_path, None),
+            ),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
         ):
@@ -752,7 +755,10 @@ class TestGeneratePodcastTaskChaining:
 
         with (
             patch("src.tasks.podcast_generation.finalize_episode_generation_task") as mock_finalize,
-            patch("podcastfy.client.generate_podcast", return_value=mock_audio_path),
+            patch(
+                "src.tasks.podcast_generation._run_native_engine",
+                autospec=True, return_value=(mock_audio_path, None),
+            ),
             patch("src.tasks.podcast_generation.os.path.getsize", return_value=1000),
             patch("src.tasks.podcast_generation.AudioSegment") as mock_audio_cls,
         ):
@@ -1082,13 +1088,3 @@ class TestTempFileCleanup:
         finally:
             if os.path.exists(path):
                 os.remove(path)
-
-
-@pytest.fixture(autouse=True)
-def _pin_the_podcastfy_engine(monkeypatch):
-    """These tests mock podcastfy and exercise its path, which since #543 is the
-    ENGINE=podcastfy rollback (the native engine is the default and has its own
-    tests). #543's second PR removes podcastfy and these tests with it."""
-    from src.config import settings
-
-    monkeypatch.setattr(settings, "ENGINE", "podcastfy")

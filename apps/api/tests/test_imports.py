@@ -1,20 +1,20 @@
 """
-Tests to verify podcastfy is properly installed and importable without sys.path manipulation.
+Tests to verify the generation engine is importable without sys.path manipulation.
 GAP-030: Remove fragile sys.path manipulation from Celery tasks.
 """
 
 
-def test_podcastfy_imports():
-	"""Verify podcastfy can be imported without sys.path manipulation."""
-	from podcastfy.client import generate_podcast
-	from podcastfy.content_generator import ContentGenerator
-	from podcastfy.content_parser.website_extractor import WebsiteExtractor
-	from podcastfy.content_parser.pdf_extractor import PDFExtractor
+def test_generation_engine_imports():
+	"""The engine and the libraries it needs import cleanly (#543)."""
+	import pymupdf
+	import youtube_transcript_api
+	from src.engine import generate_script
+	from src.engine.tts import synthesise
+	from src.services.text_extraction import html_to_text, pdf_to_text
 
-	assert callable(generate_podcast)
-	assert ContentGenerator is not None
-	assert WebsiteExtractor is not None
-	assert PDFExtractor is not None
+	assert callable(generate_script) and callable(synthesise)
+	assert callable(html_to_text) and callable(pdf_to_text)
+	assert pymupdf is not None and youtube_transcript_api is not None
 
 
 def test_podcast_generation_task_imports():
@@ -42,3 +42,25 @@ def test_no_sys_path_manipulation_in_task():
 	# Also verify the AST parses cleanly (no syntax errors introduced)
 	tree = ast.parse(source)
 	assert tree is not None
+
+
+async def test_startup_check_passes_with_the_engine_installed():
+	"""main.lifespan imports the engine at startup (#543); the test client never
+	runs lifespan, so exercise it directly."""
+	from src.main import app, lifespan
+
+	async with lifespan(app):
+		pass
+
+
+async def test_startup_check_fails_loudly_without_the_engine():
+	import pytest
+
+	from src.main import app, lifespan
+	from tests.module_patching import patch_modules
+
+	# patch_modules, never patch.dict(sys.modules): see tests/module_patching.py (#372).
+	with patch_modules({"pymupdf": None}):
+		with pytest.raises(RuntimeError, match="Generation engine dependencies"):
+			async with lifespan(app):
+				pass

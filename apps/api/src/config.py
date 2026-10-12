@@ -4,7 +4,7 @@ Loads environment variables and provides application settings
 """
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator, model_validator
-from typing import Literal, Optional
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -162,13 +162,7 @@ class Settings(BaseSettings):
     # the probe fast rather than hang it until the client's own timeout.
     READINESS_CHECK_TIMEOUT_SECONDS: float = 2.0
 
-    # Which engine generate_podcast_task runs (#543). "native" is the in-repo
-    # engine below; "podcastfy" is the rollback while podcastfy is still
-    # installed, and goes away with it in #543's second PR.
-    ENGINE: Literal["native", "podcastfy"] = "native"
-
-    # In-repo generation engine (issue #541), live on the generation path when
-    # ENGINE is "native" (#543).
+    # In-repo generation engine (issues #541-#543): the live generation path.
     # Provider defaults were checked against the live model catalogues on
     # 2026-09-21; podcastfy's own default, gemini-1.5-pro-latest, is a
     # deprecated alias. Both are settings so #543 can retune without a deploy.

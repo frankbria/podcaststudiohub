@@ -126,16 +126,24 @@ def _generate_gemini(
     except requests.RequestException as exc:
         # The locked google-genai (1.2.0) sends over `requests` and wraps only
         # HTTP status errors in APIError, so transport failures arrive here raw.
-        # Timeout is checked first: ConnectTimeout is also a ConnectionError.
-        # A body cut off mid-read is ChunkedEncodingError, which is neither.
         # pyproject only floors the SDK, so a bump could move it to httpx;
         # test_a_dropped_gemini_connection_... drives the real SDK and fails
         # first if this clause stops seeing its transport errors.
-        retryable = not isinstance(exc, requests.Timeout) and isinstance(
-            exc, (requests.ConnectionError, requests.exceptions.ChunkedEncodingError)
-        )
-        raise ProviderError(f"Gemini call failed: {exc}", retryable=retryable) from exc
+        raise ProviderError(
+            f"Gemini call failed: {exc}", retryable=_gemini_transport_retryable(exc)
+        ) from exc
+    return _parse_gemini_reply(response, schema)
 
+
+def _gemini_transport_retryable(exc: requests.RequestException) -> bool:
+    # Timeout is checked first: ConnectTimeout is also a ConnectionError.
+    # A body cut off mid-read is ChunkedEncodingError, which is neither.
+    return not isinstance(exc, requests.Timeout) and isinstance(
+        exc, (requests.ConnectionError, requests.exceptions.ChunkedEncodingError)
+    )
+
+
+def _parse_gemini_reply(response: types.GenerateContentResponse, schema: Type[T]) -> T:
     try:
         text = response.text
     except ValueError as exc:
@@ -186,16 +194,9 @@ def _generate_openai(
             response_format=schema,
         )
     except openai.OpenAIError as exc:
-        # APITimeoutError subclasses APIConnectionError, so it is excluded
-        # explicitly: a timeout is not retried here (see ProviderError).
-        retryable = (
-            isinstance(exc, openai.APIConnectionError)
-            and not isinstance(exc, openai.APITimeoutError)
-        ) or (
-            isinstance(exc, openai.APIStatusError)
-            and _is_retryable_status(exc.status_code)
-        )
-        raise ProviderError(f"OpenAI call failed: {exc}", retryable=retryable) from exc
+        raise ProviderError(
+            f"OpenAI call failed: {exc}", retryable=_openai_retryable(exc)
+        ) from exc
 
     message = completion.choices[0].message
     if message.parsed is None:
@@ -203,3 +204,13 @@ def _generate_openai(
             f"OpenAI did not return the requested schema: {message.refusal!r}"
         )
     return message.parsed
+
+
+def _openai_retryable(exc: openai.OpenAIError) -> bool:
+    # APITimeoutError subclasses APIConnectionError, so it is excluded
+    # explicitly: a timeout is not retried here (see ProviderError).
+    if isinstance(exc, openai.APIStatusError):
+        return _is_retryable_status(exc.status_code)
+    return isinstance(exc, openai.APIConnectionError) and not isinstance(
+        exc, openai.APITimeoutError
+    )

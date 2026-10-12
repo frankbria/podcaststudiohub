@@ -821,3 +821,30 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
 - **A demo can lie about its own input.** `"$(printf '…\n')"` strips trailing
   newlines, so the "newline" demo run passed a clean UUID. Build edge-case inputs
   inside the program under test, and print the `repr` of what it actually received.
+
+## #543 — engine cut-over and podcastfy removal (PRs #622, #624)
+
+- **Under the CRAP gate, design to avoid touching fat legacy functions.** Any
+  edit makes a function "changed" and judged. The task reading the TTS config
+  from the episode row (instead of the router passing it) kept the cc-56 router
+  endpoint untouched; where a touch was unavoidable (`generate_podcast_task`
+  cc 33, `extract_from_url`, `extract_from_pdf`), a separate pure-refactor
+  commit came first so the behaviour change landed in small functions.
+- **Flipping a default breaks every test that implicitly relied on the old
+  branch.** After ENGINE defaulted to native, five podcastfy-mocking modules
+  failed; pinning them to the old branch (a documented contract change) kept
+  their coverage until the old branch was deleted and they were retargeted.
+- **Inline a dependency's behaviour from its *effective* values, not its
+  source file.** podcastfy's config.yaml defined `website_extractor` twice; the
+  later block wins in YAML. Instantiating the class and printing its attributes
+  gave the real constants; a byte-for-byte comparison on varied markup proved
+  the replacement before the package was removed.
+- **List what a dependency installs that `src/` imports directly** before
+  removing it (`beautifulsoup4`, `requests` came only via podcastfy). A guarded
+  `try: import` (stripe) is not one of them.
+- **Falsify the hypothesis before closing an issue on it.** The Edge 403 was
+  filed as "edge-tts too old"; the bump shipped and the 403 stayed. Same with
+  "OpenAI TTS is broken": a raw `curl` showed the endpoint answering in 56 s,
+  i.e. host/provider slowness, not code.
+- **Check an issue's state before writing `Closes #N`** — #518 was already
+  closed by an earlier partial fix.

@@ -1,5 +1,7 @@
 # Reachability of the podcastfy-capped advisories
 
+> **Historical (2026-10-12).** podcastfy was removed in #543; the in-repo engine (`apps/api/src/engine/`) replaced it. Kept as the record of why; nothing here describes the current system.
+
 **Date:** 2026-08-13 (updated 2026-09-09) · **Issue:** #446 · **Companion:** [podcastfy-fork-effort-review.md](./podcastfy-fork-effort-review.md)
 
 `scripts/security-audit.sh` lets these advisories through the pip-audit gate because

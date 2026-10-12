@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Podcastfy Studio Hub** is a multi-tenant SaaS platform for AI-generated podcasts. It wraps the
-open-source [Podcastfy](https://github.com/souzatharsis/podcastfy) generation engine (consumed as a
-pinned **pip dependency** — see *Upstream Podcastfy Engine* below) with a full web application:
-user accounts, projects/episodes, async generation, multi-tenant data isolation, and platform
-distribution.
+**Podcastfy Studio Hub** is a multi-tenant SaaS platform for AI-generated podcasts: an in-repo
+generation engine (`apps/api/src/engine/`, see below) inside a full web application: user accounts,
+projects/episodes, async generation, multi-tenant data isolation, and platform distribution. It began
+as a wrapper around the open-source [Podcastfy](https://github.com/souzatharsis/podcastfy) package;
+that dependency was removed in #543.
 
 This is a **monorepo**: a FastAPI backend (`apps/api`), a Next.js frontend (`apps/web`), and VPS
 deployment configs (`deployment/`).
@@ -36,8 +36,8 @@ podcaststudiohub/
 
 - **FastAPI** app at `src/main.py`; routers in `src/routers/`, business logic in `src/services/`.
 - **SQLAlchemy (async) + PostgreSQL**; **Alembic** migrations in `apps/api/alembic/versions/`.
-- **Celery + Redis** for async podcast generation; tasks in `src/tasks/` (the generation chain wraps
-  the podcastfy engine), worker entry `src/worker.py`.
+- **Celery + Redis** for async podcast generation; tasks in `src/tasks/` (the generation chain runs
+  the in-repo engine), worker entry `src/worker.py`.
 - **Auth is JWT** (HS256), not session-based. Config in `src/config.py` (`JWT_ALGORITHM = "HS256"`).
 - **Multi-tenancy** via middleware in `src/middleware/` with per-tenant data isolation.
 
@@ -55,65 +55,35 @@ security-patch mode; Better Auth requires a database it owns, which FastAPI alre
 `apps/web/docs/auth-direction-evaluation.md` for the full evaluation and the two re-evaluation
 triggers (chiefly: wanting social login / SSO / 2FA / passkeys).
 
-### In-repo generation engine (`apps/api/src/engine/`)
+### Generation engine (`apps/api/src/engine/`)
 
-Being built to replace podcastfy, one step at a time — epic #538. **Step 1 (#541) has landed:**
-the script layer. `generate_script(sources, config, longform)` returns a validated Pydantic
-`Script` (`turns: list[Turn(speaker, text)]` plus title/summary) by calling the provider SDKs
-(`google-genai`, `openai`) directly and asking for structured JSON. Prompts live in
-`src/engine/prompts/*.md` and are versioned here — nothing is fetched at runtime. Long-form
-chunks carry a rolling summary rather than the whole prior transcript. `persist_transcript`
-stores the script beside the audio under the same `podcasts/user-*/` prefix.
+The live generation path (epic #538): `generate_podcast_task` calls it directly.
 
-Models come from `ENGINE_GEMINI_MODEL` / `ENGINE_OPENAI_MODEL` in `src/config.py`. Nothing under
-`src/engine/` may import `langchain`/`litellm` — that is the point of owning it, and
-`tests/test_dependency_reachability.py` enforces it at both source and import-graph level.
+- **Script** (#541): `generate_script(sources, config, longform)` returns a validated Pydantic
+  `Script` (`turns: list[Turn(speaker, text)]` plus title/summary) by calling the provider SDKs
+  (`google-genai`, `openai`) directly for structured JSON. Prompts live in `src/engine/prompts/*.md`,
+  versioned here; nothing is fetched at runtime. Long-form chunks carry a rolling summary, not the
+  whole prior transcript. Fast provider failures (429/5xx/dropped connections) are retried in place
+  so a blip does not discard paid chunks; timeouts are not (#574).
+- **Voice** (#542): `src/engine/tts/` has five backends (`openai`, `elevenlabs` with Eleven v3
+  Text-to-Dialogue, `gemini`, `gemini_multi`, `edge`) behind one `TTSBackend`; every temp file goes
+  under a caller-supplied `workdir`, and there are no module-global API keys.
+- **Task** (#543): reads the episode's **stored** TTS provider and raw config from the row (episode,
+  else project default, else openai echo/shimmer), checks the voices before any paid call, fetches
+  pending URL sources through the SSRF-guarded `ContentExtractionService.fetch_url_text` (YouTube
+  URLs yield the video transcript), then scripts, voices, and `persist_transcript`s, which fills
+  `episodes.transcript_path` (an S3 key under `podcasts/user-*/`, or a local path without a bucket).
+  The router still sends a podcastfy-shaped `tts_model`/`text_to_speech`; the task ignores them
+  (removal needs the `generate_podcast` endpoint split first, #623).
+- Text extraction (HTML/PDF) lives in `src/services/text_extraction.py`.
 
-**Step 2 (#542) has landed too:** `src/engine/tts/` — five backends (`openai`, `elevenlabs`,
-`gemini`, `gemini_multi`, `edge`) behind one `TTSBackend` interface, every temp file under a
-caller-supplied `workdir`, no module-global API keys, bounded concurrent per-turn synthesis,
-and Eleven v3 **Text-to-Dialogue**, which podcastfy's pinned SDK could not reach.
+Models come from `ENGINE_GEMINI_MODEL` / `ENGINE_OPENAI_MODEL` in `src/config.py`; a wrong model id
+fails no test (every test fakes the SDK boundary), so changing one needs a live smoke call.
 
-That last point has a live consequence: `pyproject.toml` overrides podcastfy's `elevenlabs<2`
-cap, because `text_to_dialogue` exists only in 2.x and 2.x removed the `generate()` call
-podcastfy makes. **podcastfy's ElevenLabs path is therefore broken until #543**;
-`generate_podcast_task` fails fast naming that issue rather than raising an `AttributeError`
-from inside site-packages. Select another provider in the meantime.
-
-**The live `generate_podcast_task` does not call the engine yet.** It still calls podcastfy.
-The cut-over and the removal of the pin is #543. Until then the section below still describes
-the running system.
-
-### Upstream Podcastfy Engine
-
-The podcast generation engine is the upstream `podcastfy` package, pinned as a **dependency** in
-`apps/api/pyproject.toml` (`podcastfy==0.4.1`) — it is **not** vendored in this repo. The backend's
-`src/services/` and `src/tasks/` call into it (content extraction, LLM transcript generation, TTS).
-
-The pin is intentional: task kwargs are coupled to the upstream call signature (see #204). To upgrade,
-bump the version in `apps/api/pyproject.toml`, run `uv sync`, and re-check the call signatures in
-`src/services/` and `src/tasks/` before relying on it.
-
-**0.4.2/0.4.3 were evaluated 2026-07-13 and deferred** (#363): 0.4.2+ imports `playwright` at module
-top without declaring it (breaks app startup), offers no benefit to our call paths, and does not clear
-the langchain CVEs on the pip-audit ignore list. See `apps/api/docs/podcastfy-0.4.3-evaluation.md` for
-the full evaluation and re-evaluation triggers (chiefly: upstream langchain 1.x support). Upstream is
-dormant — 0.4.3 shipped 2025-12-09 and nothing since — so that trigger has not fired.
-
-**The pin's advisory load was assessed 2026-08-13** (#446, updated 2026-09-09): 22 of 23 capped advisories are
-unreachable (the litellm ones, including both criticals, are proxy-server issues and we never run a
-proxy). The exception is GHSA-3644 — podcastfy's `hub.pull()` fetches prompts from LangChain Hub on
-the generation path, so **every episode makes an outbound call to a third-party Hub account**.
-Accepted (pulls are commit-pinned). See `apps/api/docs/podcastfy-advisory-reachability.md`; the claims
-are enforced by `apps/api/tests/test_dependency_reachability.py`, so adding an image source type or
-importing litellm directly will fail CI by design. That test is also why **litellm advisories never
-block the audit gate** (#518): `apps/api/scripts/pip_audit_gate.py` reports them as one non-blocking
-warning and fails only on unlisted advisories in other packages. Do not add litellm IDs to `TRIAGED`. Fork costing lives in
-`apps/api/docs/podcastfy-fork-effort-review.md` (langchain is confined to one file; Stage 2 ≈ 3–5 days).
-
-Engine capabilities (provided by the dependency): multi-modal input (websites, YouTube, PDFs, images,
-text, topics); 100+ LLMs via LiteLLM + Gemini; TTS via OpenAI, ElevenLabs, Gemini multi-speaker, and
-Edge TTS; short-form and long-form ("content chunking with contextual linking") generation.
+Nothing may bring back podcastfy's dependency tree: `tests/test_dependency_reachability.py` fails if
+`podcastfy`, `langchain*`, `langsmith` or `litellm` is installed, or if `src/engine/` imports them.
+`apps/api/scripts/pip_audit_gate.py` blocks on every advisory; its allowlists are empty. The
+`apps/api/docs/podcastfy-*.md` analyses are kept as history.
 
 ## Development Commands
 

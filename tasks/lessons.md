@@ -848,3 +848,22 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
   i.e. host/provider slowness, not code.
 - **Check an issue's state before writing `Closes #N`** — #518 was already
   closed by an earlier partial fix.
+
+## #576 — output-side content screening (PR #628)
+
+- **An enforcement write must fail closed.** `_update_episode` swallows DB
+  errors and returns a bool; ignoring it turned the hold into best-effort.
+  Any control whose absence means "publish" must check that it landed.
+- **"Distribution" is every public surface, not the obvious one.** The RSS feed
+  was the real publication path (platform distribution is off by default), and
+  the unauthenticated audio URL was a third (accepted gap, #626). List them all
+  before declaring a hold complete.
+- **Substring phrase lists false-positive on speech** ("because code" contains
+  "use code"); match whole words. And run a timing test on hostile input for any
+  regex over model output: a nested optional label group was quadratic.
+- **A defense a mutation can delete without failing any test is either untested
+  or unnecessary** — here the token-length cap was unnecessary (fullmatch on
+  dot-free labels is already linear), so it was removed, not tested.
+- **CRAP gate on TSX** (now in the crap-gate live rule): istanbul emits no line
+  data for JSX-only bodies, and lizard misreads inline generic object types,
+  inline async closures, `.catch(() => …)` and arrows in JSX.

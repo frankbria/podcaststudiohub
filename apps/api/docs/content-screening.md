@@ -42,6 +42,8 @@ trigger it.
    `content_review` to `"approved"`, keeps the flags on record, and rebuilds the
    feed so the episode appears. It first clears the audio's metadata mark in place
    (content type kept); if that fails it answers 502 and the episode stays pending.
+   Approval is refused (409) until generation completes, so an in-flight upload
+   cannot re-mark the audio after the mark is cleared.
 6. Regenerating the episode screens the new script; a clean result clears the hold.
 
 ## Known limits

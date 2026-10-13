@@ -2223,7 +2223,7 @@ async def test_pagination_stable_under_created_at_tie(client, test_db, project_a
 
 # #576: an episode held by output screening is released by an explicit review.
 
-async def _flagged_episode(client, headers, project_id, set_system_fields, number=1):
+async def _flagged_episode(client, headers, project_id, set_system_fields, number=1, status="complete"):
 	created = await client.post("/episodes", headers=headers, json={
 		"project_id": project_id,
 		"episode_number": number,
@@ -2232,9 +2232,9 @@ async def _flagged_episode(client, headers, project_id, set_system_fields, numbe
 	episode_id = created.json()["id"]
 	await set_system_fields(
 		episode_id,
-		generation_status="complete",
+		generation_status=status,
 		generation_progress={
-			"stage": "complete",
+			"stage": status,
 			"content_flags": [{"kind": "domain", "match": "totally-legit.example", "turn": 0, "speaker": "host"}],
 			"content_review": "pending",
 		},
@@ -2279,6 +2279,26 @@ async def test_approving_an_episode_with_nothing_to_review_is_a_conflict(
 	)
 
 	assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_approving_while_the_audio_is_still_uploading_is_a_conflict(
+	client, project_and_auth, set_system_fields
+):
+	"""#626: an upload that read the hold before the approval would land its
+	audio marked after the mark was cleared, holding an approved episode for good."""
+	project_id, headers = project_and_auth
+	episode_id = await _flagged_episode(
+		client, headers, project_id, set_system_fields, status="uploading"
+	)
+
+	response = await client.post(
+		f"/episodes/{episode_id}/content-review/approve", headers=headers
+	)
+
+	assert response.status_code == 409
+	after = await client.get(f"/episodes/{episode_id}", headers=headers)
+	assert after.json()["generation_progress"]["content_review"] == "pending"
 
 
 @pytest.mark.asyncio

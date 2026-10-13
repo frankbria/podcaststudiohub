@@ -357,6 +357,13 @@ async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
 			status_code=status.HTTP_409_CONFLICT,
 			detail="This episode has no content flags awaiting review.",
 		)
+	# Until generation completes, an upload that read the hold may still land
+	# its audio marked after the mark below is cleared (#626).
+	if episode.generation_status != "complete":
+		raise HTTPException(
+			status_code=status.HTTP_409_CONFLICT,
+			detail="This episode is still being generated; approve it once it completes.",
+		)
 	await _release_held_audio(episode)
 	# A new dict, not an in-place edit: plain JSONB columns do not track mutation.
 	episode.generation_progress = {**progress, "content_review": "approved"}

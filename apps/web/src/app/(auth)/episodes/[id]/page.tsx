@@ -209,7 +209,15 @@ async function fetchEpisodeAnalytics(episodeId: string): Promise<EpisodeAnalytic
   }
 }
 
-export default function EpisodePage() {
+// The App Router reuses this page's instance when only [id] changes, so its
+// state (loading flag, loaded episode) would carry over and show the previous
+// episode until the new fetch lands. Keying on the id remounts it instead (#529).
+export default function EpisodePageRoute() {
+  const params = useParams<{ id: string }>()
+  return <EpisodePage key={params.id} />
+}
+
+function EpisodePage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
   const { status: authStatus } = useSession()

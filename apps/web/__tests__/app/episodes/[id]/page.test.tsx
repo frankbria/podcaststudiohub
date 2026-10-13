@@ -203,6 +203,24 @@ describe('EpisodePage generate flow', () => {
     jest.clearAllMocks()
   })
 
+  it('shows the loading skeleton again when the episode id changes (#529)', async () => {
+    // The App Router reuses the page instance when only [id] changes; the new
+    // episode's data must not be preceded by the old one's title.
+    const loaded = mockFetchRouter()
+    global.fetch = jest.fn((url: string, init?: RequestInit) =>
+      url.includes('/episodes/ep2') ? new Promise(() => {}) : loaded(url, init)
+    ) as jest.Mock
+
+    const { rerender } = render(<EpisodePage />)
+    expect(await screen.findByText('Test Episode')).toBeInTheDocument()
+
+    mockEpisodeId = 'ep2'
+    rerender(<EpisodePage />)
+
+    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+    expect(screen.queryByText('Test Episode')).not.toBeInTheDocument()
+  })
+
   it('loads the episode and enables the Generate button', async () => {
     global.fetch = mockFetchRouter()
     render(<EpisodePage />)
@@ -1151,7 +1169,10 @@ describe('EpisodePage analytics on episode change', () => {
     mockEpisodeId = 'ep2'
     rerender(<EpisodePage />)
 
-    expect(screen.getByText(/loading analytics/i)).toBeInTheDocument()
+    // Since #529 the page remounts on an id change: the page skeleton comes
+    // first, then the new episode with its analytics still loading. The old
+    // episode's figures must never show for the new one.
+    expect(await screen.findByText(/loading analytics/i)).toBeInTheDocument()
     expect(screen.queryByText('42')).not.toBeInTheDocument()
   })
 })

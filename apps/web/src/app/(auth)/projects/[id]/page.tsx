@@ -86,7 +86,15 @@ async function fetchEpisodes(projectId: string): Promise<Episode[] | null> {
   }
 }
 
-export default function ProjectPage() {
+// The App Router reuses this page's instance when only [id] changes, so its
+// state (loading flag, loaded project) would carry over and show the previous
+// project until the new fetch lands. Keying on the id remounts it instead (#529).
+export default function ProjectPageRoute() {
+  const params = useParams<{ id: string }>()
+  return <ProjectPage key={params.id} />
+}
+
+function ProjectPage() {
   const router = useRouter()
   const params = useParams<{ id: string }>()
   const { status: authStatus } = useSession()

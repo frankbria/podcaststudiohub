@@ -12,6 +12,8 @@ from celery.signals import (
 )
 from datetime import timedelta
 
+from kombu import Queue
+
 from src.config import settings
 from src.logging_config import (
     CORRELATION_ID,
@@ -74,6 +76,10 @@ celery_app.conf.task_routes = {
     "finalize_episode_generation": {"queue": "podcast_generation"},
     "src.tasks.podcast_generation.*": {"queue": "podcast_generation"},
     "src.tasks.audio_composition.*": {"queue": "audio_processing"},
+    # Bare task names never match a module glob, so these need their own
+    # entries; without them both fell to the default queue (#560).
+    "merge_audio_snippets": {"queue": "audio_processing"},
+    "distribute_to_platform": {"queue": "distribution"},
     "upload_to_s3": {"queue": "uploads"},
     "src.tasks.s3_upload.*": {"queue": "uploads"},
     "src.tasks.platform_distribution.*": {"queue": "distribution"},
@@ -91,6 +97,19 @@ celery_app.conf.task_routes = {
     "track_analytics_event": {"queue": "callbacks"},
     "src.tasks.analytics.*": {"queue": "callbacks"},
 }
+
+# Declare every routed queue, plus the default. A worker started without -Q
+# (the deployed `celery ... worker -B` is) consumes exactly the declared
+# queues; with none declared it consumed only `celery`, and every task routed
+# to a named queue sat in Redis forever (#560: on the dev box 39,312 beat ticks
+# of the reaper and the outbox drain, and 11 content extractions).
+celery_app.conf.task_queues = [
+    Queue(name)
+    for name in sorted(
+        {route["queue"] for route in celery_app.conf.task_routes.values()}
+        | {celery_app.conf.task_default_queue}
+    )
+]
 
 # Beat schedule — periodic reaper that fails episodes stuck in a non-terminal
 # status past EPISODE_REAP_THRESHOLD_SECONDS, a final safety net for runs that

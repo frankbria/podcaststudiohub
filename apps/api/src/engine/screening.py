@@ -33,9 +33,7 @@ _TLDS = frozenset({
 })
 # Matched against one whitespace token at a time with fullmatch, and labels
 # cannot contain dots, so there is a single way to split a token: screening is
-# linear even on a hostile "a.a.a.…" turn. Tokens longer than any real domain
-# (253) plus a path are skipped outright.
-_MAX_TOKEN = 300
+# linear even on a hostile "a.a.a.…" turn (pinned by a timing test).
 _TOKEN_TRIM = ".,;:!?()[]{}<>\"'"
 _DOMAIN = re.compile(r"(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?:[/?#]\S*)?")
 # Whole words only: "because code" and "reuse code" are ordinary speech.
@@ -69,8 +67,6 @@ def _findings(text: str):
 
 
 def _domain_of(token: str):
-    if len(token) > _MAX_TOKEN:
-        return None
     found = _DOMAIN.fullmatch(token)
     if found and found.group(1).rsplit(".", 1)[1] in _TLDS:
         return found.group(1)

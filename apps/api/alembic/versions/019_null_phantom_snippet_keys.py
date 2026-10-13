@@ -10,6 +10,14 @@ drain: `attempts` grows on every beat tick and a warning is logged each time.
 `s3_url` is set on every real upload (StorageService.upload_file returns it),
 so `s3_key IS NOT NULL AND s3_url IS NULL` is a phantom key.
 
+Not touched: a queued deletion whose snippet is already gone (deletion and
+erasure delete the row in the same transaction that queues its key). Its key
+can no longer be told apart from a real object's key, and dropping it could
+orphan a real object during an S3 outage, the leak the outbox exists to
+prevent. With a bucket configured it drains on its own (S3 DeleteObject on a
+missing key succeeds); only a bucketless install keeps retrying it. The dev box
+had no phantom keys and an empty outbox when this was written (2026-10-13).
+
 Order matters: the queued deletions are matched against the phantom keys
 before those keys are nulled. Both statements are idempotent, so a rerun is a
 no-op (#318). Data-only; there is no DDL to run concurrently.

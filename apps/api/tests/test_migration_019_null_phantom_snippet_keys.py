@@ -99,3 +99,19 @@ def test_a_rerun_changes_nothing(connection):
 
     assert _snippet_key(connection, "real") == keys["real"]
     assert _queued(connection, keys["other"]) == 1
+
+
+def test_a_queued_deletion_whose_snippet_is_gone_is_left_queued(connection):
+    """Deletion and erasure delete the snippet in the transaction that queues
+    its key, so such a key can no longer be told phantom from real. Dropping it
+    could orphan a real object during an S3 outage, so it stays queued (with a
+    bucket it drains on its own: S3 DeleteObject on a missing key succeeds)."""
+    keys = _seed(connection)
+    orphan = keys["phantom"].replace("phantom", "deleted-snippet")
+    connection.execute(sa.text(
+        "INSERT INTO storage_deletion_outbox (id, s3_key, attempts, created_at) VALUES (:id, :key, 3, now())"
+    ), {"id": uuid.uuid4(), "key": orphan})
+
+    _upgrade(connection)
+
+    assert _queued(connection, orphan) == 1

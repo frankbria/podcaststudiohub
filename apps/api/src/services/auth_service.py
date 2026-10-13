@@ -17,6 +17,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from ..database import set_tenant_context
 from ..models.user import User
 from ..config import settings
+from ..utils.jwt import CLOCK_SKEW_LEEWAY_SECONDS
 from ..utils.encryption import encrypt_credential, decrypt_credential
 
 logger = logging.getLogger(__name__)
@@ -120,7 +121,8 @@ def verify_jwt_token(token: str) -> dict:
         payload = jwt.decode(
             token,
             settings.JWT_SECRET_KEY,
-            algorithms=[settings.JWT_ALGORITHM]
+            algorithms=[settings.JWT_ALGORITHM],
+            leeway=CLOCK_SKEW_LEEWAY_SECONDS,
         )
         return payload
     except PyJWTError as e:

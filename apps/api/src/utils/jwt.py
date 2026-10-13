@@ -9,6 +9,12 @@ from jwt import PyJWTError
 from src.config import settings
 from .datetime_utils import utcnow
 
+# Seconds of clock skew tolerated on iat/exp/nbf when verifying our own tokens.
+# The dev box's wall clock was measured stepping back ~7.2 s every few seconds
+# (WSL2, #614), which rejected fresh tokens as "not yet valid (iat)". Standard
+# practice for HS256 tokens the API issues itself.
+CLOCK_SKEW_LEEWAY_SECONDS = 10
+
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
@@ -61,7 +67,12 @@ def verify_token(token: str) -> Optional[dict]:
         Dictionary of decoded claims if valid, None if invalid
     """
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+            leeway=CLOCK_SKEW_LEEWAY_SECONDS,
+        )
         return payload
     except PyJWTError:
         return None

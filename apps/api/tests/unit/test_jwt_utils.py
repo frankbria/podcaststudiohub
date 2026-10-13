@@ -94,7 +94,12 @@ def test_verify_token_garbage():
 
 
 def test_verify_token_expired():
-	token = create_access_token({"sub": "user-1"}, expires_delta=timedelta(seconds=-1))
+	from src.utils.jwt import CLOCK_SKEW_LEEWAY_SECONDS
+
+	# Past the clock-skew leeway, which applies to exp as well as iat (#614).
+	token = create_access_token(
+		{"sub": "user-1"}, expires_delta=timedelta(seconds=-(CLOCK_SKEW_LEEWAY_SECONDS + 1))
+	)
 	result = verify_token(token)
 	assert result is None
 
@@ -135,3 +140,47 @@ def test_get_tenant_id_missing():
 
 def test_get_tenant_id_invalid_token():
 	assert get_tenant_id_from_token("invalid") is None
+
+
+# --- clock skew (#614) ------------------------------------------------------
+# On the dev box (WSL2) the wall clock was measured stepping back ~7.2 s every
+# few seconds, so a token minted just after a forward step carried an iat in the
+# verifier's future and was rejected with "The token is not yet valid (iat)".
+
+def _token_issued_in(seconds: int) -> str:
+	import time
+	import uuid
+
+	import jwt as pyjwt
+
+	from src.config import settings
+
+	now = int(time.time())
+	payload = {
+		"sub": str(uuid.uuid4()), "tenant_id": str(uuid.uuid4()), "email": "skew@test.local",
+		"type": "access", "iat": now + seconds, "exp": now + 3600,
+	}
+	return pyjwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def test_a_few_seconds_of_clock_skew_is_tolerated_by_both_verifiers():
+	from src.services.auth_service import verify_jwt_token
+	from src.utils.jwt import verify_token
+
+	token = _token_issued_in(8)
+
+	assert verify_jwt_token(token)["email"] == "skew@test.local"
+	assert verify_token(token)["email"] == "skew@test.local"
+
+
+def test_a_token_issued_well_in_the_future_is_still_rejected():
+	import pytest
+
+	from src.services.auth_service import verify_jwt_token
+	from src.utils.jwt import verify_token
+
+	token = _token_issued_in(60)
+
+	with pytest.raises(ValueError, match="not yet valid"):
+		verify_jwt_token(token)
+	assert verify_token(token) is None

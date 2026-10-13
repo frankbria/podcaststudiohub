@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 
 from src.worker import celery_app
 from src.config import settings
+from src.tasks.content_review import CONTENT_REVIEW_METADATA, held_episode_of
 from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,14 @@ def _cleanup_temp_file(file_path: str) -> None:
             logger.info("Removed temp upload artifact: %s", real)
     except Exception as exc:  # cleanup must never fail the task  # noqa: BLE001 — cleanup must never fail the task: the artifact is disposable and the upload result is already decided
         logger.warning("Failed to clean up temp file %s: %s", file_path, exc)
+
+
+def _upload_extra_args(s3_key: str, content_type: str) -> Dict[str, Any]:
+    """Upload options; held episode audio is marked so the public URL refuses it (#626)."""
+    extra: Dict[str, Any] = {"ContentType": content_type}
+    if held_episode_of(s3_key):
+        extra["Metadata"] = {CONTENT_REVIEW_METADATA: "pending"}
+    return extra
 
 
 @celery_app.task(bind=True, name="upload_to_s3", time_limit=300, max_retries=3)
@@ -107,7 +116,7 @@ def upload_to_s3_task(
             file_path,
             bucket_name,
             s3_key,
-            ExtraArgs={'ContentType': content_type},
+            ExtraArgs=_upload_extra_args(s3_key, content_type),
             Callback=upload_progress
         )
 

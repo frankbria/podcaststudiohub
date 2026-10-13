@@ -1,7 +1,7 @@
 """Storage service for S3 operations"""
 
 import asyncio
-from typing import Optional
+from typing import Dict, Optional
 import boto3
 from botocore.exceptions import ClientError
 
@@ -176,6 +176,38 @@ class StorageService:
 
         except ClientError as e:
             raise Exception(f"Failed to generate presigned URL: {str(e)}")
+
+    async def object_metadata(self, s3_key: str) -> Optional[Dict[str, str]]:
+        """The object's user metadata, or None when it does not exist (#626)."""
+        try:
+            head = await asyncio.to_thread(
+                self.s3_client.head_object, Bucket=self.bucket_name, Key=s3_key
+            )
+        except ClientError:
+            return None
+        return dict(head.get("Metadata") or {})
+
+    async def clear_content_review_hold(self, s3_key: str) -> None:
+        """Drop the #626 hold mark from an object in place, keeping its content type.
+
+        A missing object has nothing to release. ``MetadataDirective=REPLACE``
+        also replaces the content type, so it is carried over explicitly.
+        """
+        try:
+            head = await asyncio.to_thread(
+                self.s3_client.head_object, Bucket=self.bucket_name, Key=s3_key
+            )
+        except ClientError:
+            return
+        await asyncio.to_thread(
+            self.s3_client.copy_object,
+            Bucket=self.bucket_name,
+            Key=s3_key,
+            CopySource={"Bucket": self.bucket_name, "Key": s3_key},
+            Metadata={},
+            MetadataDirective="REPLACE",
+            ContentType=head.get("ContentType", "audio/mpeg"),
+        )
 
     async def file_exists(self, s3_key: str) -> bool:
         """

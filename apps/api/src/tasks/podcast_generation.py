@@ -29,6 +29,7 @@ from src.models.audio_snippet import AudioSnippet
 from src.models.episode import Episode
 from src.services.content_extraction_service import ContentExtractionService
 from src.tasks.callbacks import _update_episode, _utcnow_iso, _queue_orphaned_storage
+from src.tasks.content_review import episode_held_for_review
 from src.tasks.idempotency import acquire_generation_lock, release_generation_lock
 from src.tasks.rss_refresh import refresh_project_rss_feed
 from src.tasks.s3_upload import (
@@ -402,17 +403,9 @@ def _record_screening(episode_id: str, script, sources: List[str]) -> None:
         raise EngineError(f"Episode {episode_id}: could not record content screening")
 
 
-def _held_for_review(episode_id: str) -> bool:
-    """True while screening flags on this episode await the user's review (#576)."""
-    with SyncSessionLocal() as db:
-        episode = db.get(Episode, uuid_module.UUID(episode_id))
-        progress = (episode.generation_progress or {}) if episode is not None else {}
-        return progress.get("content_review") == "pending"
-
-
 def _distribution_allowed(episode_id: str, enable_distribution: bool) -> bool:
     """Platform distribution, unless screening is holding the episode (#576)."""
-    if enable_distribution and _held_for_review(episode_id):
+    if enable_distribution and episode_held_for_review(episode_id):
         logger.warning(
             "Episode %s: platform distribution held until its content flags are reviewed",
             episode_id,

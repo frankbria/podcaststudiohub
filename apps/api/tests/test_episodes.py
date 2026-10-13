@@ -2314,3 +2314,57 @@ async def test_a_held_episode_is_left_out_of_the_rss_feed_until_approved(
 	listed = [str(e.id) for e in await service._get_completed_episodes(test_db, UUID(project_id))]
 
 	assert clean in listed and held not in listed
+
+
+@pytest.mark.asyncio
+async def test_approving_clears_the_audio_hold_before_releasing(
+	client, project_and_auth, set_system_fields, monkeypatch
+):
+	"""#626: the canonical audio object is marked held at upload; approval
+	clears the mark so the public audio URL serves it again."""
+	from unittest.mock import AsyncMock, patch
+
+	from src.config import settings
+
+	monkeypatch.setattr(settings, "AWS_S3_BUCKET", "bucket")
+	project_id, headers = project_and_auth
+	episode_id = await _flagged_episode(client, headers, project_id, set_system_fields)
+
+	with patch("src.services.episode_service.refresh_project_rss_feed"), patch(
+		"src.services.episode_service.StorageService"
+	) as storage_cls:
+		storage_cls.return_value.clear_content_review_hold = AsyncMock()
+		response = await client.post(
+			f"/episodes/{episode_id}/content-review/approve", headers=headers
+		)
+
+	assert response.status_code == 200, response.text
+	key = storage_cls.return_value.clear_content_review_hold.await_args.args[0]
+	assert key.endswith(f"/episode-{episode_id}.mp3")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_hold_clear_leaves_the_episode_pending(
+	client, project_and_auth, set_system_fields, monkeypatch
+):
+	"""Never report 'approved' while the audio stays blocked."""
+	from unittest.mock import AsyncMock, patch
+
+	from src.config import settings
+
+	monkeypatch.setattr(settings, "AWS_S3_BUCKET", "bucket")
+	project_id, headers = project_and_auth
+	episode_id = await _flagged_episode(client, headers, project_id, set_system_fields)
+
+	with patch("src.services.episode_service.refresh_project_rss_feed") as refresh, patch(
+		"src.services.episode_service.StorageService"
+	) as storage_cls:
+		storage_cls.return_value.clear_content_review_hold = AsyncMock(side_effect=RuntimeError("S3 down"))
+		response = await client.post(
+			f"/episodes/{episode_id}/content-review/approve", headers=headers
+		)
+		after = await client.get(f"/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 502
+	assert after.json()["generation_progress"]["content_review"] == "pending"
+	refresh.assert_not_called()

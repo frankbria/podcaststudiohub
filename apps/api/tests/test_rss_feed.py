@@ -654,10 +654,16 @@ async def test_fetch_rss_from_s3_downloads_and_reads_file():
 # presigned URL. Only storage access is patched here.
 # ============================================================================
 
-def _patched_audio_service(file_exists=True, presigned="https://s3.example.com/presigned?sig=abc"):
-	"""Return a patch() for get_rss_service whose storage is fully mocked."""
+def _patched_audio_service(file_exists=True, presigned="https://s3.example.com/presigned?sig=abc", metadata=None):
+	"""Return a patch() for get_rss_service whose storage is fully mocked.
+
+	object_metadata is the endpoint's existence + hold check (#626): None for a
+	missing object, else the object's user metadata.
+	"""
 	mock_service = MagicMock()
-	mock_service.storage.file_exists = AsyncMock(return_value=file_exists)
+	mock_service.storage.object_metadata = AsyncMock(
+		return_value=(metadata or {}) if file_exists else None
+	)
 	mock_service.storage.generate_presigned_url = AsyncMock(return_value=presigned)
 	return patch("src.routers.rss_feed.RSSGenerationService", return_value=mock_service), mock_service
 
@@ -698,7 +704,7 @@ async def test_public_audio_internal_error_hides_details(client):
 	"""S3 failures return a generic 500 without leaking internals."""
 	secret = "S3 throttled podcasts/internal/key.mp3"
 	patcher, mock_service = _patched_audio_service()
-	mock_service.storage.file_exists = AsyncMock(side_effect=RuntimeError(secret))
+	mock_service.storage.object_metadata = AsyncMock(side_effect=RuntimeError(secret))
 
 	with patcher:
 		response = await client.get(f"/feeds/episodes/{uuid4()}/{uuid4()}/audio.mp3")
@@ -747,3 +753,17 @@ async def test_completed_episodes_order_stable_under_created_at_tie(
 		for _ in range(2)
 	]
 	assert renders[0] == renders[1] == sorted(ids, reverse=True)
+
+
+
+@pytest.mark.asyncio
+async def test_public_audio_refuses_audio_held_for_content_review(client):
+	"""#626: a regeneration held by output screening (#576) overwrites the
+	canonical key; the public URL must not serve it until it is approved."""
+	patcher, mock_service = _patched_audio_service(metadata={"content-review": "pending"})
+
+	with patcher:
+		response = await client.get(f"/feeds/episodes/{uuid4()}/{uuid4()}/audio.mp3")
+
+	assert response.status_code == 404
+	mock_service.storage.generate_presigned_url.assert_not_awaited()

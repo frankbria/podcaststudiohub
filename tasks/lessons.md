@@ -949,3 +949,15 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
   sets `CELERY_TASK_ALWAYS_EAGER=true` in `os.environ` when unit tests are
   collected; the outage subprocess then ran `.delay()` eagerly and never
   published. Pin every setting the subprocess depends on.
+
+## #614 — the local iat 401 flake (PR #637)
+
+- **Measure the clock before blaming the tests.** A 5 ms loop comparing
+  `time.time()` with `time.monotonic()` found the WSL2 wall clock stepping
+  ±7 s every few seconds (240 steps in 11 min). That explained every "different
+  set each run, green in isolation" 401 at once.
+- **Leeway applies to `exp` too.** A 1 s-expired test token became valid, and
+  the SSE test then opened a stream that never ended; a hung suite was the
+  first symptom. Expire test tokens beyond the leeway.
+- **Two clean full runs back to back** are the right bar for a flake: these were
+  the first fully green local runs in the session.

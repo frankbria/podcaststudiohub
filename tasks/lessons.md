@@ -998,3 +998,16 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
   site swapped in ran `nginx -t` against the real co-tenant configs before
   anything live changed. Access is `ssh root@staging` (`~/.ssh/config` alias),
   not the old `~/.ssh/staging` key path.
+
+## #560 — the deployed worker consumed one queue (PR #647)
+
+- **Ask the running system, not the config.** `task_routes` looked complete; the
+  live worker (`celery inspect active_queues`) consumed only `celery`, because a
+  worker without `-Q` consumes the *declared* queues and none were declared.
+  Redis showed the cost: 39k beat ticks (reaper #294, outbox drain #366) that had
+  never run on dev, and 11 user extractions never processed.
+- **A routing test must check consumption, not just routing.** The new test
+  asserts every registered task routes to a queue in `task_queues`.
+- **Clear a stranded backlog before the fix deploys,** or the fixed worker runs
+  every stale copy. Purge script: dry run, then apply only after re-confirming
+  the queue holds nothing but idempotent sweeps; keep real user jobs.

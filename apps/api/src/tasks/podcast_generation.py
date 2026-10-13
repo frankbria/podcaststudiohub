@@ -21,6 +21,7 @@ from src.worker import celery_app
 from src.config import settings
 from src.database import SyncSessionLocal
 from src.engine import EngineError, generate_script
+from src.engine.quality import quality_metrics
 from src.engine.screening import screen_script
 from src.engine.transcript import persist_transcript
 from src.engine.tts import synthesise
@@ -363,6 +364,7 @@ def _run_native_engine(
         sources, conversation_config, longform=longform, on_progress=on_progress
     )
     _record_screening(episode_id, script, sources)
+    _record_quality_metrics(episode_id, script)
 
     # Stage 3: Audio Synthesis (66-100%)
     _report_progress(task, episode_id, 'audio', 66, 'Synthesizing audio...')
@@ -380,6 +382,21 @@ def _measure_audio(audio_file_path: str) -> tuple:
     file_size_bytes = os.path.getsize(audio_file_path)
     audio = AudioSegment.from_file(audio_file_path)
     return file_size_bytes, len(audio) / 1000.0
+
+
+def _record_quality_metrics(episode_id: str, script) -> None:
+    """Store the script's quality metrics for the read endpoints (#570).
+
+    Best effort: unlike screening, a lost write only leaves the metrics endpoint
+    answering 204, so it never fails a run whose script is already paid for.
+    """
+    recorded = _update_episode(
+        episode_id,
+        {},
+        progress_updates={"quality_metrics": quality_metrics(script), "calculated_at": _utcnow_iso()},
+    )
+    if not recorded:
+        logger.warning("Episode %s: quality metrics were not recorded", episode_id)
 
 
 def _record_screening(episode_id: str, script, sources: List[str]) -> None:

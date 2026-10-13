@@ -1,0 +1,723 @@
+"""
+Integration tests for quality metrics API endpoints.
+
+Tests cover:
+- GET /quality-metrics/episodes/{episode_id} - episode metrics retrieval
+- GET /quality-metrics/projects/{project_id} - project aggregation
+- GET /quality-metrics/projects/{project_id}/episodes - paginated episode list
+- Authentication and tenant isolation
+- 204 when metrics not calculated
+- 404 for missing resources
+- Sorting and pagination
+"""
+
+import pytest
+from uuid import uuid4
+
+from src.routers.quality_metrics import _overall_score
+
+
+# ============================================================================
+# FIXTURES
+# ============================================================================
+
+SAMPLE_QUALITY_METRICS = {
+	"total_words": 2450,
+	"duration_estimate_minutes": 16.3,
+	"coherence_score": 0.78,
+	"tone": "casual",
+	"speaker_balance_ratio": 1.2,
+	"is_balanced": True,
+	"max_monologue_words": 185,
+	"dialogue_turns": 47,
+	"has_good_banter": True,
+}
+
+POOR_QUALITY_METRICS = {
+	"total_words": 300,
+	"duration_estimate_minutes": 2.0,
+	"coherence_score": 0.30,
+	"tone": "academic",
+	"speaker_balance_ratio": 5.0,
+	"is_balanced": False,
+	"max_monologue_words": 300,
+	"dialogue_turns": 2,
+	"has_good_banter": False,
+}
+
+
+@pytest.fixture
+async def user_project_episode(client):
+	"""Create user, project, and episode. Return (project_id, episode_id, headers)."""
+	# Register user
+	reg = await client.post("/auth/register", json={
+		"email": f"qm_{uuid4()}@example.com",
+		"password": "SecurePass123!",
+		"full_name": "QM Test User",
+	})
+	assert reg.status_code == 201
+	token = reg.json()["access_token"]
+	headers = {"Authorization": f"Bearer {token}"}
+
+	# Create project
+	proj = await client.post("/projects", headers=headers, json={
+		"name": "QM Test Project",
+		"podcast_metadata": {
+			"show_title": "QM Show",
+			"author": "QM Author",
+			"description": "QM Description",
+		},
+	})
+	assert proj.status_code == 201
+	project_id = proj.json()["id"]
+
+	# Create episode
+	ep = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {
+			"title": "Test Episode 1",
+			"description": "First test episode",
+		},
+	})
+	assert ep.status_code == 201
+	episode_id = ep.json()["id"]
+
+	return project_id, episode_id, headers
+
+
+@pytest.fixture
+async def episode_with_metrics(client, user_project_episode, set_system_fields):
+	"""Episode that has quality metrics stored in generation_progress."""
+	project_id, episode_id, headers = user_project_episode
+
+	# Inject quality metrics (system fields — set as the pipeline does)
+	await set_system_fields(
+		episode_id,
+		generation_status="complete",
+		generation_progress={
+			"stage": "complete",
+			"progress": 100,
+			"quality_metrics": SAMPLE_QUALITY_METRICS,
+		},
+	)
+
+	return project_id, episode_id, headers
+
+
+# ============================================================================
+# GET /quality-metrics/episodes/{episode_id}
+# ============================================================================
+
+@pytest.fixture
+def committed_episode():
+	"""An episode committed through the worker's sync session, as a real run's
+	row is. Request it before ``client`` so its cleanup runs after the test
+	transaction rolls back (the request holds a lock on the user until then)."""
+	import uuid
+
+	from src.database import SyncSessionLocal
+	from src.models import Episode, Project, User
+	from src.services.auth_service import create_jwt_token
+
+	tenant = uuid.uuid4()
+	with SyncSessionLocal() as db:
+		user = User(email=f"qm-{uuid.uuid4()}@test.local", password_hash="x", tenant_id=tenant)
+		db.add(user)
+		db.flush()
+		project = Project(user_id=user.id, tenant_id=tenant, name="QM")
+		db.add(project)
+		db.flush()
+		episode = Episode(
+			user_id=user.id, project_id=project.id, tenant_id=tenant, episode_number=1,
+			episode_metadata={"title": "Generated"}, generation_status="generating",
+		)
+		db.add(episode)
+		db.commit()
+		user_id, episode_id = user.id, str(episode.id)
+		headers = {"Authorization": f"Bearer {create_jwt_token(user.id, tenant, user.email)}"}
+	yield episode_id, headers
+	with SyncSessionLocal() as db:
+		db.delete(db.get(User, user_id))
+		db.commit()
+
+
+@pytest.mark.asyncio
+async def test_metrics_written_by_the_generation_task_are_served(committed_episode, client):
+	"""#570 done-when: the task's own writer stores metrics on a real, committed
+	row and the endpoint serves them, scored."""
+	from src.engine.models import Script
+	from src.engine.quality import quality_metrics
+	from src.tasks.podcast_generation import _record_quality_metrics
+
+	episode_id, headers = committed_episode
+	script = Script(title="t", summary="s", turns=[
+		{"speaker": "host", "text": "Welcome back to the show."},
+		{"speaker": "guest", "text": "Glad to be here, this research is fun."},
+	])
+
+	_record_quality_metrics(episode_id, script)
+	response = await client.get(f"/quality-metrics/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 200, response.text
+	data = response.json()
+	assert data["metrics"] == quality_metrics(script)
+	assert {s["dimension"] for s in data["quality_scores"]} >= {"overall"}
+
+
+@pytest.mark.asyncio
+async def test_get_episode_quality_metrics_success(client, episode_with_metrics):
+	"""Test successful retrieval of episode quality metrics."""
+	project_id, episode_id, headers = episode_with_metrics
+
+	response = await client.get(
+		f"/quality-metrics/episodes/{episode_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+
+	# Episode identity fields
+	assert data["episode_id"] == episode_id
+	assert data["episode_title"] == "Test Episode 1"
+	assert data["episode_number"] == 1
+	assert "calculated_at" in data
+
+	# Raw metrics
+	metrics = data["metrics"]
+	assert metrics["total_words"] == 2450
+	assert metrics["duration_estimate_minutes"] == 16.3
+	assert metrics["coherence_score"] == 0.78
+	assert metrics["tone"] == "casual"
+	assert metrics["is_balanced"] is True
+	assert metrics["has_good_banter"] is True
+
+	# Quality scores
+	assert len(data["quality_scores"]) == 5
+	dimensions = {qs["dimension"] for qs in data["quality_scores"]}
+	assert dimensions == {"content_length", "coherence", "balance", "engagement", "overall"}
+	for qs in data["quality_scores"]:
+		assert 0.0 <= qs["score"] <= 1.0
+		assert qs["rating"] in {"poor", "fair", "good", "excellent"}
+
+	# Interpretation
+	interp = data["interpretation"]
+	assert interp["overall_rating"] in {"poor", "fair", "good", "excellent"}
+	assert isinstance(interp["strengths"], list)
+	assert isinstance(interp["improvements"], list)
+	assert interp["recommendations"] is not None
+
+
+@pytest.mark.asyncio
+async def test_get_episode_quality_metrics_not_calculated(client, user_project_episode):
+	"""Test 204 No Content when quality metrics not yet calculated."""
+	project_id, episode_id, headers = user_project_episode
+
+	response = await client.get(
+		f"/quality-metrics/episodes/{episode_id}",
+		headers=headers,
+	)
+	assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_get_episode_quality_metrics_not_found(client, user_project_episode):
+	"""Test 404 for non-existent episode."""
+	project_id, episode_id, headers = user_project_episode
+	fake_id = str(uuid4())
+
+	response = await client.get(
+		f"/quality-metrics/episodes/{fake_id}",
+		headers=headers,
+	)
+	assert response.status_code == 404
+	assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_get_episode_quality_metrics_malformed_data(client, user_project_episode, set_system_fields):
+	"""Test 422 when stored quality_metrics is missing required fields."""
+	project_id, episode_id, headers = user_project_episode
+
+	await set_system_fields(
+		episode_id,
+		generation_status="complete",
+		generation_progress={
+			"stage": "complete",
+			"progress": 100,
+			# Missing required fields (total_words, coherence_score, etc.)
+			"quality_metrics": {"tone": "casual"},
+		},
+	)
+
+	response = await client.get(
+		f"/quality-metrics/episodes/{episode_id}",
+		headers=headers,
+	)
+	assert response.status_code == 422
+	assert str(episode_id) in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_get_episode_quality_metrics_uses_stored_calculated_at(
+	client, user_project_episode, set_system_fields
+):
+	"""Test that a stored `calculated_at` ISO string is parsed and returned
+	rather than falling back to the episode's updated_at."""
+	project_id, episode_id, headers = user_project_episode
+	stored_calculated_at = "2025-01-15T10:30:00"
+
+	await set_system_fields(
+		episode_id,
+		generation_status="complete",
+		generation_progress={
+			"stage": "complete",
+			"progress": 100,
+			"calculated_at": stored_calculated_at,
+			"quality_metrics": SAMPLE_QUALITY_METRICS,
+		},
+	)
+
+	response = await client.get(
+		f"/quality-metrics/episodes/{episode_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["calculated_at"].startswith("2025-01-15T10:30:00")
+
+
+@pytest.mark.asyncio
+async def test_get_episode_quality_metrics_unauthorized(client, episode_with_metrics):
+	"""Test 401 without authentication."""
+	project_id, episode_id, headers = episode_with_metrics
+
+	response = await client.get(f"/quality-metrics/episodes/{episode_id}")
+	assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_episode_quality_metrics_tenant_isolation(client, episode_with_metrics):
+	"""Test that other users cannot access episodes from a different tenant."""
+	project_id, episode_id, _ = episode_with_metrics
+
+	# Register a different user (different tenant)
+	reg2 = await client.post("/auth/register", json={
+		"email": f"other_{uuid4()}@example.com",
+		"password": "SecurePass123!",
+		"full_name": "Other User",
+	})
+	assert reg2.status_code == 201
+	other_headers = {"Authorization": f"Bearer {reg2.json()['access_token']}"}
+
+	response = await client.get(
+		f"/quality-metrics/episodes/{episode_id}",
+		headers=other_headers,
+	)
+	# Should be 404 because RLS hides cross-tenant data
+	assert response.status_code == 404
+
+
+# ============================================================================
+# GET /quality-metrics/projects/{project_id}
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_get_project_quality_metrics_no_episodes(client, user_project_episode):
+	"""Test project quality metrics with no episodes having metrics."""
+	project_id, episode_id, headers = user_project_episode
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["project_id"] == project_id
+	assert data["total_episodes_analyzed"] == 0
+	assert data["quality_distribution"] == {"excellent": 0, "good": 0, "fair": 0, "poor": 0}
+
+
+@pytest.mark.asyncio
+async def test_get_project_quality_metrics_with_episodes(client, episode_with_metrics):
+	"""Test project quality metrics aggregation with episodes that have metrics."""
+	project_id, episode_id, headers = episode_with_metrics
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+
+	assert data["project_id"] == project_id
+	assert data["total_episodes_analyzed"] == 1
+	assert "date_range" in data
+	assert "average_metrics" in data
+	assert "quality_distribution" in data
+	assert "quality_scores" in data
+	assert "top_episodes" in data
+	assert "worst_episodes" in data
+	assert "trend" in data
+
+	# Distribution should count exactly one episode
+	total_in_dist = sum(data["quality_distribution"].values())
+	assert total_in_dist == 1
+
+	# Average metrics should match the single episode
+	assert data["average_metrics"]["total_words"] == 2450
+
+	# Trend with single episode should be stable
+	assert data["trend"]["direction"] == "stable"
+
+
+@pytest.mark.asyncio
+async def test_get_project_quality_metrics_multiple_episodes(client, user_project_episode, set_system_fields):
+	"""Test aggregation with multiple episodes having different quality metrics."""
+	project_id, episode_id, headers = user_project_episode
+
+	# Update first episode with good metrics
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+
+	# Create a second episode with poor metrics
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {
+			"title": "Test Episode 2",
+			"description": "Second test episode",
+		},
+	})
+	ep2_id = ep2.json()["id"]
+	await set_system_fields(ep2_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": POOR_QUALITY_METRICS,
+	})
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+
+	assert data["total_episodes_analyzed"] == 2
+	# Total distribution entries should sum to 2
+	assert sum(data["quality_distribution"].values()) == 2
+	# Top/worst should be populated
+	assert len(data["top_episodes"]) >= 1
+	assert len(data["worst_episodes"]) >= 1
+
+
+@pytest.mark.asyncio
+async def test_project_averages_skip_an_episode_with_no_ratio(client, user_project_episode, set_system_fields):
+	"""#570: a script whose guest never speaks stores a null ratio; the project
+	average must use the episodes that have one rather than crash summing None."""
+	project_id, episode_id, headers = user_project_episode
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "Monologue", "description": "Host only"},
+	})
+	await set_system_fields(ep2.json()["id"], generation_progress={
+		"stage": "complete",
+		"quality_metrics": {**POOR_QUALITY_METRICS, "speaker_balance_ratio": None},
+	})
+
+	response = await client.get(f"/quality-metrics/projects/{project_id}", headers=headers)
+
+	assert response.status_code == 200, response.text
+	assert response.json()["average_metrics"]["speaker_balance_ratio"] == SAMPLE_QUALITY_METRICS["speaker_balance_ratio"]
+
+
+@pytest.mark.asyncio
+async def test_project_routes_mix_a_stored_and_a_fallback_calculated_at(
+	client, user_project_episode, set_system_fields
+):
+	"""The pipeline stores an aware ISO timestamp; without one the response falls
+	back to updated_at. That column is timestamptz in the database (the ORM model
+	says plain DateTime), so both are aware and the aggregate's min/max and the
+	list's default sort can compare them."""
+	project_id, episode_id, headers = user_project_episode
+	await set_system_fields(episode_id, generation_progress={
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+		"calculated_at": "2026-10-12T20:00:00+00:00",
+	})
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "No timestamp", "description": "Desc"},
+	})
+	await set_system_fields(ep2.json()["id"], generation_progress={"quality_metrics": POOR_QUALITY_METRICS})
+
+	aggregate = await client.get(f"/quality-metrics/projects/{project_id}", headers=headers)
+	listing = await client.get(f"/quality-metrics/projects/{project_id}/episodes", headers=headers)
+
+	assert aggregate.status_code == 200, aggregate.text
+	assert listing.status_code == 200, listing.text
+
+
+@pytest.mark.asyncio
+async def test_get_project_quality_metrics_trend_improving(client, user_project_episode, set_system_fields):
+	"""Test trend direction is 'improving' when the later episode scores higher."""
+	project_id, episode_id, headers = user_project_episode
+
+	# First (older) episode has poor metrics
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": POOR_QUALITY_METRICS,
+	})
+
+	# Second (recent) episode has good metrics
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {
+			"title": "Improved Episode",
+			"description": "Improved quality",
+		},
+	})
+	await set_system_fields(ep2.json()["id"], generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	assert response.json()["trend"]["direction"] == "improving"
+
+
+@pytest.mark.asyncio
+async def test_get_project_quality_metrics_trend_stable_with_two_episodes(
+	client, user_project_episode, set_system_fields
+):
+	"""Test trend direction is 'stable' when both episodes score identically."""
+	project_id, episode_id, headers = user_project_episode
+
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {
+			"title": "Identical Episode",
+			"description": "Same quality",
+		},
+	})
+	await set_system_fields(ep2.json()["id"], generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["trend"]["direction"] == "stable"
+	assert data["trend"]["trend_score"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_get_project_quality_metrics_not_found(client, user_project_episode):
+	"""Test 404 for non-existent project."""
+	project_id, episode_id, headers = user_project_episode
+	fake_id = str(uuid4())
+
+	response = await client.get(
+		f"/quality-metrics/projects/{fake_id}",
+		headers=headers,
+	)
+	assert response.status_code == 404
+
+
+# ============================================================================
+# _overall_score helper (pure function, unit-level)
+# ============================================================================
+
+def test_overall_score_returns_zero_when_no_overall_dimension_present():
+	"""_overall_score should default to 0.0 if the list has no 'overall' entry."""
+	from src.schemas.quality_metrics import QualityScore
+
+	scores = [QualityScore(dimension="coherence", score=0.9, rating="excellent")]
+
+	assert _overall_score(scores) == 0.0
+
+
+def test_overall_score_returns_zero_for_empty_list():
+	assert _overall_score([]) == 0.0
+
+
+# ============================================================================
+# GET /quality-metrics/projects/{project_id}/episodes
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_list_project_episode_metrics_empty(client, user_project_episode):
+	"""Test listing episode metrics with no metrics available."""
+	project_id, episode_id, headers = user_project_episode
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}/episodes",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 0
+	assert data["episodes"] == []
+	assert data["page"] == 1
+	assert data["page_size"] == 20
+
+
+@pytest.mark.asyncio
+async def test_list_project_episode_metrics_with_data(client, episode_with_metrics):
+	"""Test listing episode metrics returns proper structure."""
+	project_id, episode_id, headers = episode_with_metrics
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}/episodes",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+
+	assert data["total"] == 1
+	assert len(data["episodes"]) == 1
+	assert data["total_pages"] == 1
+
+	ep = data["episodes"][0]
+	assert ep["episode_id"] == episode_id
+	assert "metrics" in ep
+	assert "quality_scores" in ep
+	assert "interpretation" in ep
+
+
+@pytest.mark.asyncio
+async def test_list_project_episode_metrics_pagination(client, user_project_episode, set_system_fields):
+	"""Test pagination parameters."""
+	project_id, episode_id, headers = user_project_episode
+
+	# Add metrics to episode 1
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+
+	# Create episodes 2 and 3 with metrics
+	for i in range(2, 4):
+		ep = await client.post("/episodes", headers=headers, json={
+			"project_id": project_id,
+			"episode_number": i,
+			"episode_metadata": {
+				"title": f"Episode {i}",
+				"description": f"Description {i}",
+			},
+		})
+		await set_system_fields(ep.json()["id"], generation_progress={
+			"stage": "complete",
+			"quality_metrics": SAMPLE_QUALITY_METRICS,
+		})
+
+	# Page 1 with page_size=2
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}/episodes?page=1&page_size=2",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	data = response.json()
+	assert data["total"] == 3
+	assert len(data["episodes"]) == 2
+	assert data["page"] == 1
+	assert data["page_size"] == 2
+	assert data["total_pages"] == 2
+
+	# Page 2 with page_size=2
+	response2 = await client.get(
+		f"/quality-metrics/projects/{project_id}/episodes?page=2&page_size=2",
+		headers=headers,
+	)
+	assert response2.status_code == 200
+	data2 = response2.json()
+	assert len(data2["episodes"]) == 1
+	assert data2["page"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_project_episode_metrics_sort_by_overall_score(client, user_project_episode, set_system_fields):
+	"""Test sorting by overall_score."""
+	project_id, episode_id, headers = user_project_episode
+
+	# Good episode
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+
+	# Poor episode
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {
+			"title": "Poor Episode",
+			"description": "Poor quality",
+		},
+	})
+	await set_system_fields(ep2.json()["id"], generation_progress={
+		"stage": "complete",
+		"quality_metrics": POOR_QUALITY_METRICS,
+	})
+
+	# Sort descending by overall_score (best first)
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}/episodes?sort_by=overall_score&order=desc",
+		headers=headers,
+	)
+	assert response.status_code == 200
+	episodes = response.json()["episodes"]
+	assert len(episodes) == 2
+
+	# Better episode should come first
+	scores = [
+		next(qs["score"] for qs in ep["quality_scores"] if qs["dimension"] == "overall")
+		for ep in episodes
+	]
+	assert scores[0] >= scores[1]
+
+
+@pytest.mark.asyncio
+async def test_list_project_episode_metrics_sort_by_duration(client, episode_with_metrics):
+	"""Test sorting by duration is accepted."""
+	project_id, episode_id, headers = episode_with_metrics
+
+	response = await client.get(
+		f"/quality-metrics/projects/{project_id}/episodes?sort_by=duration&order=asc",
+		headers=headers,
+	)
+	assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_list_project_episode_metrics_not_found(client, user_project_episode):
+	"""Test 404 for non-existent project."""
+	project_id, episode_id, headers = user_project_episode
+	fake_id = str(uuid4())
+
+	response = await client.get(
+		f"/quality-metrics/projects/{fake_id}/episodes",
+		headers=headers,
+	)
+	assert response.status_code == 404

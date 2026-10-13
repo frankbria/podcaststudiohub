@@ -75,7 +75,6 @@ def _overall_score(quality_scores: List[QualityScore]) -> float:
 @router.get("/episodes/{episode_id}", response_model=EpisodeQualityMetricsResponse)
 async def get_episode_quality_metrics(
 	episode_id: UUID,
-	response: Response,
 	current_user: User = Depends(get_current_user),
 	db: AsyncSession = Depends(get_db),
 ):
@@ -88,7 +87,6 @@ async def get_episode_quality_metrics(
 
 	Args:
 		episode_id: UUID of episode to retrieve metrics for
-		response: FastAPI Response object (used to set 204 status)
 		current_user: Authenticated user (from JWT token)
 		db: Database session
 

@@ -438,6 +438,33 @@ async def test_project_averages_skip_an_episode_with_no_ratio(client, user_proje
 
 
 @pytest.mark.asyncio
+async def test_project_routes_mix_a_stored_and_a_fallback_calculated_at(
+	client, user_project_episode, set_system_fields
+):
+	"""The pipeline stores an aware ISO timestamp; without one the response falls
+	back to updated_at. That column is timestamptz in the database (the ORM model
+	says plain DateTime), so both are aware and the aggregate's min/max and the
+	list's default sort can compare them."""
+	project_id, episode_id, headers = user_project_episode
+	await set_system_fields(episode_id, generation_progress={
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+		"calculated_at": "2026-10-12T20:00:00+00:00",
+	})
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "No timestamp", "description": "Desc"},
+	})
+	await set_system_fields(ep2.json()["id"], generation_progress={"quality_metrics": POOR_QUALITY_METRICS})
+
+	aggregate = await client.get(f"/quality-metrics/projects/{project_id}", headers=headers)
+	listing = await client.get(f"/quality-metrics/projects/{project_id}/episodes", headers=headers)
+
+	assert aggregate.status_code == 200, aggregate.text
+	assert listing.status_code == 200, listing.text
+
+
+@pytest.mark.asyncio
 async def test_get_project_quality_metrics_trend_improving(client, user_project_episode, set_system_fields):
 	"""Test trend direction is 'improving' when the later episode scores higher."""
 	project_id, episode_id, headers = user_project_episode

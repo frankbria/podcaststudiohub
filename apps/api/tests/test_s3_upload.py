@@ -393,6 +393,93 @@ class TestFinalizeEpisodeGenerationTask:
         assert episode.duration_seconds == 300.0
         assert episode.file_size_bytes == 5_000_000
 
+    def _uploaded(self, episode_id, user_id):
+        key = f"podcasts/user-{user_id}/episode-{episode_id}.mp3"
+        return {
+            "status": "success", "s3_key": key,
+            "s3_url": f"https://test-bucket.s3.amazonaws.com/{key}",
+            "file_size_bytes": 5_000_000, "error": None,
+        }
+
+    def test_the_broker_outage_fallback_uploads_and_completes(self):
+        """#633: with the broker down, _finalize_or_fall_back runs finalize
+        synchronously. That request has no task id, and Celery's real
+        update_state raised "task_id must not be empty" before the upload."""
+        from src.tasks.podcast_generation import _finalize_or_fall_back, finalize_episode_generation_task
+
+        episode_id, user_id = str(uuid.uuid4()), str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id, user_id)
+        mock_db = self._make_db_context_manager(episode)
+
+        with (
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+            patch("src.tasks.podcast_generation.settings") as mock_settings,
+            patch("src.tasks.podcast_generation.upload_to_s3_task", return_value=self._uploaded(episode_id, user_id)),
+            patch.object(finalize_episode_generation_task, "delay", side_effect=ConnectionError("broker down")),
+        ):
+            mock_settings.AWS_S3_BUCKET = "test-bucket"
+            finalize_episode_generation_task.push_request(id=None)  # as a fresh worker: nothing inherited
+            try:
+                _finalize_or_fall_back(episode_id, self._make_generation_result())
+            finally:
+                finalize_episode_generation_task.pop_request()
+
+        assert episode.generation_status == "complete"
+        assert episode.s3_key.endswith(f"episode-{episode_id}.mp3")
+
+    def test_an_unreachable_result_backend_does_not_fail_finalize(self):
+        """#633: broker and result backend are the same Redis, so in the outage
+        the fallback exists for, a progress write fails with a connection error
+        even with a task id. Progress is cosmetic; the upload must still land."""
+        from redis.exceptions import ConnectionError as RedisConnectionError
+
+        from src.tasks.podcast_generation import finalize_episode_generation_task
+
+        episode_id, user_id = str(uuid.uuid4()), str(uuid.uuid4())
+        episode = _make_mock_episode(episode_id, user_id)
+        mock_db = self._make_db_context_manager(episode)
+
+        with (
+            patch("src.tasks.podcast_generation.SyncSessionLocal", return_value=mock_db),
+            patch("src.tasks.podcast_generation.settings") as mock_settings,
+            patch("src.tasks.podcast_generation.upload_to_s3_task", return_value=self._uploaded(episode_id, user_id)),
+            patch.object(
+                finalize_episode_generation_task.backend, "store_result",
+                side_effect=RedisConnectionError("Redis is down"),
+            ),
+        ):
+            mock_settings.AWS_S3_BUCKET = "test-bucket"
+            finalize_episode_generation_task.push_request(id="finalize-during-outage")
+            try:
+                result = finalize_episode_generation_task.run(
+                    episode_id=episode_id, generation_result=self._make_generation_result(),
+                )
+            finally:
+                finalize_episode_generation_task.pop_request()
+
+        assert result["status"] == "success"
+        assert episode.generation_status == "complete"
+
+    # Celery's Redis backend still calls redis-py's deprecated setex.
+    @pytest.mark.filterwarnings("ignore:Call to deprecated setex:DeprecationWarning")
+    def test_progress_still_reaches_a_working_result_backend(self):
+        """Best effort, not off: in a worker, progress lands in the real backend."""
+        from src.tasks.podcast_generation import finalize_episode_generation_task
+
+        task_id = f"finalize-progress-{uuid.uuid4()}"
+        finalize_episode_generation_task.push_request(id=task_id)
+        try:
+            finalize_episode_generation_task.update_state(state="PROGRESS", meta={"stage": "uploading"})
+        finally:
+            finalize_episode_generation_task.pop_request()
+
+        result = finalize_episode_generation_task.AsyncResult(task_id)
+        try:
+            assert result.state == "PROGRESS"
+            assert result.info == {"stage": "uploading"}
+        finally:
+            result.forget()
+
     def test_marks_failed_when_s3_upload_fails(self):
         """If S3 upload fails, episode.generation_status is set to 'failed'."""
         episode_id = str(uuid.uuid4())

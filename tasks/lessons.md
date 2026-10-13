@@ -867,3 +867,22 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
 - **CRAP gate on TSX** (now in the crap-gate live rule): istanbul emits no line
   data for JSX-only bodies, and lizard misreads inline generic object types,
   inline async closures, `.catch(() => …)` and arrows in JSX.
+
+## #626 — held audio at the public audio URL (PR #630)
+
+- **A demo against the real service finds what mocks hide.** Every S3 upload
+  had been failing: s3transfer runs `upload_file`'s progress `Callback` on its
+  own threads, where Celery's thread-local `self.request.id` is `None`, so
+  `update_state` raised. Every unit test mocked `upload_file`. No AWS creds?
+  Run a throwaway S3 (`chrislusf/seaweedfs ... server -s3`; `minio/minio` no
+  longer pulls) and point boto3 at it with `AWS_ENDPOINT_URL`, no code change.
+- **A two-sided mark needs an ordering argument.** Mark-at-write plus
+  clear-on-approve races any write still in flight; approval now waits for
+  `complete`. Redelivery under `acks_late` reopens the window (#629). Write the
+  interleaving down before trusting a mark.
+- **Only a 404 means "missing".** Treating every `ClientError` on HEAD as absent
+  would have reported approved while a 403 left the audio blocked; and a
+  `MetadataDirective=REPLACE` self-copy drops content type and every other key
+  unless carried over.
+- **Opencode reviews must be told "static only".** The first GLM run tried to
+  start Postgres and exited with no review.

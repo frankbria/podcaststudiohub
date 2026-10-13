@@ -11,6 +11,7 @@ The fix is in the signature: a backend is handed the `workdir` it must write
 under, and hands back the one file it produced. Nothing else is negotiable.
 """
 import logging
+import random
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, TypeVar
@@ -54,7 +55,7 @@ class TTSProviderError(TTSError):
     tell an outage apart from a misconfiguration.
 
     ``retryable`` follows the LLM side's ``ProviderError``: a fast failure a
-    moment can fix (408/409/429, a 5xx, a dropped connection). Never a timeout,
+    moment can fix (408/409/429, a 5xx, a dropped connection). Never a client timeout,
     which has already cost the whole client timeout, and never a rejection.
     """
 
@@ -185,10 +186,17 @@ def with_retries(call: Callable[[], T]) -> T:
     SDK's own retries off (OpenAI ``max_retries=0``, ElevenLabs
     ``request_options={"max_retries": 0}``; Google's ``synthesize_speech`` has
     no default retry; edge-tts has none), so retries never stack. A retryable
-    failure gets two more tries after 2s and 8s, so one rate-limited turn does
+    failure gets two more tries after about 2s and 8s, so one rate-limited turn does
     not throw away the turns already paid for. Anything else, timeouts
     included, fails the synthesis, and the Celery task retry takes over,
     reusing the script it already bought.
+
+    The waits are jittered (half to one and a half times the step): per-turn
+    backends run several requests at once, and a provider-wide 429 would
+    otherwise wake them all together to collide again.
+
+    "Timeout" means the client gave up waiting. A gateway's 504 is the
+    provider's side, retryable like any 5xx, as on the script side.
     """
     for delay in (*_BACKOFF_SECONDS, None):
         try:
@@ -196,8 +204,9 @@ def with_retries(call: Callable[[], T]) -> T:
         except TTSProviderError as exc:
             if not exc.retryable or delay is None:
                 raise
-            logger.warning("Retryable TTS failure, retrying in %ss: %s", delay, exc)
-            time.sleep(delay)
+            wait = random.uniform(delay / 2, delay * 1.5)
+            logger.warning("Retryable TTS failure, retrying in %.1fs: %s", wait, exc)
+            time.sleep(wait)
 
 
 def turns_for_synthesis(script: Script) -> List[tuple]:

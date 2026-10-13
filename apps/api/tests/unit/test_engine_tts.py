@@ -600,7 +600,9 @@ def test_with_retries_retries_a_fast_failure_then_gives_up(_no_retry_sleep):
         with_retries(call)
 
     assert call.call_count == 3
-    assert [c.args[0] for c in _no_retry_sleep.call_args_list] == [2, 8]
+    first, second = (c.args[0] for c in _no_retry_sleep.call_args_list)
+    # Jittered around 2s and 8s, so concurrent turns do not wake together.
+    assert 1 <= first <= 3 and 4 <= second <= 12
 
 
 def test_with_retries_never_retries_a_non_retryable_failure(_no_retry_sleep):

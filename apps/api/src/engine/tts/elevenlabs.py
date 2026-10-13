@@ -104,7 +104,7 @@ def _render_dialogue(client, inputs, model: str) -> bytes:
 
 
 def _eleven_retryable(exc: Exception) -> bool:
-    """A 408/409/429/5xx or a dropped connection; never a timeout (#620)."""
+    """A 408/409/429/5xx or a dropped connection; never a client timeout (#620)."""
     if isinstance(exc, ApiError):
         return is_retryable_status(exc.status_code)
     return isinstance(exc, httpx.TransportError) and not isinstance(exc, httpx.TimeoutException)

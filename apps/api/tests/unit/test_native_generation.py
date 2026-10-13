@@ -255,7 +255,9 @@ def test_a_tts_failure_after_scripting_does_not_rebuy_the_script(harness):
     harness.task_id = task_id
 
     def attempt():
-        return harness.run(episode_id=episode_id, text_content="Notes.")
+        return harness.run(
+            episode_id=episode_id, text_content="Notes.", urls=["https://example.com/post"]
+        )
 
     try:
         with pytest.raises(TTSProviderError):
@@ -267,6 +269,8 @@ def test_a_tts_failure_after_scripting_does_not_rebuy_the_script(harness):
 
     assert result["status"] == "success"
     harness.generate_script.assert_called_once()
+    # Nor are the URLs fetched again: the retry screens against the same text.
+    harness.fetch_url_text.assert_called_once()
     assert harness.synthesise.call_count == 2
     assert harness.synthesise.call_args.args[1] == SCRIPT
 

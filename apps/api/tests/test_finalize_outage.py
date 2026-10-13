@@ -19,6 +19,9 @@ def _run_in_outage(code: str, timeout: int):
         **os.environ,
         "CELERY_BROKER_URL": DEAD_REDIS,
         "CELERY_RESULT_BACKEND": DEAD_REDIS,
+        # tests/unit/conftest.py sets eager mode in the environment when the unit
+        # tests are collected; eager .delay() runs locally and never publishes.
+        "CELERY_TASK_ALWAYS_EAGER": "false",
         "PYTHONPATH": str(API_ROOT),
         "LOG_LEVEL": "CRITICAL",
     }

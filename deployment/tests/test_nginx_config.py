@@ -221,3 +221,31 @@ def test_api_catchall_still_reaches_backend(server_blocks: list[str]):
 def test_config_loads_in_real_nginx(nginx_syntax_ok):
 	ok, output = nginx_syntax_ok
 	assert ok, f"nginx -t failed against the shipped config:\n{output}"
+
+
+# ── /api/monitoring: the client-error relay (#485, #496) ───────────────────
+#
+# A Next.js Route Handler, unauthenticated by necessity (a crashed page may have
+# no session). Without its own location it fell into `location /api/`, which
+# strips /api and proxies to FastAPI, where /monitoring does not exist: every
+# client error report 404'd. Each accepted report forwards one event to a
+# billed Sentry project, so the location also rate-limits per client address.
+
+
+def test_client_error_relay_goes_to_frontend(server_blocks: list[str]):
+	https_block = _block_matching(server_blocks, "listen 443 ssl")
+	loc = _location_block(https_block, "/api/monitoring")
+	assert "127.0.0.1:3010" in loc, "/api/monitoring is a Next.js route handler"
+	assert "podcastfy_api" not in loc
+	assert "rewrite" not in loc, "the Next route lives at /api/monitoring; keep the prefix"
+
+
+def test_client_error_relay_is_rate_limited_per_client(nginx_conf_raw: str, server_blocks: list[str]):
+	zone = re.search(
+		r"limit_req_zone\s+\$binary_remote_addr\s+zone=(\w+):\w+\s+rate=(\d+)r/m\s*;", nginx_conf_raw
+	)
+	assert zone, "a per-address limit_req_zone (requests per minute) must be declared"
+	https_block = _block_matching(server_blocks, "listen 443 ssl")
+	loc = _location_block(https_block, "/api/monitoring")
+	assert re.search(rf"limit_req\s+zone={zone.group(1)}\b", loc), "/api/monitoring must use that zone"
+	assert re.search(r"limit_req_status\s+429\s*;", loc), "a flood must be told 429, not a generic 503"

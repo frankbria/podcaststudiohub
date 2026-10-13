@@ -974,3 +974,15 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
   and ask who answers each path; text tests alone would not have shown it.
 - **The repo's nginx file is not the box's.** A config fix needs a
   `needs-operator` follow-up (#640) to become live.
+
+## #497 — the GLM review check (glm-review#15)
+
+- **A green check is a claim; verify what it rests on.** On a 429 the agent's
+  result was `subtype: success` + `is_error: true` after one turn, so the step
+  "succeeded" and four PRs showed a passing review that reviewed nothing.
+  Classify on `is_error`, not on the subtype or the step outcome.
+- **Test the shipped script, not a copy.** The glm-review test pulls the
+  verdict step's `run:` out of `review.yml` with PyYAML and executes it against
+  the real failing run's result message.
+- **A fix in the user's own shared repo is still just a fix** (owner, 2026-10-13):
+  branch, test, PR, merge, report. Ask only for real design forks.

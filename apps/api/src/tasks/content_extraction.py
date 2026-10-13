@@ -17,9 +17,30 @@ from typing import Dict, Any
 
 from celery import Task
 
+from src.models.content_source import ContentSource
+
+from src.database import SyncSessionLocal
 from src.worker import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _mark_source_failed(content_source_id: str, message: str) -> None:
+	"""Best effort: record a task's terminal failure on the content source (#527).
+
+	Without it the row keeps its last status and the polling UI shows a dead
+	source as still in progress. The terminal path is often a DB outage, so this
+	write may fail too; it must never replace the error the caller re-raises.
+	"""
+	try:
+		with SyncSessionLocal() as db:
+			source = db.get(ContentSource, uuid_module.UUID(content_source_id))
+			if source is not None:
+				source.extraction_status = "failed"
+				source.error_message = message
+				db.commit()
+	except Exception:  # noqa: BLE001 — best-effort status write on a path that is already failing; the original error is re-raised by the caller and must not be masked (#527, as #311)
+		logger.exception("Could not mark content source %s failed", content_source_id)
 
 
 async def _extract_content_async(
@@ -156,6 +177,7 @@ def validate_url_reachability_task(
 				f"Reachability check failed after {self.max_retries} retries "
 				f"for {content_source_id}: {str(e)}"
 			)
+			_mark_source_failed(content_source_id, f"Reachability check failed after retries: {e}")
 			raise
 		raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
 
@@ -221,5 +243,6 @@ def extract_content_task(
 				f"Content extraction failed after {self.max_retries} retries "
 				f"for {content_source_id}: {str(e)}"
 			)
+			_mark_source_failed(content_source_id, f"Content extraction failed after retries: {e}")
 			raise
 		raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))

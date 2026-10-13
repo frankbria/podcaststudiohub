@@ -939,3 +939,13 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
 - **An empty review is not a clean review.** `ask-opencode.sh` exits 0 with no
   text on a 429 quota error, and the CI review bot "passes" after 1 s. Check
   the raw event stream, then fall back to codex.
+
+## #635 — .delay() in a Redis outage (PR #636)
+
+- **Measure each half of a two-part fix alone.** `ignore_result` alone raised
+  after 138 s; the broker connect timeout alone was still blocked at 272 s;
+  together, 7 s. Without the separate measurements one half looks sufficient.
+- **A subprocess test inherits the suite's environment.** `tests/unit/conftest.py`
+  sets `CELERY_TASK_ALWAYS_EAGER=true` in `os.environ` when unit tests are
+  collected; the outage subprocess then ran `.delay()` eagerly and never
+  published. Pin every setting the subprocess depends on.

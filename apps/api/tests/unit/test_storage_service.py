@@ -143,10 +143,30 @@ async def test_upload_file_public_sends_no_acl(service, mock_boto3_client):
 
 
 @pytest.mark.asyncio
-async def test_upload_file_client_error_raises(service, mock_boto3_client):
-	mock_boto3_client.upload_file.side_effect = _make_client_error("AccessDenied")
-	with pytest.raises(Exception, match="Failed to upload"):
-		await service.upload_file("/tmp/test.mp3", "key.mp3")
+async def test_upload_file_wraps_the_error_boto3_actually_raises(tmp_path, monkeypatch):
+	"""boto3's upload_file wraps the S3 ClientError in S3UploadFailedError before
+	it leaves the call, so an `except ClientError` arm never ran (#524). A real
+	client is answered 403 InvalidAccessKeyId at the last hook before the wire:
+	boto3's own transfer layer does the wrapping, as it does against AWS."""
+	from botocore.awsrequest import AWSResponse
+
+	class _Body:
+		def stream(self, **_):
+			yield b"<Error><Code>InvalidAccessKeyId</Code><Message>bad key</Message></Error>"
+
+	monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+	real = StorageService(
+		bucket_name="bucket", region_name="us-east-1",
+		aws_access_key_id="test", aws_secret_access_key="test",
+	)
+	real.s3_client.meta.events.register(
+		"before-send.s3.PutObject", lambda request, **_: AWSResponse(request.url, 403, {}, _Body())
+	)
+	audio = tmp_path / "test.mp3"
+	audio.write_bytes(b"ID3")
+
+	with pytest.raises(Exception, match="^Failed to upload file to S3: .*InvalidAccessKeyId"):
+		await real.upload_file(str(audio), "key.mp3")
 
 
 # ===========================================================================

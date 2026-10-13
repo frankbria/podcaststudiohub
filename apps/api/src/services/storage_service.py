@@ -3,6 +3,7 @@
 import asyncio
 from typing import Dict, Optional
 import boto3
+from boto3.exceptions import S3UploadFailedError
 from botocore.exceptions import ClientError
 
 from ..config import settings
@@ -100,7 +101,9 @@ class StorageService:
             url = f"https://{self.bucket_name}.s3.{self.region_name}.amazonaws.com/{s3_key}"
             return url
 
-        except ClientError as e:
+        # upload_file goes through S3Transfer, which wraps the S3 ClientError in
+        # S3UploadFailedError before it leaves the call (#524).
+        except (ClientError, S3UploadFailedError) as e:
             raise Exception(f"Failed to upload file to S3: {str(e)}")
 
     async def download_file(self, s3_key: str, local_path: str) -> str:

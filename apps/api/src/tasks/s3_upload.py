@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import logging
 from celery import Task
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 import boto3
 from botocore.exceptions import ClientError
@@ -109,6 +109,22 @@ def _retry_or_give_up(task: Task, error: Exception, file_path: str) -> None:
     raise task.retry(exc=error, countdown=calculate_backoff(task.request.retries))
 
 
+def _report_upload_progress(task: Task, task_id: Optional[str], progress: int, status: str) -> None:
+    """Report upload progress, when there is a task to report it on.
+
+    finalize_episode_generation_task calls this task synchronously, so the
+    request has no id; Celery's update_state raises "task_id must not be empty"
+    there, which failed every finalize-path upload (#620).
+    """
+    if task_id is None:
+        return
+    task.update_state(
+        task_id=task_id,
+        state='PROGRESS',
+        meta={'progress': progress, 'status': status},
+    )
+
+
 @celery_app.task(bind=True, name="upload_to_s3", time_limit=300, max_retries=3)
 def upload_to_s3_task(
     self: Task,
@@ -130,14 +146,11 @@ def upload_to_s3_task(
     Returns:
         Dictionary with upload results including s3_url, s3_key, file_size_bytes
     """
+    # s3transfer invokes Callback on its own threads, where Celery's
+    # thread-local self.request is empty, so the id is captured here.
+    task_id = self.request.id
     try:
-        self.update_state(
-            state='PROGRESS',
-            meta={
-                'progress': 0,
-                'status': 'Starting S3 upload...'
-            }
-        )
+        _report_upload_progress(self, task_id, 0, 'Starting S3 upload...')
 
         # Initialize S3 client
         s3_client = boto3.client('s3')
@@ -145,20 +158,9 @@ def upload_to_s3_task(
         # Get file size for progress tracking
         file_size = os.path.getsize(file_path)
 
-        # s3transfer invokes Callback on its own threads, where Celery's
-        # thread-local self.request is empty, so the id is captured here.
-        task_id = self.request.id
-
         def upload_progress(bytes_transferred):
             progress = int((bytes_transferred / file_size) * 100)
-            self.update_state(
-                task_id=task_id,
-                state='PROGRESS',
-                meta={
-                    'progress': progress,
-                    'status': f'Uploading to S3... {progress}%'
-                }
-            )
+            _report_upload_progress(self, task_id, progress, f'Uploading to S3... {progress}%')
 
         # Upload file
         s3_client.upload_file(

@@ -986,3 +986,15 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
   the real failing run's result message.
 - **A fix in the user's own shared repo is still just a fix** (owner, 2026-10-13):
   branch, test, PR, merge, report. Ask only for real design forks.
+
+## #533 / #640 — an nginx merge without its re-sync (PRs #639, #645)
+
+- **Merging `deployment/nginx/podcastfy.conf` is half a change.** Since #491 the
+  deploy's last step fails on drift between the box and the repo, and the README
+  says so ("Merging an nginx change therefore means doing the re-sync").
+  Shipping #496 without the re-sync turned three deploys red. Do the re-sync
+  (dry run first) in the same window as the merge.
+- **The dry run earned its keep:** a staged copy of `/etc/nginx` with the new
+  site swapped in ran `nginx -t` against the real co-tenant configs before
+  anything live changed. Access is `ssh root@staging` (`~/.ssh/config` alias),
+  not the old `~/.ssh/staging` key path.

@@ -61,7 +61,7 @@ class ProviderError(EngineError):
 
 # 408/409/429 are the only 4xx a retry can fix (409 is a conflict both
 # providers document as retryable); every 5xx is the provider's side.
-def _is_retryable_status(code: Optional[int]) -> bool:
+def is_retryable_status(code: Optional[int]) -> bool:
     return code is not None and (code in (408, 409, 429) or code >= 500)
 
 
@@ -124,7 +124,7 @@ def _generate_gemini(
         )
     except genai_errors.APIError as exc:
         raise ProviderError(
-            f"Gemini call failed: {exc}", retryable=_is_retryable_status(exc.code)
+            f"Gemini call failed: {exc}", retryable=is_retryable_status(exc.code)
         ) from exc
     except requests.RequestException as exc:
         # The locked google-genai (1.2.0) sends over `requests` and wraps only
@@ -198,7 +198,7 @@ def _generate_openai(
         )
     except openai.OpenAIError as exc:
         raise ProviderError(
-            f"OpenAI call failed: {exc}", retryable=_openai_retryable(exc)
+            f"OpenAI call failed: {exc}", retryable=openai_retryable(exc)
         ) from exc
 
     message = completion.choices[0].message
@@ -209,11 +209,11 @@ def _generate_openai(
     return message.parsed
 
 
-def _openai_retryable(exc: openai.OpenAIError) -> bool:
+def openai_retryable(exc: openai.OpenAIError) -> bool:
     # APITimeoutError subclasses APIConnectionError, so it is excluded
     # explicitly: a timeout is not retried here (see ProviderError).
     if isinstance(exc, openai.APIStatusError):
-        return _is_retryable_status(exc.status_code)
+        return is_retryable_status(exc.status_code)
     return isinstance(exc, openai.APIConnectionError) and not isinstance(
         exc, openai.APITimeoutError
     )

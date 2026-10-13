@@ -10,13 +10,20 @@ installed package — the venv currently holds 12 leftover MP3s, 1.1 MB, as proo
 The fix is in the signature: a backend is handed the `workdir` it must write
 under, and hands back the one file it produced. Nothing else is negotiable.
 """
+import logging
+import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from src.engine.llm import EngineError
 from src.engine.models import Script
+from src.engine.script import _BACKOFF_SECONDS
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 # The five values `tts_configurations.provider` is constrained to by
 # `src/schemas/tts_configuration.py`. Kept in sync deliberately rather than
@@ -45,7 +52,15 @@ class TTSProviderError(TTSError):
     Same reasoning as ``ProviderError`` in ``llm.py``: the caller's response
     differs by kind, and #543 should not have to import four vendor SDKs just to
     tell an outage apart from a misconfiguration.
+
+    ``retryable`` follows the LLM side's ``ProviderError``: a fast failure a
+    moment can fix (408/409/429, a 5xx, a dropped connection). Never a timeout,
+    which has already cost the whole client timeout, and never a rejection.
     """
+
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class VoiceConfig(BaseModel):
@@ -160,6 +175,29 @@ class TTSBackend(Protocol):
     ) -> Path:
         """Render ``script`` to one MP3 under ``workdir`` and return its path."""
         ...
+
+
+def with_retries(call: Callable[[], T]) -> T:
+    """Run one provider request, retrying a retryable failure in place.
+
+    Retry ownership (#620), the same as the script layer's (#574): the engine
+    is the only thing that retries a provider request. Every backend turns its
+    SDK's own retries off (OpenAI ``max_retries=0``, ElevenLabs
+    ``request_options={"max_retries": 0}``; Google's ``synthesize_speech`` has
+    no default retry; edge-tts has none), so retries never stack. A retryable
+    failure gets two more tries after 2s and 8s, so one rate-limited turn does
+    not throw away the turns already paid for. Anything else, timeouts
+    included, fails the synthesis, and the Celery task retry takes over,
+    reusing the script it already bought.
+    """
+    for delay in (*_BACKOFF_SECONDS, None):
+        try:
+            return call()
+        except TTSProviderError as exc:
+            if not exc.retryable or delay is None:
+                raise
+            logger.warning("Retryable TTS failure, retrying in %ss: %s", delay, exc)
+            time.sleep(delay)
 
 
 def turns_for_synthesis(script: Script) -> List[tuple]:

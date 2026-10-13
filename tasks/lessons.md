@@ -961,3 +961,16 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
   first symptom. Expire test tokens beyond the leeway.
 - **Two clean full runs back to back** are the right bar for a flake: these were
   the first fully green local runs in the session.
+
+## #494 / #496 — vendor files and the edge config (PRs #638, #639)
+
+- **Read the vendor code before framing a governance choice.** Next only writes
+  its agent-rules block under a detected AI agent, and prefers `AGENTS.md` when
+  it exists: a fourth option the issue did not list, which the owner chose.
+- **A rate-limit task is a routing audit.** Adding `limit_req` to
+  `/api/monitoring` showed the path had no location at all: it fell into
+  `/api/`, was rewritten and 404'd in FastAPI, so no client error ever reached
+  Sentry through nginx. Load the config into a real nginx with stub upstreams
+  and ask who answers each path; text tests alone would not have shown it.
+- **The repo's nginx file is not the box's.** A config fix needs a
+  `needs-operator` follow-up (#640) to become live.

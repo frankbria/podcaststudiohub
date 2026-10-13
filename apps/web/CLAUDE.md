@@ -36,6 +36,13 @@ route (issue #485). No `SENTRY_DSN` on the server means a hard no-op, so tests a
 phone home. There is no browser SDK and no `NEXT_PUBLIC_` DSN: keep it that way, or the
 nonce/`strict-dynamic` CSP in `middleware.ts` needs a `connect-src` exception.
 
+## `AGENTS.md` is Next's, not ours
+
+Under an AI agent, `next dev` injects a `nextjs-agent-rules` block into this
+directory's agent files. `AGENTS.md` exists so the block lands there, and this
+file never gets a vendor section or a dirty tree (#494). If an upgrade changes
+the block, `next dev` updates `AGENTS.md`; commit that. Don't move the block here.
+
 ## Icon Usage
 
 ```tsx

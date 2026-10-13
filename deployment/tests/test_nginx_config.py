@@ -249,3 +249,12 @@ def test_client_error_relay_is_rate_limited_per_client(nginx_conf_raw: str, serv
 	loc = _location_block(https_block, "/api/monitoring")
 	assert re.search(rf"limit_req\s+zone={zone.group(1)}\b", loc), "/api/monitoring must use that zone"
 	assert re.search(r"limit_req_status\s+429\s*;", loc), "a flood must be told 429, not a generic 503"
+
+
+def test_config_loads_without_stapling_warnings(nginx_syntax_ok):
+	"""Let's Encrypt certificates no longer carry an OCSP responder URL, so
+	ssl_stapling only ever produced a warning on every `nginx -t`; a warning
+	that always appears trains operators to ignore the output (#533)."""
+	ok, output = nginx_syntax_ok
+	assert ok, output
+	assert "ssl_stapling" not in output, f"nginx -t still warns about stapling:\n{output}"

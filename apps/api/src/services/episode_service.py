@@ -515,32 +515,3 @@ async def batch_create_episodes(
 		"failed_count": failed_count,
 		"results": results,
 	}
-
-
-async def update_generation_status(
-	db: AsyncSession,
-	episode: Episode,
-	new_status: str,
-	progress_data: Optional[dict] = None
-) -> Episode:
-	"""
-	Update episode generation status.
-
-	Optionally update generation_progress JSONB.
-	Useful for tracking generation workflow state.
-
-	Args:
-		db: Database session
-		episode: Episode instance
-		new_status: New generation status (draft, queued, processing, completed, failed)
-		progress_data: Optional progress tracking data
-
-	Returns:
-		Updated Episode instance
-	"""
-	episode.generation_status = new_status
-	if progress_data:
-		episode.generation_progress = progress_data
-
-	await db.commit()
-	return episode

@@ -33,11 +33,17 @@ trigger it.
 3. `generation_progress.content_flags` lists the flags (kind, match, turn,
    speaker) and `generation_progress.content_review` is `"pending"`.
 4. While pending, the episode is **not published**: it is left out of the
-   project's RSS feed, and platform distribution is skipped.
+   project's RSS feed, platform distribution is skipped, and its audio object is
+   uploaded with S3 metadata `content-review: pending`, which the public audio URL
+   (`/feeds/episodes/{user}/{episode}/audio.mp3`, no DB read by design, #385)
+   answers with 404 (#626).
 5. The episode page shows the flags and an **Approve for publishing** button
    (`POST /episodes/{id}/content-review/approve`). Approval sets
    `content_review` to `"approved"`, keeps the flags on record, and rebuilds the
-   feed so the episode appears.
+   feed so the episode appears. It first clears the audio's metadata mark in place
+   (content type kept); if that fails it answers 502 and the episode stays pending.
+   Approval is refused (409) until generation completes, so an in-flight upload
+   cannot re-mark the audio after the mark is cleared.
 6. Regenerating the episode screens the new script; a clean result clears the hold.
 
 ## Known limits
@@ -48,9 +54,9 @@ trigger it.
 - Screening judges what the script *says*, not tone or framing: an injected
   argument without a domain or a promotional phrase is not caught. A domain spelled
   out for speech ("evil dot example") is not matched either.
-- **Accepted gap (owner decision 2026-10-12): the public audio URL.**
-  `/feeds/episodes/{user}/{episode}/audio.mp3` makes no DB read (#385), so the hold
-  does not apply to it. New episodes are unaffected (their URL is only discoverable
-  through the feed, which excludes them), but if an already-published episode is
-  regenerated and the new script is flagged, the new audio overwrites the same S3 key
-  and a platform re-downloading its cached URL gets it. Fix (S3-metadata hold) in #626.
+- Audio uploaded before #626 carries no mark, so an episode already pending when
+  #626 deployed is still served at its public audio URL until it is regenerated
+  or approved.
+- The audio URL answers with a presigned S3 URL valid for an hour. A client that
+  fetched one before the hold landed can still download the new audio from S3
+  directly until it expires.

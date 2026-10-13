@@ -94,6 +94,40 @@ class TestUploadToS3Task:
         assert result["status"] == "success"
         assert result["s3_url"] == "https://test-bucket.s3.amazonaws.com/podcasts/user-123/episode-456.mp3"
 
+    def test_progress_callback_on_a_transfer_thread_reports_the_task_id(self):
+        """s3transfer calls Callback from its own threads, where Celery's
+        thread-local self.request is empty: the progress update must carry the
+        task id captured on the task's thread, or update_state raises."""
+        import threading
+
+        from src.tasks.s3_upload import upload_to_s3_task
+
+        task_id = "test-task-id-" + str(uuid.uuid4())
+
+        def upload_file(*args, Callback, **kwargs):
+            worker = threading.Thread(target=Callback, args=(512,))
+            worker.start()
+            worker.join()
+
+        with (
+            patch("src.tasks.s3_upload.boto3") as mock_boto,
+            patch("src.tasks.s3_upload.os.path.getsize", return_value=1024),
+            patch.object(upload_to_s3_task, "update_state") as update_state,
+        ):
+            mock_boto.client.return_value.upload_file.side_effect = upload_file
+            upload_to_s3_task.push_request(id=task_id)
+            try:
+                upload_to_s3_task.run(
+                    file_path="/tmp/audio.mp3",
+                    s3_key="podcasts/user-123/episode-456.mp3",
+                    bucket_name="test-bucket",
+                )
+            finally:
+                upload_to_s3_task.pop_request()
+
+        progress = [c for c in update_state.call_args_list if c.kwargs["meta"]["progress"] == 50]
+        assert [c.kwargs.get("task_id") for c in progress] == [task_id]
+
     def test_s3_url_format_non_us_east_1(self):
         """S3 URL for other regions includes region subdomain."""
         with (

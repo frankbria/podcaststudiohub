@@ -23,7 +23,9 @@ from ..models.episode_composition import EpisodeComposition
 from ..models.storage_deletion_outbox import StorageDeletionOutbox
 from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
 from ..tasks.maintenance import drain_storage_deletion_outbox
+from ..config import settings
 from ..tasks.rss_refresh import refresh_project_rss_feed
+from .storage_service import StorageService
 from ..utils.datetime_utils import to_naive_utc
 
 logger = logging.getLogger(__name__)
@@ -314,6 +316,27 @@ async def set_episode_system_fields(
 	return episode
 
 
+async def _release_held_audio(episode: Episode) -> None:
+	"""Clear the audio object's hold mark before the approval is recorded (#626).
+
+	Done first so the episode is never reported approved while its public audio
+	URL still refuses it. No bucket, no uploaded object, nothing to release.
+	"""
+	if not settings.AWS_S3_BUCKET:
+		return
+	from ..tasks.podcast_generation import build_podcast_s3_key  # heavy module; avoids an import cycle
+
+	key = build_podcast_s3_key(str(episode.user_id), str(episode.id))
+	try:
+		await StorageService().clear_content_review_hold(key)
+	except Exception as exc:  # noqa: BLE001 — any storage failure must leave the episode pending with a retryable 502, never half-approved
+		logger.error("Episode %s: could not clear the audio hold: %s", episode.id, exc)
+		raise HTTPException(
+			status_code=status.HTTP_502_BAD_GATEWAY,
+			detail="Could not release the episode's audio; it is still held. Try again.",
+		) from exc
+
+
 async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
 	"""Release an episode held by output screening for publication (#576).
 
@@ -334,6 +357,14 @@ async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
 			status_code=status.HTTP_409_CONFLICT,
 			detail="This episode has no content flags awaiting review.",
 		)
+	# Until generation completes, an upload that read the hold may still land
+	# its audio marked after the mark below is cleared (#626).
+	if episode.generation_status != "complete":
+		raise HTTPException(
+			status_code=status.HTTP_409_CONFLICT,
+			detail="Only a completed generation can be approved; regenerate a failed one.",
+		)
+	await _release_held_audio(episode)
 	# A new dict, not an in-place edit: plain JSONB columns do not track mutation.
 	episode.generation_progress = {**progress, "content_review": "approved"}
 	await db.commit()

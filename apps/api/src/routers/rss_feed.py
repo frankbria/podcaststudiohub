@@ -20,6 +20,7 @@ from ..models import User
 from ..schemas.rss_feed import RSSFeedResponse, RSSFeedUpdate
 from ..services.rss_generation_service import RSSGenerationService, rss_feed_s3_key
 from ..services.project_service import get_project_by_id
+from ..tasks.content_review import CONTENT_REVIEW_METADATA
 from ..tasks.podcast_generation import build_podcast_s3_key
 
 logger = logging.getLogger(__name__)
@@ -311,7 +312,9 @@ async def get_public_episode_audio(
 	s3_key = build_podcast_s3_key(str(user_id), str(episode_id))
 
 	try:
-		if not await rss_service.storage.file_exists(s3_key):
+		metadata = await rss_service.storage.object_metadata(s3_key)
+		# Missing, or held by output screening until the owner approves it (#626).
+		if metadata is None or metadata.get(CONTENT_REVIEW_METADATA) == "pending":
 			raise HTTPException(
 				status_code=status.HTTP_404_NOT_FOUND,
 				detail="Episode audio not found",

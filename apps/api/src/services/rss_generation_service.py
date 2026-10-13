@@ -344,6 +344,10 @@ class RSSGenerationService:
 			.where(
 				Episode.project_id == project_id,
 				Episode.generation_status == "complete",
+				# Held by output screening until the user approves it (#576).
+				# Not index-backed (IS DISTINCT FROM on a JSONB path); fine at
+				# per-project scale.
+				Episode.generation_progress["content_review"].astext.is_distinct_from("pending"),
 			)
 			.order_by(Episode.created_at.desc(), Episode.id.desc())
 		)

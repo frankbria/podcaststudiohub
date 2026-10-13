@@ -2219,3 +2219,98 @@ async def test_pagination_stable_under_created_at_tie(client, test_db, project_a
 		ids=ids,
 		descending=sort_order == "desc",
 	)
+
+
+# #576: an episode held by output screening is released by an explicit review.
+
+async def _flagged_episode(client, headers, project_id, set_system_fields, number=1):
+	created = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": number,
+		"episode_metadata": {"title": f"Flagged {number}", "description": "Desc"},
+	})
+	episode_id = created.json()["id"]
+	await set_system_fields(
+		episode_id,
+		generation_status="complete",
+		generation_progress={
+			"stage": "complete",
+			"content_flags": [{"kind": "domain", "match": "totally-legit.example", "turn": 0, "speaker": "host"}],
+			"content_review": "pending",
+		},
+	)
+	return episode_id
+
+
+@pytest.mark.asyncio
+async def test_approving_a_held_episode_releases_it_and_refreshes_the_feed(
+	client, project_and_auth, set_system_fields
+):
+	from unittest.mock import patch
+
+	project_id, headers = project_and_auth
+	episode_id = await _flagged_episode(client, headers, project_id, set_system_fields)
+
+	with patch("src.services.episode_service.refresh_project_rss_feed") as refresh:
+		response = await client.post(
+			f"/episodes/{episode_id}/content-review/approve", headers=headers
+		)
+
+	assert response.status_code == 200, response.text
+	progress = response.json()["generation_progress"]
+	assert progress["content_review"] == "approved"
+	assert progress["content_flags"][0]["match"] == "totally-legit.example"  # kept for the record
+	refresh.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_approving_an_episode_with_nothing_to_review_is_a_conflict(
+	client, project_and_auth
+):
+	project_id, headers = project_and_auth
+	created = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 1,
+		"episode_metadata": {"title": "Clean", "description": "Desc"},
+	})
+
+	response = await client.post(
+		f"/episodes/{created.json()['id']}/content-review/approve", headers=headers
+	)
+
+	assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_approving_an_unknown_episode_is_not_found(client, project_and_auth):
+	_project_id, headers = project_and_auth
+
+	response = await client.post(
+		f"/episodes/{uuid4()}/content-review/approve", headers=headers
+	)
+
+	assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_a_held_episode_is_left_out_of_the_rss_feed_until_approved(
+	client, project_and_auth, set_system_fields, test_db
+):
+	from uuid import UUID
+
+	from src.services.rss_generation_service import RSSGenerationService
+
+	project_id, headers = project_and_auth
+	held = await _flagged_episode(client, headers, project_id, set_system_fields, number=1)
+	created = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "Clean", "description": "Desc"},
+	})
+	clean = created.json()["id"]
+	await set_system_fields(clean, generation_status="complete")
+
+	service = RSSGenerationService()
+	listed = [str(e.id) for e in await service._get_completed_episodes(test_db, UUID(project_id))]
+
+	assert clean in listed and held not in listed

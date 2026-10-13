@@ -110,3 +110,24 @@ def test_an_unknown_episode_is_refused():
     with pytest.raises(EngineError):
         _load_native_inputs(str(uuid.uuid4()))
 
+
+
+@pytest.mark.parametrize("review,requested,allowed", [
+    ("pending", True, False),   # held: platform distribution skipped
+    ("pending", False, False),  # nothing requested, nothing to hold
+    ("approved", True, True),   # reviewed: released
+    (None, True, True),         # clean script: untouched
+])
+def test_platform_distribution_is_held_while_flags_await_review(
+    make_episode, review, requested, allowed
+):
+    """#576: the hold is a property of the episode row, read at dispatch."""
+    from src.tasks.podcast_generation import _distribution_allowed
+
+    episode_id, _ = make_episode()
+    with SyncSessionLocal() as db:
+        episode = db.get(Episode, uuid.UUID(episode_id))
+        episode.generation_progress = {"content_flags": [], "content_review": review}
+        db.commit()
+
+    assert _distribution_allowed(episode_id, requested) is allowed

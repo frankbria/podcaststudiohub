@@ -21,6 +21,7 @@ from src.worker import celery_app
 from src.config import settings
 from src.database import SyncSessionLocal
 from src.engine import EngineError, generate_script
+from src.engine.screening import screen_script
 from src.engine.transcript import persist_transcript
 from src.engine.tts import synthesise
 from src.engine.tts.base import VoiceConfig
@@ -360,6 +361,7 @@ def _run_native_engine(
     script = generate_script(
         sources, conversation_config, longform=longform, on_progress=on_progress
     )
+    _record_screening(episode_id, script, sources)
 
     # Stage 3: Audio Synthesis (66-100%)
     _report_progress(task, episode_id, 'audio', 66, 'Synthesizing audio...')
@@ -379,6 +381,46 @@ def _measure_audio(audio_file_path: str) -> tuple:
     return file_size_bytes, len(audio) / 1000.0
 
 
+def _record_screening(episode_id: str, script, sources: List[str]) -> None:
+    """Record what screening found, clearing any earlier result (#576).
+
+    Written for clean scripts too: a regeneration that comes back clean must
+    release a hold left by an earlier, flagged run.
+    """
+    flags = screen_script(script, sources)
+    recorded = _update_episode(
+        episode_id,
+        {},
+        progress_updates={
+            "content_flags": flags,
+            "content_review": "pending" if flags else None,
+        },
+    )
+    if not recorded:
+        # _update_episode swallows DB errors. Fail closed: an unrecorded flag
+        # would let the episode publish unheld. The task retries the run.
+        raise EngineError(f"Episode {episode_id}: could not record content screening")
+
+
+def _held_for_review(episode_id: str) -> bool:
+    """True while screening flags on this episode await the user's review (#576)."""
+    with SyncSessionLocal() as db:
+        episode = db.get(Episode, uuid_module.UUID(episode_id))
+        progress = (episode.generation_progress or {}) if episode is not None else {}
+        return progress.get("content_review") == "pending"
+
+
+def _distribution_allowed(episode_id: str, enable_distribution: bool) -> bool:
+    """Platform distribution, unless screening is holding the episode (#576)."""
+    if enable_distribution and _held_for_review(episode_id):
+        logger.warning(
+            "Episode %s: platform distribution held until its content flags are reviewed",
+            episode_id,
+        )
+        return False
+    return enable_distribution
+
+
 def _dispatch_downstream(
     episode_id: str,
     generation_result: Dict[str, Any],
@@ -389,6 +431,7 @@ def _dispatch_downstream(
     platforms: Optional[Dict[str, Dict[str, Any]]],
 ) -> None:
     """Hand a successful generation to the workflow chain or to finalization."""
+    enable_distribution = _distribution_allowed(episode_id, enable_distribution)
     # Determine whether to use the enhanced workflow chain
     # (composition/distribution) or the simpler finalization task.
     use_workflow_chain = enable_composition or (

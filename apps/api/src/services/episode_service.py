@@ -5,6 +5,7 @@ Provides CRUD operations for episodes with project validation, pagination,
 status filtering, and generation status management. RLS ensures tenant isolation.
 """
 
+import asyncio
 import logging
 
 from datetime import datetime
@@ -22,6 +23,7 @@ from ..models.episode_composition import EpisodeComposition
 from ..models.storage_deletion_outbox import StorageDeletionOutbox
 from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
 from ..tasks.maintenance import drain_storage_deletion_outbox
+from ..tasks.rss_refresh import refresh_project_rss_feed
 from ..utils.datetime_utils import to_naive_utc
 
 logger = logging.getLogger(__name__)
@@ -309,6 +311,34 @@ async def set_episode_system_fields(
 		setattr(episode, field, value)
 
 	await db.commit()
+	return episode
+
+
+async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
+	"""Release an episode held by output screening for publication (#576).
+
+	The flags stay on the record; only the review state changes. The project's
+	feed is then rebuilt so the episode appears in it (the hold had left it out).
+	"""
+	# Re-read under a row lock with fresh values: a regeneration committing its
+	# queued progress concurrently must not be overwritten by a stale dict.
+	episode = (await db.execute(
+		select(Episode)
+		.where(Episode.id == episode.id)
+		.with_for_update()
+		.execution_options(populate_existing=True)
+	)).scalar_one()
+	progress = dict(episode.generation_progress or {})
+	if progress.get("content_review") != "pending":
+		raise HTTPException(
+			status_code=status.HTTP_409_CONFLICT,
+			detail="This episode has no content flags awaiting review.",
+		)
+	# A new dict, not an in-place edit: plain JSONB columns do not track mutation.
+	episode.generation_progress = {**progress, "content_review": "approved"}
+	await db.commit()
+	# Synchronous and documented never to raise, so it runs off the event loop.
+	await asyncio.to_thread(refresh_project_rss_feed, episode.project_id, episode.user_id)
 	return episode
 
 

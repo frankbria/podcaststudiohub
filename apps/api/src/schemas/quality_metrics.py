@@ -12,14 +12,14 @@ from pydantic import BaseModel, Field
 
 class QualityMetricsData(BaseModel):
 	"""Raw quality metrics from transcript analysis."""
-	total_words: int = Field(..., ge=0, description="Total word count from both speakers")
+	total_words: int = Field(..., ge=0, description="Total word count across all turns")
 	duration_estimate_minutes: float = Field(..., ge=0, description="Estimated duration in minutes (150 words/min)")
 	coherence_score: float = Field(..., ge=0, le=1, description="Coherence 0.0-1.0 (sentence variation)")
 	tone: str = Field(..., description="Detected tone: casual, academic, or humorous")
-	speaker_balance_ratio: float = Field(..., ge=0, description="Person1_words / Person2_words ratio")
+	speaker_balance_ratio: Optional[float] = Field(..., ge=0, description="Host words / guest words; null when the guest never speaks")
 	is_balanced: bool = Field(..., description="True if balance ratio between 0.3-3.33 (30/70 to 70/30)")
 	max_monologue_words: int = Field(..., ge=0, description="Longest segment without speaker turn")
-	dialogue_turns: int = Field(..., ge=0, description="Number of Person1 <-> Person2 switches")
+	dialogue_turns: int = Field(..., ge=0, description="Number of host <-> guest switches")
 	has_good_banter: bool = Field(..., description="True if max_monologue <= 200 AND turns >= 5")
 
 

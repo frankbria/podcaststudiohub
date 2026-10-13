@@ -200,6 +200,19 @@ def test_the_transcript_is_recorded_on_the_row_before_finalize(harness):
     assert {"transcript_path": TRANSCRIPT_KEY} in harness.row_updates
 
 
+def test_quality_metrics_are_written_from_the_script(harness):
+    """#570: the pipeline, not a fixture, is what writes the metrics."""
+    from datetime import datetime
+
+    from src.engine.quality import quality_metrics
+
+    harness.run(text_content="Notes.")
+
+    [written] = [u for u in harness.progress_updates if "quality_metrics" in u]
+    assert written["quality_metrics"] == quality_metrics(SCRIPT)
+    datetime.fromisoformat(written["calculated_at"])
+
+
 def test_a_flagged_script_is_held_for_review(harness):
     """#576: a script that endorses a site its sources never mention."""
     harness.generate_script.return_value = Script(

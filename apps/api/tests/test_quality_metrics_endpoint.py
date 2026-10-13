@@ -109,6 +109,62 @@ async def episode_with_metrics(client, user_project_episode, set_system_fields):
 # GET /quality-metrics/episodes/{episode_id}
 # ============================================================================
 
+@pytest.fixture
+def committed_episode():
+	"""An episode committed through the worker's sync session, as a real run's
+	row is. Request it before ``client`` so its cleanup runs after the test
+	transaction rolls back (the request holds a lock on the user until then)."""
+	import uuid
+
+	from src.database import SyncSessionLocal
+	from src.models import Episode, Project, User
+	from src.services.auth_service import create_jwt_token
+
+	tenant = uuid.uuid4()
+	with SyncSessionLocal() as db:
+		user = User(email=f"qm-{uuid.uuid4()}@test.local", password_hash="x", tenant_id=tenant)
+		db.add(user)
+		db.flush()
+		project = Project(user_id=user.id, tenant_id=tenant, name="QM")
+		db.add(project)
+		db.flush()
+		episode = Episode(
+			user_id=user.id, project_id=project.id, tenant_id=tenant, episode_number=1,
+			episode_metadata={"title": "Generated"}, generation_status="generating",
+		)
+		db.add(episode)
+		db.commit()
+		user_id, episode_id = user.id, str(episode.id)
+		headers = {"Authorization": f"Bearer {create_jwt_token(user.id, tenant, user.email)}"}
+	yield episode_id, headers
+	with SyncSessionLocal() as db:
+		db.delete(db.get(User, user_id))
+		db.commit()
+
+
+@pytest.mark.asyncio
+async def test_metrics_written_by_the_generation_task_are_served(committed_episode, client):
+	"""#570 done-when: the task's own writer stores metrics on a real, committed
+	row and the endpoint serves them, scored."""
+	from src.engine.models import Script
+	from src.engine.quality import quality_metrics
+	from src.tasks.podcast_generation import _record_quality_metrics
+
+	episode_id, headers = committed_episode
+	script = Script(title="t", summary="s", turns=[
+		{"speaker": "host", "text": "Welcome back to the show."},
+		{"speaker": "guest", "text": "Glad to be here, this research is fun."},
+	])
+
+	_record_quality_metrics(episode_id, script)
+	response = await client.get(f"/quality-metrics/episodes/{episode_id}", headers=headers)
+
+	assert response.status_code == 200, response.text
+	data = response.json()
+	assert data["metrics"] == quality_metrics(script)
+	assert {s["dimension"] for s in data["quality_scores"]} >= {"overall"}
+
+
 @pytest.mark.asyncio
 async def test_get_episode_quality_metrics_success(client, episode_with_metrics):
 	"""Test successful retrieval of episode quality metrics."""

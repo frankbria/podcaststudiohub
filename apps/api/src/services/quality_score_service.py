@@ -12,7 +12,7 @@ Score dimensions:
 - overall: Weighted average (content 20%, coherence 25%, balance 30%, engagement 25%)
 """
 
-from typing import List
+from typing import List, Optional
 from ..schemas.quality_metrics import QualityMetricsData, QualityScore, Interpretation
 
 
@@ -120,7 +120,7 @@ class QualityScoreService:
 		"""Direct mapping from coherence metric to score."""
 		return coherence, _rating_from_score(coherence)
 
-	def _calculate_balance_score(self, is_balanced: bool, balance_ratio: float) -> tuple[float, str]:
+	def _calculate_balance_score(self, is_balanced: bool, balance_ratio: Optional[float]) -> tuple[float, str]:
 		"""
 		Score speaker balance.
 
@@ -130,7 +130,7 @@ class QualityScoreService:
 		"""
 		if is_balanced:
 			score = 1.0
-		elif (0.25 <= balance_ratio <= 0.4) or (2.5 <= balance_ratio <= 4.0):
+		elif balance_ratio is not None and ((0.25 <= balance_ratio <= 0.4) or (2.5 <= balance_ratio <= 4.0)):
 			score = 0.7
 		else:
 			score = 0.5
@@ -198,7 +198,9 @@ class QualityScoreService:
 	def generate_improvements(self, metrics: QualityMetricsData) -> List[str]:
 		"""Generate list of improvement suggestions from metrics."""
 		improvements = []
-		if not metrics.is_balanced:
+		if metrics.speaker_balance_ratio is None:
+			improvements.append("Only one speaker talks - bring the second voice in")
+		elif not metrics.is_balanced:
 			improvements.append(
 				f"Improve speaker balance (current ratio {metrics.speaker_balance_ratio:.2f}, "
 				f"target 0.3-3.33)"

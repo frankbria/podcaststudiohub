@@ -56,6 +56,11 @@ celery_app.conf.update(
     task_soft_time_limit=settings.CELERY_TASK_SOFT_TIME_LIMIT,
     broker_transport_options={
         "visibility_timeout": settings.CELERY_BROKER_VISIBILITY_TIMEOUT,
+        # Without it a publish to an unreachable Redis waits on every connect
+        # attempt, and .delay() blocks for minutes instead of raising, which
+        # is what the finalize fallback waits for (#635). Connect only: a
+        # socket_timeout would also bound the worker's blocking reads.
+        "socket_connect_timeout": 5,
     },
     worker_prefetch_multiplier=1,  # Take one task at a time
     worker_max_tasks_per_child=50,  # Restart workers after 50 tasks

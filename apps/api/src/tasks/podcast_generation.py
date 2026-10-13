@@ -820,6 +820,10 @@ def generate_podcast_task(
     # Also run in-process by _finalize_or_fall_back during a broker outage, where
     # a progress write has no id and no backend to land in (#633).
     base=BestEffortProgressTask,
+    # Nothing reads its result, and storing one makes every .delay() subscribe
+    # to the result backend first; with Redis down that subscribe retries with
+    # no bound, so .delay() never raised and the fallback never ran (#635).
+    ignore_result=True,
     name="finalize_episode_generation",
     time_limit=settings.CELERY_TASK_TIME_LIMIT,
     soft_time_limit=settings.CELERY_TASK_SOFT_TIME_LIMIT,

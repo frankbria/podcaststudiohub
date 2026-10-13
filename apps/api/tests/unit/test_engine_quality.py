@@ -71,6 +71,7 @@ def test_coherence_rewards_varied_turn_lengths():
     assert flat["coherence_score"] == 0.5
     assert varied["coherence_score"] > 0.8
     assert quality_metrics(_script(("host", "alone")))["coherence_score"] == 0.5
+    assert quality_metrics(_script(("host", ""), ("guest", "")))["coherence_score"] == 0.2
 
 
 def test_every_metric_satisfies_the_read_schema():

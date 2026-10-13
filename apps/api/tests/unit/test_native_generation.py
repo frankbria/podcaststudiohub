@@ -213,6 +213,22 @@ def test_quality_metrics_are_written_from_the_script(harness):
     datetime.fromisoformat(written["calculated_at"])
 
 
+def test_a_lost_quality_metrics_write_does_not_fail_the_run(harness, caplog):
+    """Unlike screening, metrics gate nothing: the paid-for script must still be
+    voiced when their write fails."""
+    original = harness._record_update
+
+    def record(episode_id, updates, progress_updates=None):
+        original(episode_id, updates, progress_updates)
+        return "quality_metrics" not in (progress_updates or {})
+
+    harness._record_update = record
+    harness.run(text_content="Notes.")
+
+    harness.synthesise.assert_called_once()
+    assert "quality metrics were not recorded" in caplog.text
+
+
 def test_a_flagged_script_is_held_for_review(harness):
     """#576: a script that endorses a site its sources never mention."""
     harness.generate_script.return_value = Script(

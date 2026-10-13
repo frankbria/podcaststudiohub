@@ -136,7 +136,7 @@ async def upload_audio_snippet(
 			status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
 			detail="Failed to process audio file."
 		)
-	except Exception:  # noqa: BLE001 — anything else is the storage backend: boto3 raises S3UploadFailedError / ClientError, plain Exceptions that are never OSError (#501)
+	except Exception:  # noqa: BLE001 — anything else is the storage backend: StorageService.upload_file raises a plain Exception wrapping boto3's S3UploadFailedError / ClientError, never an OSError (#501, #524)
 		# The boto message carries bucket, key and tenant/user UUIDs — log it, never return it.
 		logger.exception("S3 upload failed for audio snippet %s", snippet_id)
 		raise HTTPException(

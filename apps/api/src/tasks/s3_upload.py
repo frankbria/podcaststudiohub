@@ -145,10 +145,14 @@ def upload_to_s3_task(
         # Get file size for progress tracking
         file_size = os.path.getsize(file_path)
 
-        # Upload with progress callback
+        # s3transfer invokes Callback on its own threads, where Celery's
+        # thread-local self.request is empty, so the id is captured here.
+        task_id = self.request.id
+
         def upload_progress(bytes_transferred):
             progress = int((bytes_transferred / file_size) * 100)
             self.update_state(
+                task_id=task_id,
                 state='PROGRESS',
                 meta={
                     'progress': progress,

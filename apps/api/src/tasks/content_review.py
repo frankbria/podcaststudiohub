@@ -9,10 +9,9 @@ from typing import Optional
 
 from src.database import SyncSessionLocal
 from src.models.episode import Episode
+from src.services.storage_service import CONTENT_REVIEW_METADATA
 
-# S3 object metadata naming an unreviewed episode's audio; the public audio
-# endpoint refuses objects carrying it (#626).
-CONTENT_REVIEW_METADATA = "content-review"
+__all__ = ["CONTENT_REVIEW_METADATA", "episode_held_for_review", "held_episode_of"]
 
 # build_podcast_s3_key's layout; only canonical episode audio can be held.
 _EPISODE_AUDIO_KEY = re.compile(

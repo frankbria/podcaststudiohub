@@ -57,3 +57,6 @@ trigger it.
 - Audio uploaded before #626 carries no mark, so an episode already pending when
   #626 deployed is still served at its public audio URL until it is regenerated
   or approved.
+- The audio URL answers with a presigned S3 URL valid for an hour. A client that
+  fetched one before the hold landed can still download the new audio from S3
+  directly until it expires.

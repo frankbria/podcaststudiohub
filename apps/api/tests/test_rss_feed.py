@@ -755,7 +755,6 @@ async def test_completed_episodes_order_stable_under_created_at_tie(
 	assert renders[0] == renders[1] == sorted(ids, reverse=True)
 
 
-
 @pytest.mark.asyncio
 async def test_public_audio_refuses_audio_held_for_content_review(client):
 	"""#626: a regeneration held by output screening (#576) overwrites the

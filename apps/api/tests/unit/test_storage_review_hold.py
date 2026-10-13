@@ -39,7 +39,10 @@ async def test_object_metadata_is_none_for_a_missing_object():
 @pytest.mark.asyncio
 async def test_clearing_the_hold_rewrites_metadata_in_place():
     client = MagicMock()
-    client.head_object.return_value = {"Metadata": {"content-review": "pending"}, "ContentType": "audio/mpeg"}
+    client.head_object.return_value = {
+        "Metadata": {"content-review": "pending", "origin": "engine"},
+        "ContentType": "audio/mpeg",
+    }
 
     await _service(client).clear_content_review_hold(KEY)
 
@@ -47,7 +50,7 @@ async def test_clearing_the_hold_rewrites_metadata_in_place():
     assert kwargs["Bucket"] == "bucket" and kwargs["Key"] == KEY
     assert kwargs["CopySource"] == {"Bucket": "bucket", "Key": KEY}
     assert kwargs["MetadataDirective"] == "REPLACE"
-    assert kwargs["Metadata"] == {}
+    assert kwargs["Metadata"] == {"origin": "engine"}  # only the hold mark goes
     assert kwargs["ContentType"] == "audio/mpeg"  # REPLACE would otherwise reset it
 
 
@@ -58,4 +61,18 @@ async def test_clearing_a_hold_on_a_missing_object_is_a_no_op():
 
     await _service(client).clear_content_review_hold(KEY)
 
+    client.copy_object.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_clearing_a_hold_raises_when_the_object_cannot_be_read():
+    """A 403 is not 'missing': swallowing it would report approved while the
+    marked audio stays blocked."""
+    client = MagicMock()
+    client.head_object.side_effect = ClientError(
+        {"Error": {"Code": "403", "Message": "Forbidden"}}, "HeadObject"
+    )
+
+    with pytest.raises(ClientError):
+        await _service(client).clear_content_review_hold(KEY)
     client.copy_object.assert_not_called()

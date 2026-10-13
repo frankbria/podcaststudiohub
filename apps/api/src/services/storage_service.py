@@ -7,6 +7,12 @@ from botocore.exceptions import ClientError
 
 from ..config import settings
 
+# S3 object metadata naming an unreviewed episode's audio; the public audio
+# endpoint refuses objects carrying it (#626).
+CONTENT_REVIEW_METADATA = "content-review"
+# HEAD answers a bare 404; GET-style calls name the key.
+_MISSING_OBJECT_CODES = frozenset({"404", "NoSuchKey", "NotFound"})
+
 
 class StorageService:
     """Service for handling S3 storage operations"""
@@ -190,21 +196,27 @@ class StorageService:
     async def clear_content_review_hold(self, s3_key: str) -> None:
         """Drop the #626 hold mark from an object in place, keeping its content type.
 
-        A missing object has nothing to release. ``MetadataDirective=REPLACE``
-        also replaces the content type, so it is carried over explicitly.
+        A missing object has nothing to release; any other HEAD failure (a 403
+        from policy drift) is raised, never mistaken for "missing".
+        ``MetadataDirective=REPLACE`` replaces the content type and every other
+        user key too, so those are carried over explicitly.
         """
         try:
             head = await asyncio.to_thread(
                 self.s3_client.head_object, Bucket=self.bucket_name, Key=s3_key
             )
-        except ClientError:
-            return
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in _MISSING_OBJECT_CODES:
+                return
+            raise
+        metadata = dict(head.get("Metadata") or {})
+        metadata.pop(CONTENT_REVIEW_METADATA, None)
         await asyncio.to_thread(
             self.s3_client.copy_object,
             Bucket=self.bucket_name,
             Key=s3_key,
             CopySource={"Bucket": self.bucket_name, "Key": s3_key},
-            Metadata={},
+            Metadata=metadata,
             MetadataDirective="REPLACE",
             ContentType=head.get("ContentType", "audio/mpeg"),
         )

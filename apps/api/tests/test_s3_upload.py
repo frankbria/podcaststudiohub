@@ -115,12 +115,15 @@ class TestUploadToS3Task:
             patch.object(upload_to_s3_task, "update_state") as update_state,
         ):
             mock_boto.client.return_value.upload_file.side_effect = upload_file
-            upload_to_s3_task.request.update(id=task_id)
-            upload_to_s3_task.run(
-                file_path="/tmp/audio.mp3",
-                s3_key="podcasts/user-123/episode-456.mp3",
-                bucket_name="test-bucket",
-            )
+            upload_to_s3_task.push_request(id=task_id)
+            try:
+                upload_to_s3_task.run(
+                    file_path="/tmp/audio.mp3",
+                    s3_key="podcasts/user-123/episode-456.mp3",
+                    bucket_name="test-bucket",
+                )
+            finally:
+                upload_to_s3_task.pop_request()
 
         progress = [c for c in update_state.call_args_list if c.kwargs["meta"]["progress"] == 50]
         assert [c.kwargs.get("task_id") for c in progress] == [task_id]

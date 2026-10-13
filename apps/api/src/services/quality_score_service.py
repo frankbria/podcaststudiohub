@@ -79,21 +79,11 @@ class QualityScoreService:
 		strengths = self.generate_strengths(metrics)
 		improvements = self.generate_improvements(metrics)
 
-		# Produce a short recommendation based on overall rating
-		if overall_rating == "excellent":
-			recommendations = "Outstanding episode quality. Keep up the excellent work!"
-		elif overall_rating == "good":
-			recommendations = "Strong episode overall. Address the improvement areas for even better results."
-		elif overall_rating == "fair":
-			recommendations = "The episode has potential. Focus on the improvement areas to raise quality."
-		else:
-			recommendations = "Significant improvements needed. Review all improvement suggestions before publishing."
-
 		return Interpretation(
 			overall_rating=overall_rating,
 			strengths=strengths,
 			improvements=improvements,
-			recommendations=recommendations,
+			recommendations=_RECOMMENDATIONS.get(overall_rating, _RECOMMENDATIONS["poor"]),
 		)
 
 	def _calculate_content_length_score(self, duration_minutes: float) -> tuple[float, str]:
@@ -182,48 +172,60 @@ class QualityScoreService:
 
 	def generate_strengths(self, metrics: QualityMetricsData) -> List[str]:
 		"""Generate list of quality strengths from metrics."""
-		strengths = []
-		if metrics.is_balanced:
-			strengths.append("Excellent speaker balance")
-		if metrics.has_good_banter:
-			strengths.append(f"Good dialogue engagement with {metrics.dialogue_turns} speaker turns")
-		if metrics.coherence_score >= 0.75:
-			strengths.append("Natural conversational flow and sentence variation")
-		if metrics.duration_estimate_minutes >= 10:
-			strengths.append(f"Good episode length ({metrics.duration_estimate_minutes:.1f} minutes)")
-		if metrics.max_monologue_words <= 100:
-			strengths.append("Short, punchy exchanges with no long monologues")
-		return strengths
+		return _applicable(_STRENGTHS, metrics)
 
 	def generate_improvements(self, metrics: QualityMetricsData) -> List[str]:
 		"""Generate list of improvement suggestions from metrics."""
-		improvements = []
-		if metrics.speaker_balance_ratio is None:
-			improvements.append("Only one speaker talks - bring the second voice in")
-		elif not metrics.is_balanced:
-			improvements.append(
-				f"Improve speaker balance (current ratio {metrics.speaker_balance_ratio:.2f}, "
-				f"target 0.3-3.33)"
-			)
-		if not metrics.has_good_banter:
-			if metrics.max_monologue_words > 200:
-				improvements.append(
-					f"Break up monologues - current max is {metrics.max_monologue_words} words "
-					f"(target <=200)"
-				)
-			if metrics.dialogue_turns < 5:
-				improvements.append(
-					f"Increase dialogue turns - only {metrics.dialogue_turns} turns "
-					f"(target >=5)"
-				)
-		if metrics.coherence_score < 0.65:
-			improvements.append(
-				f"Consider more varied sentence structure "
-				f"(coherence {metrics.coherence_score:.2f}, target 0.65+)"
-			)
-		if metrics.duration_estimate_minutes < 5:
-			improvements.append(
-				f"Episode is quite short ({metrics.duration_estimate_minutes:.1f} min) - "
-				f"consider adding more content"
-			)
-		return improvements
+		banter = [] if metrics.has_good_banter else _applicable(_BANTER_IMPROVEMENTS, metrics)
+		return _balance_improvement(metrics) + banter + _applicable(_OTHER_IMPROVEMENTS, metrics)
+
+
+_RECOMMENDATIONS = {
+	"excellent": "Outstanding episode quality. Keep up the excellent work!",
+	"good": "Strong episode overall. Address the improvement areas for even better results.",
+	"fair": "The episode has potential. Focus on the improvement areas to raise quality.",
+	"poor": "Significant improvements needed. Review all improvement suggestions before publishing.",
+}
+
+# (applies, describe) pairs, in the order the text is listed.
+_STRENGTHS = [
+	(lambda m: m.is_balanced, lambda m: "Excellent speaker balance"),
+	(lambda m: m.has_good_banter, lambda m: f"Good dialogue engagement with {m.dialogue_turns} speaker turns"),
+	(lambda m: m.coherence_score >= 0.75, lambda m: "Natural conversational flow and sentence variation"),
+	(lambda m: m.duration_estimate_minutes >= 10, lambda m: f"Good episode length ({m.duration_estimate_minutes:.1f} minutes)"),
+	(lambda m: m.max_monologue_words <= 100, lambda m: "Short, punchy exchanges with no long monologues"),
+]
+
+_BANTER_IMPROVEMENTS = [
+	(
+		lambda m: m.max_monologue_words > 200,
+		lambda m: f"Break up monologues - current max is {m.max_monologue_words} words (target <=200)",
+	),
+	(
+		lambda m: m.dialogue_turns < 5,
+		lambda m: f"Increase dialogue turns - only {m.dialogue_turns} turns (target >=5)",
+	),
+]
+
+_OTHER_IMPROVEMENTS = [
+	(
+		lambda m: m.coherence_score < 0.65,
+		lambda m: f"Consider more varied sentence structure (coherence {m.coherence_score:.2f}, target 0.65+)",
+	),
+	(
+		lambda m: m.duration_estimate_minutes < 5,
+		lambda m: f"Episode is quite short ({m.duration_estimate_minutes:.1f} min) - consider adding more content",
+	),
+]
+
+
+def _applicable(table: list, metrics: QualityMetricsData) -> List[str]:
+	return [describe(metrics) for applies, describe in table if applies(metrics)]
+
+
+def _balance_improvement(metrics: QualityMetricsData) -> List[str]:
+	if metrics.speaker_balance_ratio is None:
+		return ["Only one speaker talks - bring the second voice in"]
+	if metrics.is_balanced:
+		return []
+	return [f"Improve speaker balance (current ratio {metrics.speaker_balance_ratio:.2f}, target 0.3-3.33)"]

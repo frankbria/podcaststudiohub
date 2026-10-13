@@ -413,6 +413,31 @@ async def test_get_project_quality_metrics_multiple_episodes(client, user_projec
 
 
 @pytest.mark.asyncio
+async def test_project_averages_skip_an_episode_with_no_ratio(client, user_project_episode, set_system_fields):
+	"""#570: a script whose guest never speaks stores a null ratio; the project
+	average must use the episodes that have one rather than crash summing None."""
+	project_id, episode_id, headers = user_project_episode
+	await set_system_fields(episode_id, generation_progress={
+		"stage": "complete",
+		"quality_metrics": SAMPLE_QUALITY_METRICS,
+	})
+	ep2 = await client.post("/episodes", headers=headers, json={
+		"project_id": project_id,
+		"episode_number": 2,
+		"episode_metadata": {"title": "Monologue", "description": "Host only"},
+	})
+	await set_system_fields(ep2.json()["id"], generation_progress={
+		"stage": "complete",
+		"quality_metrics": {**POOR_QUALITY_METRICS, "speaker_balance_ratio": None},
+	})
+
+	response = await client.get(f"/quality-metrics/projects/{project_id}", headers=headers)
+
+	assert response.status_code == 200, response.text
+	assert response.json()["average_metrics"]["speaker_balance_ratio"] == SAMPLE_QUALITY_METRICS["speaker_balance_ratio"]
+
+
+@pytest.mark.asyncio
 async def test_get_project_quality_metrics_trend_improving(client, user_project_episode, set_system_fields):
 	"""Test trend direction is 'improving' when the later episode scores higher."""
 	project_id, episode_id, headers = user_project_episode

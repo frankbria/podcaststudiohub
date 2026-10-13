@@ -136,3 +136,64 @@ def test_traversal_in_an_id_cannot_escape_the_tenant_prefix_in_the_s3_key():
 
     with pytest.raises(EngineError, match="not a valid UUID"):
         build_transcript_s3_key(USER_ID, "../../other-tenant/episode")
+
+
+# --- transient S3 errors (#620): retried by the client, not by re-buying ---
+
+class _RawBody:
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def stream(self, **_):
+        yield self._body
+
+
+@pytest.fixture
+def s3_answers(monkeypatch):
+    """Answer the real botocore client's PutObject with the given statuses, in
+    order, at the last hook before the wire: the client's own retry logic runs
+    for real, and nothing leaves the process."""
+    import boto3
+    from botocore.awsrequest import AWSResponse
+
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    statuses: list = []
+    seen: list = []
+
+    def respond(request, **_):
+        status = statuses.pop(0)
+        seen.append(status)
+        body = b"" if status == 200 else b"<Error><Code>SlowDown</Code><Message>busy</Message></Error>"
+        return AWSResponse(request.url, status, {}, _RawBody(body))
+
+    boto3.setup_default_session()
+    boto3.DEFAULT_SESSION.events.register("before-send.s3.PutObject", respond)
+    with patch.object(settings, "AWS_S3_BUCKET", "episodes-bucket"):
+        yield statuses, seen
+    boto3.DEFAULT_SESSION = None
+
+
+def test_a_transient_s3_error_is_retried_by_the_client(s3_answers):
+    statuses, seen = s3_answers
+    statuses += [503, 200]
+
+    key = persist_transcript(SCRIPT, USER_ID, EPISODE_ID)
+
+    assert key == build_transcript_s3_key(USER_ID, EPISODE_ID)
+    assert seen == [503, 200]
+
+
+def test_the_client_gives_up_after_three_attempts(s3_answers):
+    """Bounded like the audio upload's three attempts; then the task retry
+    takes over, reusing the cached script."""
+    from botocore.exceptions import ClientError
+
+    statuses, seen = s3_answers
+    statuses += [503] * 5
+
+    with pytest.raises(ClientError):
+        persist_transcript(SCRIPT, USER_ID, EPISODE_ID)
+
+    assert seen == [503, 503, 503]

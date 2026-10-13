@@ -14,12 +14,22 @@ import os
 import uuid
 
 import boto3
+from botocore.config import Config
 
 from src.config import settings
 from src.engine.llm import EngineError
 from src.engine.models import Script
 
 logger = logging.getLogger(__name__)
+
+
+# Transient S3 errors (5xx, throttling, a dropped connection) are retried by the
+# client, three attempts in all like the audio upload, so one blip after the
+# LLM and TTS have run does not fail the task (#620). Explicit rather than
+# botocore's implicit legacy default, so the bound is visible here.
+# `total_max_attempts`, not `max_attempts`: in a Config the latter counts
+# retries, so 3 there would mean four requests.
+_S3_RETRIES = Config(retries={"mode": "standard", "total_max_attempts": 3})
 
 
 def _checked_id(label: str, value: str) -> str:
@@ -64,7 +74,7 @@ def persist_transcript(script: Script, user_id: str, episode_id: str) -> str:
 
     if settings.AWS_S3_BUCKET:
         key = build_transcript_s3_key(user_id, episode_id)
-        boto3.client("s3", region_name=settings.AWS_REGION).put_object(
+        boto3.client("s3", region_name=settings.AWS_REGION, config=_S3_RETRIES).put_object(
             Bucket=settings.AWS_S3_BUCKET,
             Key=key,
             Body=body.encode("utf-8"),

@@ -48,6 +48,10 @@ class Harness:
         self.progress: list[dict[str, Any]] = []
         self.row_updates: list[dict[str, Any]] = []
         self.progress_updates: list[dict[str, Any]] = []
+        # The Celery request each run gets. No id by default, as a direct call
+        # has: with an id, a run reuses the script cached under it (#620).
+        self.task_id: Any = None
+        self.retries = 0
 
     def _record_update(self, episode_id, updates, progress_updates=None):
         self.row_updates.append(updates)
@@ -91,7 +95,13 @@ class Harness:
         ):
             service.return_value.fetch_url_text = self.fetch_url_text
             audio_segment.from_file.return_value = audio
-            return generate_podcast_task.run(**kwargs)
+            # Its own request, so an id another test left on the task's default
+            # request cannot make this run reuse that test's cached script.
+            generate_podcast_task.push_request(id=self.task_id, retries=self.retries)
+            try:
+                return generate_podcast_task.run(**kwargs)
+            finally:
+                generate_podcast_task.pop_request()
 
 
 @pytest.fixture
@@ -242,12 +252,10 @@ def test_a_tts_failure_after_scripting_does_not_rebuy_the_script(harness):
     episode_id = str(uuid4())
     harness.synthesise.side_effect = TTSProviderError("speech endpoint timed out")
 
+    harness.task_id = task_id
+
     def attempt():
-        generate_podcast_task.push_request(id=task_id, retries=0)
-        try:
-            return harness.run(episode_id=episode_id, text_content="Notes.")
-        finally:
-            generate_podcast_task.pop_request()
+        return harness.run(episode_id=episode_id, text_content="Notes.")
 
     try:
         with pytest.raises(TTSProviderError):

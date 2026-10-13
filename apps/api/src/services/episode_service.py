@@ -362,7 +362,7 @@ async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
 	if episode.generation_status != "complete":
 		raise HTTPException(
 			status_code=status.HTTP_409_CONFLICT,
-			detail="This episode is still being generated; approve it once it completes.",
+			detail="Only a completed generation can be approved; regenerate a failed one.",
 		)
 	await _release_held_audio(episode)
 	# A new dict, not an in-place edit: plain JSONB columns do not track mutation.

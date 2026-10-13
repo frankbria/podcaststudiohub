@@ -32,6 +32,7 @@ from src.services.content_extraction_service import ContentExtractionService
 from src.tasks.callbacks import _update_episode, _utcnow_iso, _queue_orphaned_storage
 from src.tasks.content_review import episode_held_for_review
 from src.tasks.idempotency import acquire_generation_lock, release_generation_lock
+from src.tasks.progress import BestEffortProgressTask
 from src.tasks.script_cache import load_run, save_run
 from src.tasks.rss_refresh import refresh_project_rss_feed
 from src.tasks.s3_upload import (
@@ -816,6 +817,9 @@ def generate_podcast_task(
 
 @celery_app.task(
     bind=True,
+    # Also run in-process by _finalize_or_fall_back during a broker outage, where
+    # a progress write has no id and no backend to land in (#633).
+    base=BestEffortProgressTask,
     name="finalize_episode_generation",
     time_limit=settings.CELERY_TASK_TIME_LIMIT,
     soft_time_limit=settings.CELERY_TASK_SOFT_TIME_LIMIT,

@@ -384,3 +384,15 @@ def test_generate_interpretation_excellent_recommendation(service):
     interp = service.generate_interpretation(metrics, scores)
     assert interp.overall_rating == "excellent"
     assert "outstanding" in interp.recommendations.lower()
+
+
+def test_a_single_speaker_script_scores_and_explains_without_a_ratio(service, poor_metrics):
+    """#570: a script whose guest never speaks stores a null ratio (JSONB has no
+    Infinity); scoring and the improvement text must accept it."""
+    metrics = poor_metrics.model_copy(update={"speaker_balance_ratio": None})
+
+    scores = service.calculate_quality_scores(metrics)
+    interpretation = service.generate_interpretation(metrics, scores)
+
+    assert next(s.score for s in scores if s.dimension == "balance") == 0.5
+    assert "Only one speaker talks - bring the second voice in" in interpretation.improvements

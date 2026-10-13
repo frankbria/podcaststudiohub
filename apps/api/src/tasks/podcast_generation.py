@@ -32,6 +32,7 @@ from src.services.content_extraction_service import ContentExtractionService
 from src.tasks.callbacks import _update_episode, _utcnow_iso, _queue_orphaned_storage
 from src.tasks.content_review import episode_held_for_review
 from src.tasks.idempotency import acquire_generation_lock, release_generation_lock
+from src.tasks.script_cache import load_script, save_script
 from src.tasks.rss_refresh import refresh_project_rss_feed
 from src.tasks.s3_upload import (
     GENERATION_RUN_DIR_PREFIX,
@@ -360,9 +361,7 @@ def _run_native_engine(
         )
 
     _report_progress(task, episode_id, 'transcript', 33, 'Generating podcast transcript...')
-    script = generate_script(
-        sources, conversation_config, longform=longform, on_progress=on_progress
-    )
+    script = _paid_script(task, sources, conversation_config, longform, on_progress)
     _record_screening(episode_id, script, sources)
     _record_quality_metrics(episode_id, script)
 
@@ -375,6 +374,29 @@ def _run_native_engine(
     # the delete flows can only queue a transcript the row already names.
     _update_episode(episode_id, {"transcript_path": transcript_path})
     return str(audio_path), transcript_path
+
+
+def _paid_script(task: Task, sources, conversation_config, longform: bool, on_progress):
+    """The script, bought once per generation (#620).
+
+    A failure after scripting (TTS, transcript storage, a screening write)
+    retries the whole task under the same task id; the retry reuses the script
+    instead of paying for it again. A direct call has no task id, so nothing to
+    key on and nothing to reuse.
+    """
+    task_id = task.request.id
+    cached = load_script(task_id) if task_id else None
+    if cached is not None:
+        logger.info("Task %s: reusing the script bought by an earlier attempt", task_id)
+        return cached
+    script = generate_script(
+        sources, conversation_config, longform=longform, on_progress=on_progress
+    )
+    if task_id:
+        # Outlives every attempt this generation can make, then expires.
+        ttl = (task.max_retries + 1) * (settings.CELERY_TASK_TIME_LIMIT + 60)
+        save_script(task_id, script, ttl_seconds=ttl)
+    return script
 
 
 def _measure_audio(audio_file_path: str) -> tuple:

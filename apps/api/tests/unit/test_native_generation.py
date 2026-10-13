@@ -229,6 +229,40 @@ def test_a_lost_quality_metrics_write_does_not_fail_the_run(harness, caplog):
     assert "quality metrics were not recorded" in caplog.text
 
 
+def test_a_tts_failure_after_scripting_does_not_rebuy_the_script(harness):
+    """#620 done-when: synthesis fails once; the retry (same task id) voices the
+    script the first attempt paid for instead of generating it again."""
+    from redis import Redis
+
+    from src.config import settings
+    from src.engine.tts.base import TTSProviderError
+    from src.tasks import script_cache
+
+    task_id = f"test-{uuid4()}"
+    episode_id = str(uuid4())
+    harness.synthesise.side_effect = TTSProviderError("speech endpoint timed out")
+
+    def attempt():
+        generate_podcast_task.push_request(id=task_id, retries=0)
+        try:
+            return harness.run(episode_id=episode_id, text_content="Notes.")
+        finally:
+            generate_podcast_task.pop_request()
+
+    try:
+        with pytest.raises(TTSProviderError):
+            attempt()
+        harness.synthesise.side_effect = harness._write_audio
+        result = attempt()
+    finally:
+        Redis.from_url(settings.REDIS_URL).delete(script_cache._key(task_id))
+
+    assert result["status"] == "success"
+    harness.generate_script.assert_called_once()
+    assert harness.synthesise.call_count == 2
+    assert harness.synthesise.call_args.args[1] == SCRIPT
+
+
 def test_a_flagged_script_is_held_for_review(harness):
     """#576: a script that endorses a site its sources never mention."""
     harness.generate_script.return_value = Script(

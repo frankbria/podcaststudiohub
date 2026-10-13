@@ -16,6 +16,7 @@ from datetime import timedelta
 from sqlalchemy import update
 
 from src.services.auth_service import create_jwt_token
+from src.utils.jwt import CLOCK_SKEW_LEEWAY_SECONDS
 from src.models.episode import Episode
 
 
@@ -161,7 +162,8 @@ async def test_progress_stream_with_expired_token(client, episode_with_user, tes
             user_id=user.id,
             tenant_id=user.tenant_id,
             email=user.email,
-            expires_delta=timedelta(seconds=-1)  # Already expired
+            # Expired beyond the clock-skew leeway, which applies to exp too (#614).
+            expires_delta=timedelta(seconds=-(CLOCK_SKEW_LEEWAY_SECONDS + 1))
         )
         response = await client.get(
             f"/generation/episodes/{episode_id}/progress",

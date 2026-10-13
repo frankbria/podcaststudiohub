@@ -119,6 +119,8 @@ def test_verify_expired_jwt_token():
     from uuid import uuid4
     from datetime import timedelta
 
+    from src.utils.jwt import CLOCK_SKEW_LEEWAY_SECONDS
+
     user_id = uuid4()
     tenant_id = uuid4()
     email = "test@example.com"
@@ -128,7 +130,8 @@ def test_verify_expired_jwt_token():
         user_id,
         tenant_id,
         email,
-        expires_delta=timedelta(seconds=-1)  # Already expired
+        # Expired beyond the clock-skew leeway, which applies to exp too (#614).
+        expires_delta=timedelta(seconds=-(CLOCK_SKEW_LEEWAY_SECONDS + 1))
     )
 
     with pytest.raises(ValueError, match="Invalid token"):

@@ -50,9 +50,14 @@ def _invoke_task(task, **kwargs):
 
     Sets a fake request ID and patches update_state so progress calls succeed.
     """
-    task.request.update(id="test-" + str(uuid.uuid4()))
-    with patch.object(task, "update_state", MagicMock()):
-        return task.run(**kwargs)
+    # Pushed and popped, never set on the default request: push_request copies
+    # the current request, so a leaked id reaches every later call (#620).
+    task.push_request(id="test-" + str(uuid.uuid4()))
+    try:
+        with patch.object(task, "update_state", MagicMock()):
+            return task.run(**kwargs)
+    finally:
+        task.pop_request()
 
 
 def _mock_session_with_episode(user_id: str = "11111111-1111-1111-1111-111111111111") -> MagicMock:
@@ -903,11 +908,14 @@ class TestFailurePathsWriteDbStatus:
         from src.tasks import podcast_generation as pg
 
         ep_id = str(uuid.uuid4())
-        pg.generate_podcast_task.request.update(id="soft-tl", retries=0)
-        with patch("src.tasks.podcast_generation._run_native_engine", _fake_engine(side_effect=SoftTimeLimitExceeded())), \
-             patch.object(pg.generate_podcast_task, "update_state", MagicMock()), \
-             patch("src.tasks.podcast_generation._update_episode") as mock_upd:
-            result = pg.generate_podcast_task.run(episode_id=ep_id)
+        pg.generate_podcast_task.push_request(id="soft-tl", retries=0)
+        try:
+            with patch("src.tasks.podcast_generation._run_native_engine", _fake_engine(side_effect=SoftTimeLimitExceeded())), \
+                 patch.object(pg.generate_podcast_task, "update_state", MagicMock()), \
+                 patch("src.tasks.podcast_generation._update_episode") as mock_upd:
+                result = pg.generate_podcast_task.run(episode_id=ep_id)
+        finally:
+            pg.generate_podcast_task.pop_request()
 
         assert result["status"] == "failed"
         # Entry guard now writes 'generating' first (issue #295); the failure path

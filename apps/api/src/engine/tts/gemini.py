@@ -24,6 +24,7 @@ from google.cloud import texttospeech
 from google.oauth2 import service_account
 
 from src.config import settings
+from src.engine.llm import is_retryable_status
 from src.engine.models import Script
 from src.engine.tts.audio import concat_to_mp3
 from src.engine.tts.base import (
@@ -33,6 +34,7 @@ from src.engine.tts.base import (
     batch_turns,
     turns_for_synthesis,
     utf8_size,
+    with_retries,
 )
 from src.engine.tts.openai import synthesise_concurrently
 
@@ -42,6 +44,13 @@ logger = logging.getLogger(__name__)
 # stable; only their pairing with speaker_id matters to the API.
 _HOST_ALIAS = "Host"
 _GUEST_ALIAS = "Guest"
+
+
+def _google_retryable(exc: google_exceptions.GoogleAPIError) -> bool:
+    """A 408/409/429/5xx, but not DeadlineExceeded: that is a timeout (#620)."""
+    if isinstance(exc, google_exceptions.DeadlineExceeded):
+        return False
+    return is_retryable_status(getattr(exc, "code", None))
 
 
 # Serialized bytes a turn costs beyond its text and speaker alias: protobuf
@@ -177,7 +186,9 @@ class GeminiTTS:
                     audio_config=audio_config,
                 )
             except google_exceptions.GoogleAPIError as exc:
-                raise TTSProviderError(f"Gemini TTS call failed: {exc}") from exc
+                raise TTSProviderError(
+                    f"Gemini TTS call failed: {exc}", retryable=_google_retryable(exc)
+                ) from exc
             return response.audio_content
 
         segments = synthesise_concurrently(render, turns)
@@ -236,20 +247,27 @@ class GeminiMultiTTS:
                     for _, speaker, text in batch
                 ]
             )
-            try:
-                response = client.synthesize_speech(
-                    input=texttospeech.SynthesisInput(multi_speaker_markup=markup),
-                    voice=voice_params,
-                    audio_config=audio_config,
-                )
-            except google_exceptions.GoogleAPIError as exc:
-                raise TTSProviderError(
-                    f"Gemini multi-speaker TTS call failed: {exc}"
-                ) from exc
-            segments.append(response.audio_content)
+            segments.append(with_retries(lambda: _render_markup(
+                client, markup, voice_params, audio_config
+            )))
 
         logger.info(
             "Synthesised %d turns as %d multi-speaker request(s)",
             len(turns), len(segments),
         )
         return concat_to_mp3(segments, workdir, "episode.mp3")
+
+
+def _render_markup(client, markup, voice_params, audio_config) -> bytes:
+    """One multi-speaker request."""
+    try:
+        response = client.synthesize_speech(
+            input=texttospeech.SynthesisInput(multi_speaker_markup=markup),
+            voice=voice_params,
+            audio_config=audio_config,
+        )
+    except google_exceptions.GoogleAPIError as exc:
+        raise TTSProviderError(
+            f"Gemini multi-speaker TTS call failed: {exc}", retryable=_google_retryable(exc)
+        ) from exc
+    return response.audio_content

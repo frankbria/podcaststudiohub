@@ -14,12 +14,14 @@ from pathlib import Path
 import openai
 
 from src.config import settings
+from src.engine.llm import openai_retryable
 from src.engine.tts.audio import concat_to_mp3
 from src.engine.tts.base import (
     TTSError,
     TTSProviderError,
     VoiceConfig,
     turns_for_synthesis,
+    with_retries,
 )
 from src.engine.models import Script
 
@@ -46,6 +48,9 @@ class OpenAITTS:
             # Seconds — see the note in src/engine/llm.py; openai-python hands
             # this to httpx, whose timeouts are seconds, unlike google-genai's.
             timeout=settings.OPENAI_API_TIMEOUT,
+            # The engine owns retries (with_retries); the SDK's default two
+            # would stack under it and retry timeouts too (#620).
+            max_retries=0,
         )
         model = voices.model or settings.ENGINE_OPENAI_TTS_MODEL
 
@@ -70,7 +75,9 @@ class OpenAITTS:
                     **extra,
                 )
             except openai.OpenAIError as exc:
-                raise TTSProviderError(f"OpenAI TTS call failed: {exc}") from exc
+                raise TTSProviderError(
+                    f"OpenAI TTS call failed: {exc}", retryable=openai_retryable(exc)
+                ) from exc
             return response.content
 
         segments = synthesise_concurrently(render, turns)
@@ -86,8 +93,11 @@ def synthesise_concurrently(render, turns) -> list:
     ``ThreadPoolExecutor.map`` yields in input order, so the result is already
     in script order — order is the one thing that must not be raced.
     """
+    def attempt(turn) -> bytes:
+        return with_retries(lambda: render(turn))
+
     workers = max(1, min(settings.ENGINE_TTS_MAX_CONCURRENCY, len(turns)))
     if workers == 1:
-        return [render(turn) for turn in turns]
+        return [attempt(turn) for turn in turns]
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(render, turns))
+        return list(pool.map(attempt, turns))

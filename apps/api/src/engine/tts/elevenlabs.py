@@ -20,9 +20,12 @@ from pathlib import Path
 from typing import Iterator, Optional
 
 import elevenlabs
+import httpx
 from elevenlabs.client import ElevenLabs
+from elevenlabs.core.api_error import ApiError
 
 from src.config import settings
+from src.engine.llm import is_retryable_status
 from src.engine.models import Script
 from src.engine.tts.audio import concat_to_mp3
 from src.engine.tts.base import (
@@ -31,6 +34,7 @@ from src.engine.tts.base import (
     VoiceConfig,
     batch_turns,
     turns_for_synthesis,
+    with_retries,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,28 +70,44 @@ class ElevenLabsTTS:
                 )
                 for _, speaker, text in batch
             ]
-            try:
-                audio = client.text_to_dialogue.convert(
-                    inputs=inputs,
-                    model_id=model,
-                    output_format=settings.ENGINE_ELEVENLABS_OUTPUT_FORMAT,
-                )
-                # Collected inside the try on purpose: `convert` returns a lazy
-                # chunk iterator, so the HTTP body transfer happens here, not
-                # above. A reset or read timeout part-way through the body
-                # would otherwise escape as a raw httpx error.
-                segments.append(_collect(audio))
-            except TTSProviderError:
-                raise
-            except Exception as exc:  # noqa: BLE001 — the SDK raises ApiError subclasses plus bare httpx errors; every one maps to the same outcome for the caller
-                raise TTSProviderError(
-                    f"ElevenLabs Text-to-Dialogue call failed: {exc}"
-                ) from exc
+            segments.append(with_retries(lambda: _render_dialogue(client, inputs, model)))
 
         logger.info(
             "Synthesised %d turns as %d dialogue request(s)", len(turns), len(segments)
         )
         return concat_to_mp3(segments, workdir, "episode.mp3")
+
+
+def _render_dialogue(client, inputs, model: str) -> bytes:
+    """One Text-to-Dialogue request, collected to bytes."""
+    try:
+        audio = client.text_to_dialogue.convert(
+            inputs=inputs,
+            model_id=model,
+            output_format=settings.ENGINE_ELEVENLABS_OUTPUT_FORMAT,
+            # The engine owns retries (with_retries); the SDK's default two
+            # would stack under it (#620).
+            request_options={"max_retries": 0},
+        )
+        # Collected inside the try on purpose: `convert` returns a lazy
+        # chunk iterator, so the HTTP body transfer happens here, not
+        # above. A reset or read timeout part-way through the body
+        # would otherwise escape as a raw httpx error.
+        return _collect(audio)
+    except TTSProviderError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the SDK raises ApiError subclasses plus bare httpx errors; every one maps to the same outcome for the caller
+        raise TTSProviderError(
+            f"ElevenLabs Text-to-Dialogue call failed: {exc}",
+            retryable=_eleven_retryable(exc),
+        ) from exc
+
+
+def _eleven_retryable(exc: Exception) -> bool:
+    """A 408/409/429/5xx or a dropped connection; never a client timeout (#620)."""
+    if isinstance(exc, ApiError):
+        return is_retryable_status(exc.status_code)
+    return isinstance(exc, httpx.TransportError) and not isinstance(exc, httpx.TimeoutException)
 
 
 def _dialogue_model(stored: Optional[str]) -> str:

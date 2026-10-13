@@ -49,6 +49,14 @@ def workdir(tmp_path) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def _no_retry_sleep():
+    """The engine retries fast provider failures in place with a 2s/8s backoff
+    (#620); no test here should actually wait for it."""
+    with patch("src.engine.tts.base.time.sleep") as sleep:
+        yield sleep
+
+
+@pytest.fixture(autouse=True)
 def _fake_pydub():
     """Patch pydub so no test needs ffmpeg, and record what was exported."""
     segment = MagicMock()
@@ -571,6 +579,169 @@ def test_edge_failure_becomes_a_provider_error(workdir):
     with patch("src.engine.tts.edge._save", side_effect=boom):
         with pytest.raises(TTSProviderError, match="Edge TTS call failed"):
             synthesise("edge", SCRIPT, EDGE_CONFIG, workdir)
+
+
+# --------------------------------------------------------------------------
+# Retry ownership (#620): the engine retries fast failures, never the SDK
+# --------------------------------------------------------------------------
+
+def _http_response(code):
+    import httpx
+
+    return httpx.Response(code, request=httpx.Request("POST", "https://api.test"))
+
+
+def test_with_retries_retries_a_fast_failure_then_gives_up(_no_retry_sleep):
+    from src.engine.tts.base import with_retries
+
+    call = MagicMock(side_effect=TTSProviderError("429", retryable=True))
+
+    with pytest.raises(TTSProviderError):
+        with_retries(call)
+
+    assert call.call_count == 3
+    first, second = (c.args[0] for c in _no_retry_sleep.call_args_list)
+    # Jittered around 2s and 8s, so concurrent turns do not wake together.
+    assert 1 <= first <= 3 and 4 <= second <= 12
+
+
+def test_with_retries_never_retries_a_non_retryable_failure(_no_retry_sleep):
+    from src.engine.tts.base import with_retries
+
+    call = MagicMock(side_effect=TTSProviderError("timed out"))
+
+    with pytest.raises(TTSProviderError):
+        with_retries(call)
+
+    assert call.call_count == 1
+    _no_retry_sleep.assert_not_called()
+
+
+def test_openai_tts_turns_off_the_sdk_retries(workdir):
+    with patch("src.engine.tts.openai.openai.OpenAI", return_value=fake_openai_client()) as ctor:
+        synthesise("openai", SCRIPT, OPENAI_CONFIG, workdir)
+
+    assert ctor.call_args.kwargs["max_retries"] == 0
+
+
+def test_openai_tts_retries_only_the_turn_that_was_rate_limited(workdir):
+    """The other turns are paid for already; only the failed request repeats."""
+    import openai as openai_sdk
+
+    client = MagicMock()
+    client.audio.speech.create = create_autospec(
+        _real_openai_speech_create(),
+        side_effect=[
+            openai_sdk.RateLimitError("slow down", response=_http_response(429), body=None),
+            *[MagicMock(content=MP3) for _ in SCRIPT.turns],
+        ],
+    )
+
+    with patch.object(settings, "ENGINE_TTS_MAX_CONCURRENCY", 1), patch(
+        "src.engine.tts.openai.openai.OpenAI", return_value=client
+    ):
+        synthesise("openai", SCRIPT, OPENAI_CONFIG, workdir)
+
+    assert client.audio.speech.create.call_count == len(SCRIPT.turns) + 1
+
+
+def test_openai_tts_does_not_retry_a_timeout_in_place(workdir):
+    """A timeout has already cost the whole client timeout; retrying it in place
+    is what made one slow turn cost ~6 minutes (#620)."""
+    import openai as openai_sdk
+
+    client = MagicMock()
+    client.audio.speech.create = create_autospec(
+        _real_openai_speech_create(),
+        side_effect=openai_sdk.APITimeoutError(request=MagicMock()),
+    )
+
+    with patch.object(settings, "ENGINE_TTS_MAX_CONCURRENCY", 1), patch(
+        "src.engine.tts.openai.openai.OpenAI", return_value=client
+    ):
+        with pytest.raises(TTSProviderError):
+            synthesise("openai", SCRIPT, OPENAI_CONFIG, workdir)
+
+    assert client.audio.speech.create.call_count == 1
+
+
+def test_elevenlabs_turns_off_the_sdk_retries_and_retries_a_5xx_once(workdir):
+    from elevenlabs.core.api_error import ApiError
+
+    client = MagicMock()
+    client.text_to_dialogue.convert = create_autospec(
+        _real_dialogue_convert(),
+        side_effect=[ApiError(status_code=503, body="busy"), iter([MP3])],
+    )
+
+    with patch("src.engine.tts.elevenlabs.ElevenLabs", return_value=client):
+        synthesise("elevenlabs", SCRIPT, ELEVEN_CONFIG, workdir)
+
+    assert client.text_to_dialogue.convert.call_count == 2
+    for call in client.text_to_dialogue.convert.call_args_list:
+        assert call.kwargs["request_options"] == {"max_retries": 0}
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["timeout", "bad request"],
+)
+def test_elevenlabs_does_not_retry_a_timeout_or_a_rejection(workdir, failure):
+    import httpx
+    from elevenlabs.core.api_error import ApiError
+
+    error = (
+        httpx.ReadTimeout("read timed out")
+        if failure == "timeout"
+        else ApiError(status_code=400, body="bad voice")
+    )
+    client = MagicMock()
+    client.text_to_dialogue.convert = create_autospec(_real_dialogue_convert(), side_effect=error)
+
+    with patch("src.engine.tts.elevenlabs.ElevenLabs", return_value=client):
+        with pytest.raises(TTSProviderError):
+            synthesise("elevenlabs", SCRIPT, ELEVEN_CONFIG, workdir)
+
+    assert client.text_to_dialogue.convert.call_count == 1
+
+
+def test_google_retries_an_unavailable_service_but_not_a_deadline(workdir):
+    from google.api_core import exceptions as google_exceptions
+
+    flaky = fake_google_client()
+    flaky.synthesize_speech.side_effect = [
+        google_exceptions.ServiceUnavailable("down"),
+        MagicMock(audio_content=MP3),
+    ]
+    slow = fake_google_client()
+    slow.synthesize_speech.side_effect = google_exceptions.DeadlineExceeded("slow")
+
+    for client in (flaky, slow):
+        with patch("src.engine.tts.gemini.texttospeech.TextToSpeechClient", return_value=client):
+            try:
+                synthesise("gemini_multi", SCRIPT, GEMINI_CONFIG, workdir)
+            except TTSProviderError:
+                pass
+
+    assert flaky.synthesize_speech.call_count == 2
+    assert slow.synthesize_speech.call_count == 1
+
+
+def test_edge_failures_are_not_retried_in_place(workdir):
+    """Edge is free: a task retry costs nothing, so the engine does not wait."""
+    calls = []
+
+    async def boom(text, voice, destination, options):
+        calls.append(text)
+        raise OSError("websocket closed")
+
+    with patch.object(settings, "ENGINE_TTS_MAX_CONCURRENCY", 1), patch(
+        "src.engine.tts.edge._save", side_effect=boom
+    ):
+        with pytest.raises(TTSProviderError):
+            synthesise("edge", SCRIPT, EDGE_CONFIG, workdir)
+
+    assert len(calls) == 1
 
 
 # --------------------------------------------------------------------------

@@ -48,6 +48,10 @@ class Harness:
         self.progress: list[dict[str, Any]] = []
         self.row_updates: list[dict[str, Any]] = []
         self.progress_updates: list[dict[str, Any]] = []
+        # The Celery request each run gets. No id by default, as a direct call
+        # has: with an id, a run reuses the script cached under it (#620).
+        self.task_id: Any = None
+        self.retries = 0
 
     def _record_update(self, episode_id, updates, progress_updates=None):
         self.row_updates.append(updates)
@@ -91,7 +95,13 @@ class Harness:
         ):
             service.return_value.fetch_url_text = self.fetch_url_text
             audio_segment.from_file.return_value = audio
-            return generate_podcast_task.run(**kwargs)
+            # Its own request, so an id another test left on the task's default
+            # request cannot make this run reuse that test's cached script.
+            generate_podcast_task.push_request(id=self.task_id, retries=self.retries)
+            try:
+                return generate_podcast_task.run(**kwargs)
+            finally:
+                generate_podcast_task.pop_request()
 
 
 @pytest.fixture
@@ -227,6 +237,42 @@ def test_a_lost_quality_metrics_write_does_not_fail_the_run(harness, caplog):
 
     harness.synthesise.assert_called_once()
     assert "quality metrics were not recorded" in caplog.text
+
+
+def test_a_tts_failure_after_scripting_does_not_rebuy_the_script(harness):
+    """#620 done-when: synthesis fails once; the retry (same task id) voices the
+    script the first attempt paid for instead of generating it again."""
+    from redis import Redis
+
+    from src.config import settings
+    from src.engine.tts.base import TTSProviderError
+    from src.tasks import script_cache
+
+    task_id = f"test-{uuid4()}"
+    episode_id = str(uuid4())
+    harness.synthesise.side_effect = TTSProviderError("speech endpoint timed out")
+
+    harness.task_id = task_id
+
+    def attempt():
+        return harness.run(
+            episode_id=episode_id, text_content="Notes.", urls=["https://example.com/post"]
+        )
+
+    try:
+        with pytest.raises(TTSProviderError):
+            attempt()
+        harness.synthesise.side_effect = harness._write_audio
+        result = attempt()
+    finally:
+        Redis.from_url(settings.REDIS_URL).delete(script_cache._key(task_id))
+
+    assert result["status"] == "success"
+    harness.generate_script.assert_called_once()
+    # Nor are the URLs fetched again: the retry screens against the same text.
+    harness.fetch_url_text.assert_called_once()
+    assert harness.synthesise.call_count == 2
+    assert harness.synthesise.call_args.args[1] == SCRIPT
 
 
 def test_a_flagged_script_is_held_for_review(harness):

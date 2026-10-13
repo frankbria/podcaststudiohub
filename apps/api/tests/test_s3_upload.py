@@ -53,12 +53,16 @@ def _invoke_task(task, **kwargs):
     We set a fake request ID and mock update_state so the task can execute without
     a real Celery broker or worker context.
     """
-    # Set a valid task request ID (required for Celery's update_state validation)
-    task.request.update(id="test-task-id-" + str(uuid.uuid4()))
-
-    with patch.object(task, 'update_state', MagicMock()):
-        # task.run(**kwargs) - self is already bound to the task instance
-        return task.run(**kwargs)
+    # A request with an id, as a worker gives a task, pushed and popped rather
+    # than set on the default request: push_request copies the current request,
+    # so a leaked id would reach every later direct call in the process.
+    task.push_request(id="test-task-id-" + str(uuid.uuid4()))
+    try:
+        with patch.object(task, 'update_state', MagicMock()):
+            # task.run(**kwargs) - self is already bound to the task instance
+            return task.run(**kwargs)
+    finally:
+        task.pop_request()
 
 
 # ============================================================================
@@ -127,6 +131,36 @@ class TestUploadToS3Task:
 
         progress = [c for c in update_state.call_args_list if c.kwargs["meta"]["progress"] == 50]
         assert [c.kwargs.get("task_id") for c in progress] == [task_id]
+
+    def test_a_direct_call_has_no_task_id_and_still_uploads(self):
+        """finalize_episode_generation_task calls the task synchronously
+        (_upload_to_s3_with_retries), so there is no request id and no task
+        state to report progress to. Celery's real update_state raises
+        "task_id must not be empty" there, which failed every finalize-path
+        upload whenever a bucket was configured (found in the #620 demo)."""
+        from src.tasks.s3_upload import upload_to_s3_task
+
+        def upload_file(*args, Callback, **kwargs):
+            Callback(1024)
+
+        with (
+            patch("src.tasks.s3_upload.boto3") as mock_boto,
+            patch("src.tasks.s3_upload.os.path.getsize", return_value=1024),
+        ):
+            mock_boto.client.return_value.upload_file.side_effect = upload_file
+            # As in a worker: no id to inherit. (Other tests set one on the
+            # task's default request, and a direct call copies that request.)
+            upload_to_s3_task.push_request(id=None)
+            try:
+                result = upload_to_s3_task(
+                    file_path="/tmp/audio.mp3",
+                    s3_key="podcasts/user-123/episode-456.mp3",
+                    bucket_name="test-bucket",
+                )
+            finally:
+                upload_to_s3_task.pop_request()
+
+        assert result["status"] == "success"
 
     def test_s3_url_format_non_us_east_1(self):
         """S3 URL for other regions includes region subdomain."""

@@ -906,3 +906,23 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
 - **opencode cannot read `-f` attachments outside the repo when it pages them.**
   A 2000-line diff in the scratchpad made it end with no review. Put the diff
   inside the worktree (untracked), point the prompt at it, and delete it after.
+
+## #620 — script reused across retries (PR #632)
+
+- **A demo must call the code the way production does.** The #626 demo ran
+  `upload_to_s3_task.apply(task_id=…)`, which hid that production's finalize
+  path calls the task *synchronously*, with no request id, where Celery's
+  `update_state` raises "task_id must not be empty". The #620 demo drove the real
+  `generate_podcast_task` → finalize path and exposed it: every finalize-path S3
+  upload had been failing. The same crash in the broker-outage fallback is #633.
+- **`push_request` copies the current request.** Any test that does
+  `task.request.update(id=…)` leaks that id into every later direct call of the
+  task in the process. Harmless until something keys on the id; the script
+  cache did, and the full suite (never a single file) showed harness runs
+  reusing each other's scripts. Push and pop a request instead.
+- **botocore `Config(retries={"max_attempts": N})` counts retries, not
+  attempts;** `total_max_attempts` is the total. A test that drives the real
+  client through a `before-send` hook caught the fourth request.
+- **"Already retried" is checkable:** botocore's implicit legacy mode retried the
+  transcript put five times before #620 touched it; the issue's "single-shot"
+  premise was half wrong. Run the real client before designing a retry layer.

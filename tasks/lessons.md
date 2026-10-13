@@ -926,3 +926,16 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
 - **"Already retried" is checkable:** botocore's implicit legacy mode retried the
   transcript put five times before #620 touched it; the issue's "single-shot"
   premise was half wrong. Run the real client before designing a retry layer.
+
+## #633 — broker-outage finalize fallback (PR #634)
+
+- **A fallback for an outage must be demoed in that outage.** Pointing the
+  broker and result backend at a closed port showed two things a unit test
+  could not: the fallback's own progress write died, and `.delay()` does not
+  fail at all (818 s and counting, #635), so the fallback was unreachable.
+- **A cross-cutting policy can live on the task class.** Best-effort progress
+  went into a `Task` base (`base=BestEffortProgressTask`), so a cc-19 function
+  needed only a decorator line, rather than being rewritten to pass the gate.
+- **An empty review is not a clean review.** `ask-opencode.sh` exits 0 with no
+  text on a 429 quota error, and the CI review bot "passes" after 1 s. Check
+  the raw event stream, then fall back to codex.

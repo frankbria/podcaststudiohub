@@ -5,9 +5,11 @@ import { withOverride } from '../../../../test-utils/fetch-router'
 
 const mockPush = jest.fn()
 
+let mockProjectId = 'p1'
+
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
-  useParams: () => ({ id: 'p1' }),
+  useParams: () => ({ id: mockProjectId }),
 }))
 
 jest.mock('next-auth/react', () => ({
@@ -70,6 +72,25 @@ function mockFetchRouter({
 describe('ProjectPage', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    mockProjectId = 'p1'
+  })
+
+  it('shows the loading skeleton again when the project id changes (#529)', async () => {
+    // The App Router reuses the page instance when only [id] changes; the new
+    // project's data must not be preceded by the old one's heading.
+    const loaded = mockFetchRouter()
+    global.fetch = jest.fn((url: string, init?: RequestInit) =>
+      url.includes('p2') ? new Promise(() => {}) : loaded(url, init)
+    ) as jest.Mock
+
+    const { rerender } = render(<ProjectPage />)
+    expect(await screen.findByRole('heading', { name: 'My Podcast' })).toBeInTheDocument()
+
+    mockProjectId = 'p2'
+    rerender(<ProjectPage />)
+
+    expect(screen.getByLabelText('Loading')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'My Podcast' })).not.toBeInTheDocument()
   })
 
   it('loads the project and its episodes', async () => {

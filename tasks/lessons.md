@@ -886,3 +886,23 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
   unless carried over.
 - **Opencode reviews must be told "static only".** The first GLM run tried to
   start Postgres and exited with no review.
+
+## #570 — quality metrics revived on the engine (PR #631)
+
+- **Restoring deleted code means re-reading it, not just re-registering it.** The
+  restored aggregate summed a field the new data can make null and would have
+  500'd; six restored functions also failed the CRAP gate, because the gate
+  treats restored code as new. Budget the split.
+- **Hashes in issue bodies can be pre-squash.** `ea56d28` did not exist on main;
+  `git log --all -- <deleted path>` found the real removal commit (`292d5f7`).
+- **Verify a review's type premise against the database, not the model.**
+  `episodes.updated_at` is `DateTime` in the ORM but `timestamptz` in Postgres,
+  so the "aware vs naive" crash GLM predicted could not happen; a test now
+  pins the mix instead of a fix nobody needed.
+- **A fixture that commits through the worker's session must be torn down after
+  the test transaction.** Deleting its user inside the test blocked on a lock
+  the request's still-open transaction held; request the fixture *before*
+  `client` so pytest tears it down last.
+- **opencode cannot read `-f` attachments outside the repo when it pages them.**
+  A 2000-line diff in the scratchpad made it end with no review. Put the diff
+  inside the worktree (untracked), point the prompt at it, and delete it after.

@@ -83,3 +83,27 @@ def test_flags_are_capped_so_a_hostile_page_cannot_flood_the_episode():
     script = _script(*[f"See spam{i}.example now." for i in range(100)])
 
     assert len(screen_script(script, [SOURCE])) == 20
+
+
+def test_promotional_phrases_match_whole_words_only():
+    """'use code' inside 'because code' / 'reuse code' is ordinary speech."""
+    script = _script(
+        "Code review matters because code rots. We reuse code across modules.",
+        "Fair.",
+    )
+
+    assert screen_script(script, [SOURCE]) == []
+
+
+def test_a_hostile_turn_cannot_stall_the_worker():
+    """The domain pattern is unambiguous, so screening stays linear: a page
+    that gets the model to emit 'a.a.a.…' for 16k characters must not cost
+    seconds of backtracking."""
+    import time
+
+    script = _script("a." * 8000 + "!", "ok")
+
+    start = time.monotonic()
+    screen_script(script, [SOURCE])
+
+    assert time.monotonic() - start < 0.5

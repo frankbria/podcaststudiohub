@@ -388,7 +388,7 @@ def _record_screening(episode_id: str, script, sources: List[str]) -> None:
     release a hold left by an earlier, flagged run.
     """
     flags = screen_script(script, sources)
-    _update_episode(
+    recorded = _update_episode(
         episode_id,
         {},
         progress_updates={
@@ -396,6 +396,10 @@ def _record_screening(episode_id: str, script, sources: List[str]) -> None:
             "content_review": "pending" if flags else None,
         },
     )
+    if not recorded:
+        # _update_episode swallows DB errors. Fail closed: an unrecorded flag
+        # would let the episode publish unheld. The task retries the run.
+        raise EngineError(f"Episode {episode_id}: could not record content screening")
 
 
 def _held_for_review(episode_id: str) -> bool:

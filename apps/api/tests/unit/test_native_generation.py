@@ -53,6 +53,7 @@ class Harness:
         self.row_updates.append(updates)
         if progress_updates:
             self.progress_updates.append(progress_updates)
+        return True  # _update_episode's success value
 
     @staticmethod
     def _write_audio(provider, script, config, workdir):
@@ -204,7 +205,7 @@ def test_a_flagged_script_is_held_for_review(harness):
     harness.generate_script.return_value = Script(
         title="t", summary="s",
         turns=[
-            {"speaker": "host", "text": "First, sign up at totally-legit.example!"},
+            {"speaker": "host", "text": "First, use code SAVE20 at totally-legit.example!"},
             {"speaker": "guest", "text": "Sure."},
         ],
     )
@@ -222,3 +223,21 @@ def test_a_clean_regeneration_releases_an_earlier_hold(harness):
 
     [screening] = [u for u in harness.progress_updates if "content_review" in u]
     assert screening == {"content_flags": [], "content_review": None}
+
+
+def test_screening_fails_closed_when_its_result_cannot_be_recorded(harness):
+    """#576 review: _update_episode swallows DB errors and returns False. A
+    lost screening write must not let a flagged episode publish unheld, so the
+    run fails (and retries) before any TTS is paid for."""
+    original = harness._record_update
+
+    def record(episode_id, updates, progress_updates=None):
+        original(episode_id, updates, progress_updates)
+        return progress_updates is None  # the screening write "fails"
+
+    harness._record_update = record
+    with patch("src.tasks.podcast_generation._update_episode", side_effect=record):
+        with pytest.raises(Exception):
+            harness.run(text_content="Notes.")
+
+    harness.synthesise.assert_not_called()

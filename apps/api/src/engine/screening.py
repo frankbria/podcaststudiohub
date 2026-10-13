@@ -31,13 +31,17 @@ _TLDS = frozenset({
     "me", "tv", "shop", "store", "site", "online", "link", "click", "top",
     "us", "uk", "ca", "de", "fr", "eu", "au", "in", "example", "test",
 })
-_DOMAIN = re.compile(
-    r"(?:https?://)?(?:www\.)?((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+([a-z]{2,}))\b",
-    re.IGNORECASE,
-)
-_PROMOTIONS = (
-    "use code", "promo code", "discount code", "coupon code", "sign up at",
-    "buy now", "sponsored by", "affiliate link", "limited-time offer",
+# Matched against one whitespace token at a time with fullmatch, and labels
+# cannot contain dots, so there is a single way to split a token: screening is
+# linear even on a hostile "a.a.a.…" turn. Tokens longer than any real domain
+# (253) plus a path are skipped outright.
+_MAX_TOKEN = 300
+_TOKEN_TRIM = ".,;:!?()[]{}<>\"'"
+_DOMAIN = re.compile(r"(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+[a-z]{2,})(?:[/?#]\S*)?")
+# Whole words only: "because code" and "reuse code" are ordinary speech.
+_PROMOTIONS = re.compile(
+    r"\b(use code|promo code|discount code|coupon code|buy now|sponsored by"
+    r"|affiliate link|limited-time offer)\b"
 )
 
 
@@ -56,9 +60,18 @@ def screen_script(script: Script, sources: Sequence[str]) -> List[Dict]:
 
 def _findings(text: str):
     lowered = text.lower()
-    for found in _DOMAIN.finditer(lowered):
-        if found.group(2) in _TLDS:
-            yield "domain", found.group(1)
-    for phrase in _PROMOTIONS:
-        if phrase in lowered:
-            yield "promotion", phrase
+    for token in lowered.split():
+        domain = _domain_of(token.strip(_TOKEN_TRIM))
+        if domain:
+            yield "domain", domain
+    for phrase in dict.fromkeys(_PROMOTIONS.findall(lowered)):
+        yield "promotion", phrase
+
+
+def _domain_of(token: str):
+    if len(token) > _MAX_TOKEN:
+        return None
+    found = _DOMAIN.fullmatch(token)
+    if found and found.group(1).rsplit(".", 1)[1] in _TLDS:
+        return found.group(1)
+    return None

@@ -1264,6 +1264,19 @@ describe('EpisodePage content review (#576)', () => {
     expect(screen.getByRole('button', { name: 'Approve for publishing' })).toBeEnabled()
   })
 
+  it('shows no hold notice on a run that failed after screening', async () => {
+    // #576 review: screening wrote 'pending', then TTS failed. Nothing was
+    // produced to publish, so there is nothing to approve.
+    global.fetch = mockEpisodeFetchRouter({
+      episode: { ...heldEpisode, generation_status: 'failed' },
+    })
+    render(<EpisodePage />)
+
+    expect(await screen.findByText(completeEpisode.episode_metadata.title)).toBeInTheDocument()
+    expect(screen.queryByText('Held for review — not published')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Approve for publishing' })).not.toBeInTheDocument()
+  })
+
   it('POSTs to the proxy approve URL and hides the notice after a 200', async () => {
     const fetchMock = withOverride(
       mockEpisodeFetchRouter({ episode: heldEpisode }),

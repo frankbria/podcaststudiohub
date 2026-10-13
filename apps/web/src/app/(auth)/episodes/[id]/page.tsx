@@ -749,11 +749,15 @@ export default function EpisodePage() {
                 </p>
               )}
 
-            <ContentReviewNotice
-              key={episode.id}
-              episode={episode}
-              onApproved={applyEpisode}
-            />
+            {/* Only a finished episode can be held or released: a run that
+                failed after screening has nothing to publish (#576 review). */}
+            {episode.generation_status === "complete" && (
+              <ContentReviewNotice
+                key={episode.id}
+                episode={episode}
+                onApproved={applyEpisode}
+              />
+            )}
 
             {audioUrl && (
               <div className="mt-4 space-y-2">

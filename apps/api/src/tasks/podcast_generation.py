@@ -362,6 +362,7 @@ def _run_native_engine(
     topic: Optional[str],
     conversation_config: Optional[Dict[str, Any]],
     longform: bool,
+    distribution_requested: bool = False,
 ) -> tuple:
     """Script, voice and store an episode with the in-repo engine (#543)."""
     if image_paths or topic:
@@ -376,7 +377,7 @@ def _run_native_engine(
     script, sources = _paid_script(
         task, episode_id, text_content, urls, conversation_config, longform
     )
-    _record_screening(episode_id, script, sources)
+    _record_screening(episode_id, script, sources, distribution_requested)
     _record_quality_metrics(episode_id, script)
 
     # Stage 3: Audio Synthesis (66-100%)
@@ -447,21 +448,20 @@ def _record_quality_metrics(episode_id: str, script) -> None:
         logger.warning("Episode %s: quality metrics were not recorded", episode_id)
 
 
-def _record_screening(episode_id: str, script, sources: List[str]) -> None:
+def _record_screening(episode_id: str, script, sources: List[str], distribution_requested: bool = False) -> None:
     """Record what screening found, clearing any earlier result (#576).
 
     Written for clean scripts too: a regeneration that comes back clean must
-    release a hold left by an earlier, flagged run.
+    release a hold left by an earlier, flagged run. A flagged run that asked
+    for platform distribution also records that, in the same fail-closed
+    write: the per-request opt-in is stored nowhere else, and approval reads
+    it to run the stage the hold skips (#625).
     """
     flags = screen_script(script, sources)
-    recorded = _update_episode(
-        episode_id,
-        {},
-        progress_updates={
-            "content_flags": flags,
-            "content_review": "pending" if flags else None,
-        },
-    )
+    updates = {"content_flags": flags, "content_review": "pending" if flags else None}
+    if flags and distribution_requested:
+        updates["distribution_held"] = True
+    recorded = _update_episode(episode_id, {}, progress_updates=updates)
     if not recorded:
         # _update_episode swallows DB errors. Fail closed: an unrecorded flag
         # would let the episode publish unheld. The task retries the run.
@@ -801,6 +801,7 @@ def generate_podcast_task(
             self, episode_id, run_dir,
             urls=urls, text_content=text_content, image_paths=image_paths,
             topic=topic, conversation_config=conversation_config, longform=longform,
+            distribution_requested=enable_distribution,
         )
         file_size_bytes, duration_seconds = _measure_audio(audio_file_path)
 
@@ -1086,6 +1087,88 @@ def finalize_episode_generation_task(
             raise self.retry(exc=e, countdown=calculate_backoff(self.request.retries))
 
 
+def _distribution_signatures(episode_id: str, platforms: Dict[str, Dict[str, Any]]) -> list:
+	"""One immutable distribute_to_platform signature per platform, with its callbacks."""
+	from src.tasks.callbacks import on_distribution_complete, on_workflow_failure
+	from src.tasks.platform_distribution import distribute_to_platform_task
+
+	return [
+		distribute_to_platform_task.si(
+			episode_id=episode_id,
+			platform=platform_name,
+			platform_config=platform_config,
+			episode_metadata={},
+		).set(
+			link=on_distribution_complete.s(
+				episode_id=episode_id, platform=platform_name
+			),
+			link_error=on_workflow_failure.s(
+				episode_id=episode_id,
+				task_name=f"distribute_to_platform:{platform_name}",
+			),
+		)
+		for platform_name, platform_config in platforms.items()
+	]
+
+
+def held_distribution_workflow(episode_id: str, platforms: Dict[str, Dict[str, Any]]) -> chain:
+	"""The distribution stage alone, for an episode approved after a hold (#625).
+
+	Its audio is already uploaded. on_workflow_complete derives the terminal
+	status from the per-platform outcomes, as it does for a full run.
+	"""
+	from src.tasks.callbacks import on_workflow_complete
+
+	workflow = chain(*_distribution_signatures(episode_id, platforms))
+	workflow.link(on_workflow_complete.s(episode_id=episode_id))
+	return workflow
+
+
+def _composition_signature(
+	episode_id: str, composition_timeline: Optional[List[Dict[str, Any]]], output_path: Optional[str]
+) -> tuple:
+	"""``(signature, composed_output_path)`` for the audio-composition stage."""
+	from src.tasks.audio_composition import merge_audio_snippets_task
+	from src.tasks.callbacks import on_composition_complete, on_workflow_failure
+
+	# Derive from gettempdir(), not a literal /tmp: the cleanup guard in
+	# _cleanup_temp_file is scoped to gettempdir(), so a TMPDIR override
+	# would otherwise leave every composed file outside its reach (#309).
+	composed_output = output_path or os.path.join(
+		tempfile.gettempdir(), f"composed_{episode_id}.mp3"
+	)
+	composition_sig = merge_audio_snippets_task.si(
+		episode_id=episode_id,
+		timeline=composition_timeline or [],
+		output_path=composed_output,
+	).set(
+		link=on_composition_complete.s(episode_id=episode_id),
+		link_error=on_workflow_failure.s(
+			episode_id=episode_id, task_name="merge_audio_snippets"
+		),
+	)
+	return composition_sig, composed_output
+
+
+def _upload_signature(episode_id: str, user_id: str, file_path: str, s3_bucket: Optional[str]):
+	"""S3 upload of the final artifact (composed if composition ran).
+
+	On success on_upload_complete persists Episode.s3_url; distribution gates on
+	that committed s3_url, so a failed upload never results in a published episode.
+	"""
+	from src.tasks.callbacks import on_upload_complete, on_workflow_failure
+
+	return upload_to_s3_task.si(
+		file_path=file_path,
+		s3_key=build_podcast_s3_key(user_id, episode_id),
+		bucket_name=s3_bucket or settings.AWS_S3_BUCKET or "",
+		content_type="audio/mpeg",
+	).set(
+		link=on_upload_complete.s(episode_id=episode_id),
+		link_error=on_workflow_failure.s(episode_id=episode_id, task_name="upload_to_s3"),
+	)
+
+
 def build_generation_workflow(
 	episode_id: str,
 	audio_file_path: str,
@@ -1116,18 +1199,7 @@ def build_generation_workflow(
 	Returns:
 		A Celery ``chain`` object ready to be called with ``.apply_async()``.
 	"""
-	from src.tasks.callbacks import (
-		on_composition_complete,
-		on_distribution_complete,
-		on_upload_complete,
-		on_workflow_complete,
-		on_workflow_failure,
-	)
-	from src.tasks.audio_composition import merge_audio_snippets_task
-	from src.tasks.platform_distribution import distribute_to_platform_task
-
-	bucket = s3_bucket or settings.AWS_S3_BUCKET or ""
-	s3_key = build_podcast_s3_key(user_id, episode_id)
+	from src.tasks.callbacks import on_workflow_complete
 
 	# Chain stages use immutable signatures (.si). In a Celery chain a mutable
 	# .s() signature has the *previous* task's return value prepended as the first
@@ -1146,59 +1218,18 @@ def build_generation_workflow(
 
 	# Stage: audio composition (optional)
 	if enable_composition:
-		# Derive from gettempdir(), not a literal /tmp: the cleanup guard in
-		# _cleanup_temp_file is scoped to gettempdir(), so a TMPDIR override
-		# would otherwise leave every composed file outside its reach (#309).
-		composed_output = output_path or os.path.join(
-			tempfile.gettempdir(), f"composed_{episode_id}.mp3"
-		)
-		composition_sig = merge_audio_snippets_task.si(
-			episode_id=episode_id,
-			timeline=composition_timeline or [],
-			output_path=composed_output,
-		).set(
-			link=on_composition_complete.s(episode_id=episode_id),
-			link_error=on_workflow_failure.s(
-				episode_id=episode_id, task_name="merge_audio_snippets"
-			),
+		composition_sig, final_audio_path = _composition_signature(
+			episode_id, composition_timeline, output_path
 		)
 		workflow_tasks.append(composition_sig)
-		final_audio_path = composed_output
 
-	# Stage: S3 upload of the final artifact (composed if composition ran). On
-	# success on_upload_complete persists Episode.s3_url; distribution gates on that
-	# committed s3_url, so a failed upload never results in a published episode.
-	upload_sig = upload_to_s3_task.si(
-		file_path=final_audio_path,
-		s3_key=s3_key,
-		bucket_name=bucket,
-		content_type="audio/mpeg",
-	).set(
-		link=on_upload_complete.s(episode_id=episode_id),
-		link_error=on_workflow_failure.s(episode_id=episode_id, task_name="upload_to_s3"),
-	)
-	workflow_tasks.append(upload_sig)
+	workflow_tasks.append(_upload_signature(episode_id, user_id, final_audio_path, s3_bucket))
 
 	# Stage: platform distribution (optional). All metadata (title/description/
 	# duration/explicit/audio_url) is read from the fresh Episode row inside
 	# distribute_to_platform_task, which waits for the committed s3_url (issue #211).
 	if enable_distribution and platforms:
-		for platform_name, platform_config in platforms.items():
-			dist_sig = distribute_to_platform_task.si(
-				episode_id=episode_id,
-				platform=platform_name,
-				platform_config=platform_config,
-				episode_metadata={},
-			).set(
-				link=on_distribution_complete.s(
-					episode_id=episode_id, platform=platform_name
-				),
-				link_error=on_workflow_failure.s(
-					episode_id=episode_id,
-					task_name=f"distribute_to_platform:{platform_name}",
-				),
-			)
-			workflow_tasks.append(dist_sig)
+		workflow_tasks += _distribution_signatures(episode_id, platforms)
 
 	# No chain-level link_error: Celery copies it onto every member task, and each
 	# stage above already has its own. It fired a second, generic errback that

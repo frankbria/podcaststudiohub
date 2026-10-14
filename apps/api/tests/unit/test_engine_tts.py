@@ -8,10 +8,10 @@ pydub is patched rather than exercised. CI has no ffmpeg — `pytest.ini` alread
 carries the matching pydub warning filter — so real decoding would make these
 tests pass locally and fail in CI, or vice versa.
 
-No test here makes a network call. The opt-in live tests live at the bottom and
-skip unless RUN_LIVE_TTS_TESTS=1.
+No test here makes a network call. The opt-in live tests are in
+`test_engine_tts_live.py`: this module's autouse fixtures fake the keys and
+pydub, so nothing here can reach a provider (#617).
 """
-import os
 from pathlib import Path
 from unittest.mock import MagicMock, create_autospec, patch
 
@@ -773,40 +773,6 @@ def test_workdir_is_created_if_it_does_not_exist(workdir):
         output = synthesise("openai", SCRIPT, OPENAI_CONFIG, workdir)
 
     assert workdir.is_dir() and output.is_file()
-
-
-# --------------------------------------------------------------------------
-# Opt-in live tests
-#
-# Gated on an explicit flag, NOT on the key being set. Every provider key in
-# this repo's .env is present, well-formed and revoked, and CI has no provider
-# secrets at all — so a key-presence gate would turn a stale .env into red
-# tests rather than skipped ones.
-# --------------------------------------------------------------------------
-
-live = pytest.mark.skipif(
-    os.getenv("RUN_LIVE_TTS_TESTS") != "1",
-    reason="opt-in: set RUN_LIVE_TTS_TESTS=1 and supply a working provider key",
-)
-
-
-@live
-@pytest.mark.live_tts
-def test_live_elevenlabs_dialogue(tmp_path):
-    output = synthesise("elevenlabs", SCRIPT, ELEVEN_CONFIG, tmp_path)
-
-    assert output.is_file()
-    assert output.stat().st_size > 10_000, "suspiciously small for four turns"
-
-
-@live
-@pytest.mark.live_tts
-def test_live_edge(tmp_path):
-    """Needs no API key at all, so this is the cheapest end-to-end check."""
-    output = synthesise("edge", SCRIPT, EDGE_CONFIG, tmp_path)
-
-    assert output.is_file()
-    assert output.stat().st_size > 10_000
 
 
 # --------------------------------------------------------------------------

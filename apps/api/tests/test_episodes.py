@@ -2358,6 +2358,25 @@ async def test_a_broker_failure_still_approves_and_leaves_the_episode_complete(
 
 
 @pytest.mark.asyncio
+async def test_a_planning_failure_still_approves_and_leaves_the_episode_complete(
+	client, project_and_auth, set_system_fields, monkeypatch
+):
+	"""The approval is already committed and cannot be repeated."""
+	from unittest.mock import AsyncMock, patch
+
+	with patch(
+		"src.services.episode_service.plan_platforms", AsyncMock(side_effect=RuntimeError("db went away"))
+	):
+		episode, workflow = await _held_distribution_approval(
+			client, project_and_auth, set_system_fields, monkeypatch
+		)
+
+	workflow.assert_not_called()
+	assert episode["generation_progress"]["content_review"] == "approved"
+	assert episode["generation_status"] == "complete"
+
+
+@pytest.mark.asyncio
 async def test_approval_generates_a_missing_feed_for_an_rss_platform(
 	client, project_and_auth, set_system_fields, monkeypatch
 ):

@@ -221,6 +221,19 @@ async def _enqueue_generation(db: AsyncSession, episode: Episode, task_kwargs: d
     # rather than clobbering a still-valid 'complete' episode (issue #295).
     prior_status = episode.generation_status
     prior_progress = episode.generation_progress
+    # The restartable check ran before the RSS pre-flight, which may commit, so
+    # another kickoff (a second generate, or approval re-dispatching a held
+    # distribution, #625) can have moved the episode since. Re-read it under
+    # FOR UPDATE: that serializes with them, and the status written below is
+    # then decided on the committed one.
+    current_status = await db.scalar(
+        select(Episode.generation_status).where(Episode.id == episode.id).with_for_update()
+    )
+    if current_status != prior_status:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Generation already in progress for this episode (status: {current_status}).",
+        )
 
     new_task_id = str(uuid4())
     episode.generation_status = "queued"

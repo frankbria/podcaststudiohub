@@ -357,12 +357,27 @@ async def _claim_for_distribution(db: AsyncSession, episode_id: UUID, to_status:
 async def _redispatch_held_distribution(db: AsyncSession, episode: Episode) -> None:
 	"""Run the platform distribution the hold skipped at generation time (#625).
 
+	Best effort: the approval is already committed and cannot be repeated (it
+	answers 409 afterwards), so no failure here may turn it into an error.
+	Regenerating with distribution is the way to retry.
+	"""
+	try:
+		await _plan_claim_and_dispatch(db, episode)
+	except Exception as exc:  # noqa: BLE001 — the approval is committed; a planning or claim failure (DB, feed service) must leave it intact, roll back only this work, and be logged
+		logger.error("Episode %s: could not re-dispatch held distribution: %s", episode.id, exc)
+		await db.rollback()
+		# rollback expires the instance; the response is built from it.
+		await db.refresh(episode)
+
+
+async def _plan_claim_and_dispatch(db: AsyncSession, episode: Episode) -> None:
+	"""Dispatch the distribution stage once the episode is claimed.
+
 	The episode is first moved from 'complete' to 'distributing', as a full
 	run's chain does: a regeneration is then refused (409) until
 	on_workflow_complete settles the status, so this stage can never publish or
-	overwrite a newer generation. Best effort: the approval is already
-	committed, so a broker failure is logged and the status restored;
-	regenerating with distribution is the way to retry.
+	overwrite a newer generation. Generation re-checks the status under a row
+	lock before it writes 'queued', so the two cannot both proceed.
 	"""
 	if not (settings.ENABLE_PLATFORM_DISTRIBUTION and settings.AWS_S3_BUCKET):
 		return
@@ -375,7 +390,7 @@ async def _dispatch_or_release(db: AsyncSession, episode: Episode, platforms: di
 	try:
 		held_distribution_workflow(str(episode.id), platforms).apply_async()
 	except Exception as exc:  # noqa: BLE001 — the approval is committed; whatever the broker raised must not turn a successful approval into an error, only undo the claim
-		logger.error("Episode %s: could not re-dispatch held distribution: %s", episode.id, exc)
+		logger.error("Episode %s: could not dispatch held distribution: %s", episode.id, exc)
 		await _claim_for_distribution(db, episode.id, "complete", "distributing")
 
 

@@ -362,6 +362,7 @@ def _run_native_engine(
     topic: Optional[str],
     conversation_config: Optional[Dict[str, Any]],
     longform: bool,
+    distribution_requested: bool = False,
 ) -> tuple:
     """Script, voice and store an episode with the in-repo engine (#543)."""
     if image_paths or topic:
@@ -376,7 +377,7 @@ def _run_native_engine(
     script, sources = _paid_script(
         task, episode_id, text_content, urls, conversation_config, longform
     )
-    _record_screening(episode_id, script, sources)
+    _record_screening(episode_id, script, sources, distribution_requested)
     _record_quality_metrics(episode_id, script)
 
     # Stage 3: Audio Synthesis (66-100%)
@@ -447,21 +448,20 @@ def _record_quality_metrics(episode_id: str, script) -> None:
         logger.warning("Episode %s: quality metrics were not recorded", episode_id)
 
 
-def _record_screening(episode_id: str, script, sources: List[str]) -> None:
+def _record_screening(episode_id: str, script, sources: List[str], distribution_requested: bool = False) -> None:
     """Record what screening found, clearing any earlier result (#576).
 
     Written for clean scripts too: a regeneration that comes back clean must
-    release a hold left by an earlier, flagged run.
+    release a hold left by an earlier, flagged run. A flagged run that asked
+    for platform distribution also records that, in the same fail-closed
+    write: the per-request opt-in is stored nowhere else, and approval reads
+    it to run the stage the hold skips (#625).
     """
     flags = screen_script(script, sources)
-    recorded = _update_episode(
-        episode_id,
-        {},
-        progress_updates={
-            "content_flags": flags,
-            "content_review": "pending" if flags else None,
-        },
-    )
+    updates = {"content_flags": flags, "content_review": "pending" if flags else None}
+    if flags and distribution_requested:
+        updates["distribution_held"] = True
+    recorded = _update_episode(episode_id, {}, progress_updates=updates)
     if not recorded:
         # _update_episode swallows DB errors. Fail closed: an unrecorded flag
         # would let the episode publish unheld. The task retries the run.
@@ -475,9 +475,6 @@ def _distribution_allowed(episode_id: str, enable_distribution: bool) -> bool:
             "Episode %s: platform distribution held until its content flags are reviewed",
             episode_id,
         )
-        # The per-request opt-in is stored nowhere else; approval reads this to
-        # run the stage that was skipped (#625).
-        _update_episode(episode_id, {}, progress_updates={"distribution_held": True})
         return False
     return enable_distribution
 
@@ -804,6 +801,7 @@ def generate_podcast_task(
             self, episode_id, run_dir,
             urls=urls, text_content=text_content, image_paths=image_paths,
             topic=topic, conversation_config=conversation_config, longform=longform,
+            distribution_requested=enable_distribution,
         )
         file_size_bytes, duration_seconds = _measure_audio(audio_file_path)
 

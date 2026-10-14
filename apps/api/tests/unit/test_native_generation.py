@@ -312,6 +312,23 @@ def test_a_flagged_script_is_held_for_review(harness):
     [screening] = [u for u in harness.progress_updates if "content_review" in u]
     assert screening["content_review"] == "pending"
     assert {f["kind"] for f in screening["content_flags"]} == {"domain", "promotion"}
+    assert "distribution_held" not in screening  # none was requested
+
+
+def test_a_flagged_run_that_asked_for_distribution_records_it_with_the_flags(harness):
+    """#625: in the screening write itself, which fails the run closed if lost."""
+    harness.generate_script.return_value = Script(
+        title="t", summary="s",
+        turns=[
+            {"speaker": "host", "text": "First, use code SAVE20 at totally-legit.example!"},
+            {"speaker": "guest", "text": "Sure."},
+        ],
+    )
+
+    harness.run(text_content="Notes about retrieval.", enable_distribution=True)
+
+    [screening] = [u for u in harness.progress_updates if "content_review" in u]
+    assert screening["distribution_held"] is True
 
 
 def test_a_clean_regeneration_releases_an_earlier_hold(harness):

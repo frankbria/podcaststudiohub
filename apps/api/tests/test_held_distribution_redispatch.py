@@ -14,7 +14,8 @@ from src.models.project import Project
 from src.models.user import User
 from src.tasks.platform_distribution import distribute_to_platform_task
 from src.worker import celery_app
-from src.tasks.podcast_generation import _distribution_allowed, held_distribution_workflow
+from src.engine.models import Script
+from src.tasks.podcast_generation import _distribution_allowed, _record_screening, held_distribution_workflow
 
 
 @pytest.fixture
@@ -98,10 +99,18 @@ def test_a_failed_redispatch_is_a_distribution_failure_not_a_failed_episode(appr
 
 @pytest.mark.parametrize("requested,remembered", [(True, True), (False, None)])
 def test_a_held_distribution_is_remembered_only_when_one_was_requested(approved_episode, requested, remembered):
-	"""The per-request opt-in is not stored anywhere else, and approval must not
-	distribute an episode whose generation never asked for it."""
-	episode_id = approved_episode(review="pending")
+	"""Recorded with the screening result, in its fail-closed write: the
+	per-request opt-in is stored nowhere else, and approval must not distribute
+	an episode whose generation never asked for it."""
+	episode_id = approved_episode(review=None)
+	flagged = Script(
+		title="t", summary="s",
+		turns=[{"speaker": "host", "text": "Use code SAVE20 at totally-legit.example!"}, {"speaker": "guest", "text": "Sure."}],
+	)
 
+	_record_screening(episode_id, flagged, ["Notes about retrieval."], requested)
+
+	progress = _row(episode_id)[1]
+	assert progress["content_review"] == "pending"
+	assert progress.get("distribution_held") is remembered
 	assert _distribution_allowed(episode_id, requested) is False
-
-	assert _row(episode_id)[1].get("distribution_held") is remembered

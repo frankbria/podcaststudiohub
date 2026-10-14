@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 
 from src.engine import generate_script as real_generate_script
-from src.engine.models import Script
+from src.engine.models import ConversationConfig, Script
 from src.engine.transcript import persist_transcript as real_persist_transcript
 from src.engine.tts import synthesise as real_synthesise
 from src.tasks.podcast_generation import generate_podcast_task
@@ -39,6 +39,7 @@ class Harness:
         # What _load_native_inputs reads from the episode row.
         self.tts_provider = "openai"
         self.tts_config: dict = dict(OPENAI_CONFIG)
+        self.show: dict = {}
         self.generate_script = create_autospec(real_generate_script, return_value=SCRIPT)
         self.synthesise = create_autospec(real_synthesise, side_effect=self._write_audio)
         self.persist_transcript = create_autospec(
@@ -82,7 +83,7 @@ class Harness:
             "src.tasks.podcast_generation.ContentExtractionService"
         ) as service, patch(
             "src.tasks.podcast_generation._load_native_inputs",
-            return_value=(self.user_id, self.tts_provider, self.tts_config),
+            return_value=(self.user_id, self.tts_provider, self.tts_config, self.show),
         ), patch(
             "src.tasks.podcast_generation.os.path.getsize", return_value=1024
         ), patch(
@@ -107,6 +108,27 @@ class Harness:
 @pytest.fixture
 def harness():
     return Harness()
+
+
+def test_an_episode_without_a_template_is_introduced_as_the_projects_show(harness):
+    """#621: it used to open with "Welcome to PODCASTIFY!"."""
+    harness.show = {"podcast_name": "The Signal Room", "podcast_tagline": "Retrieval, weekly."}
+
+    harness.run(episode_id=str(uuid4()), text_content="Pasted notes.")
+
+    assert harness.generate_script.call_args.args[1] == harness.show
+
+
+def test_a_templates_own_podcast_name_is_used_verbatim(harness):
+    harness.show = {"podcast_name": "The Signal Room", "podcast_tagline": "Retrieval, weekly."}
+    # A template saved without a tagline stores an explicit null.
+    template = {"podcast_name": "Tech Insights", "word_count": 600, "podcast_tagline": None}
+
+    harness.run(episode_id=str(uuid4()), text_content="Pasted notes.", conversation_config=template)
+
+    config = harness.generate_script.call_args.args[1]
+    assert config == {**template, "podcast_tagline": "Retrieval, weekly."}
+    assert ConversationConfig.from_template_config(config).podcast_name == "Tech Insights"
 
 
 def test_native_path_runs_the_engine_end_to_end(harness):

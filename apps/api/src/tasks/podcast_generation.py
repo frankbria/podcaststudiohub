@@ -301,20 +301,27 @@ def _effective_tts(episode: Episode):
 
 
 def _load_native_inputs(episode_id: str) -> tuple:
-    """Return ``(user_id, tts_provider, tts_config)`` for the native engine.
+    """Return ``(user_id, tts_provider, tts_config, show)`` for the native engine.
 
     Read from the episode row, the one source of truth for the configuration,
     rather than from the router's kwargs. An episode with no TTS configuration
-    gets _DEFAULT_TTS_CONFIG.
+    gets _DEFAULT_TTS_CONFIG. ``show`` names the podcast from the project's
+    metadata, for a template that does not (#621).
     """
     with SyncSessionLocal() as db:
         episode = db.get(Episode, uuid_module.UUID(episode_id))
         if episode is None or episode.user_id is None:
             raise EngineError(f"Episode {episode_id} has no owner to store its transcript under")
+        metadata = episode.project.podcast_metadata or {}
+        show = {
+            key: metadata[field]
+            for key, field in (("podcast_name", "show_title"), ("podcast_tagline", "description"))
+            if metadata.get(field)
+        }
         tts = _effective_tts(episode)
         if tts is None:
-            return str(episode.user_id), "openai", dict(_DEFAULT_TTS_CONFIG)
-        return str(episode.user_id), tts.provider, dict(tts.config or {})
+            return str(episode.user_id), "openai", dict(_DEFAULT_TTS_CONFIG), show
+        return str(episode.user_id), tts.provider, dict(tts.config or {}), show
 
 
 def _collect_sources(text_content: Optional[str], urls: Optional[List[str]]) -> List[str]:
@@ -347,7 +354,12 @@ def _run_native_engine(
         # No source type produces either today (see test_dependency_reachability);
         # refuse rather than silently generate without them.
         raise EngineError("Image and topic sources are not supported by the engine")
-    user_id, tts_provider, tts_config = _load_native_inputs(episode_id)
+    user_id, tts_provider, tts_config, show = _load_native_inputs(episode_id)
+    if show:
+        # The template's own name wins; without one the engine default is
+        # "PODCASTIFY". A template saved without a tagline stores it as null.
+        template = {k: v for k, v in (conversation_config or {}).items() if v is not None}
+        conversation_config = {**show, **template}
     # Resolved before any paid call, so a misconfigured episode fails for free.
     VoiceConfig.from_tts_config(tts_config, provider=tts_provider)
 

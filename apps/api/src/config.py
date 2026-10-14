@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     # backfills apply to all rows. Falls back to DATABASE_URL when unset (issue #301).
     # Same optional-override convention as CELERY_BROKER_URL.
     MIGRATION_DATABASE_URL: Optional[str] = None
+    # The Celery worker's URL (#649). Tasks run with no tenant context, so under
+    # the FORCE-RLS app role every read returns nothing; the worker needs a role
+    # that bypasses RLS (podcastfy_worker, migration 020). Falls back to
+    # DATABASE_URL, which is the superuser in CI and local dev.
+    CELERY_DATABASE_URL: Optional[str] = None
     DATABASE_POOL_SIZE: int = 10
     DATABASE_MAX_OVERFLOW: int = 20
 
@@ -280,6 +285,11 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore"
     )
+
+    @property
+    def celery_database_url(self) -> str:
+        """The URL the Celery session factories connect with (#649)."""
+        return self.CELERY_DATABASE_URL or self.DATABASE_URL
 
     @property
     def is_production(self) -> bool:

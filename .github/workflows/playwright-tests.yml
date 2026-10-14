@@ -139,6 +139,9 @@ jobs:
           CREATE ROLE podcastfy_user LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE BYPASSRLS;
           CREATE DATABASE podcastfy OWNER podcastfy_user;
           CREATE ROLE podcastfy_app LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+          -- Celery's DB identity (#649): only a superuser can grant BYPASSRLS, so
+          -- the DBA provisions it; migration 020 then only grants CONNECT.
+          CREATE ROLE podcastfy_worker LOGIN PASSWORD 'postgres' NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT BYPASSRLS IN ROLE podcastfy_app;
           SQL
 
       - name: Install API dependencies and migrate

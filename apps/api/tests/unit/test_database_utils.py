@@ -29,6 +29,8 @@ class TestGetSyncEngine:
 		try:
 			mock_settings = MagicMock()
 			mock_settings.DATABASE_URL = "sqlite:///test.db"
+			# What _get_sync_engine reads since #649 (CELERY_DATABASE_URL or DATABASE_URL).
+			mock_settings.celery_database_url = mock_settings.DATABASE_URL
 			mock_settings.DEBUG = False
 			mock_settings.DATABASE_POOL_SIZE = 5
 			mock_settings.DATABASE_MAX_OVERFLOW = 10
@@ -46,6 +48,8 @@ class TestGetSyncEngine:
 		try:
 			mock_settings = MagicMock()
 			mock_settings.DATABASE_URL = "postgresql://x:x@localhost/db"
+			# What _get_sync_engine reads since #649 (CELERY_DATABASE_URL or DATABASE_URL).
+			mock_settings.celery_database_url = mock_settings.DATABASE_URL
 			mock_settings.DEBUG = False
 			mock_settings.DATABASE_POOL_SIZE = 5
 			mock_settings.DATABASE_MAX_OVERFLOW = 10

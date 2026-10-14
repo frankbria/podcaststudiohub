@@ -39,10 +39,10 @@ _sync_session_factory = None
 def _get_sync_engine():
     global _sync_engine
     if _sync_engine is None:
-        db_url = settings.DATABASE_URL
+        db_url = settings.celery_database_url
         if not db_url.startswith("postgresql+asyncpg://"):
             raise ValueError(
-                f"DATABASE_URL must use the 'postgresql+asyncpg://' driver prefix, "
+                f"CELERY_DATABASE_URL / DATABASE_URL must use the 'postgresql+asyncpg://' driver prefix, "
                 f"got: {db_url.split('://')[0]}://"
             )
         _sync_engine = create_engine(
@@ -84,7 +84,7 @@ async def celery_async_session() -> AsyncGenerator[AsyncSession, None]:
     a live loop and must use ``AsyncSessionLocal``.
     """
     task_engine = create_async_engine(
-        settings.DATABASE_URL,
+        settings.celery_database_url,
         echo=settings.DEBUG,
         poolclass=NullPool,
     )

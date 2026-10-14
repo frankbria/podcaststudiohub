@@ -529,6 +529,14 @@ MIGRATION_DATABASE_URL=postgresql+asyncpg://podcastfy:pass@localhost/podcastfy
 # it is set (fresh installs use it in 003). Generate with `openssl rand -hex 32`
 # and keep it in sync with the password embedded in DATABASE_URL above.
 APP_DB_PASSWORD=<same-password-as-in-DATABASE_URL>
+# Celery's DB identity (issue #649). Tasks run without tenant context, so the
+# worker must connect as podcastfy_worker (BYPASSRLS, not superuser, member of
+# podcastfy_app), never as podcastfy_app (FORCE RLS would hide every row).
+# Migration 020 creates the role from WORKER_DB_PASSWORD when the migration URL
+# is a superuser; otherwise a DBA provisions it first (the migration's error
+# prints the statement). Generate with `openssl rand -hex 16`.
+WORKER_DB_PASSWORD=<generate>
+CELERY_DATABASE_URL=postgresql+asyncpg://podcastfy_worker:<WORKER_DB_PASSWORD>@localhost/podcastfy
 REDIS_URL=redis://localhost:6379/0
 JWT_SECRET_KEY=<generate-with-openssl-rand-hex-32>
 JWT_ALGORITHM=HS256

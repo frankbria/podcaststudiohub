@@ -413,6 +413,13 @@ jobs:
           # Single-quoted: it expands on the VPS, from $SERVER_PATH/frontend.
           USE_NODE='export NVM_DIR="$HOME/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] || { echo "nvm is not installed for $(whoami)"; exit 1; }; . "$NVM_DIR/nvm.sh"; nvm install >/dev/null 2>&1 || nvm use >/dev/null || exit 1; case "$(node -v)" in "v$(cat .nvmrc)".*) echo "node -v: $(node -v) ($(command -v node))" ;; *) echo "wrong node: $(node -v), .nvmrc wants $(cat .nvmrc)"; exit 1 ;; esac'
 
+          # Runs after the restart (#564). nvm install above adds each new patch
+          # of the .nvmrc major (~200 MB) and nothing removed the old ones. This
+          # keeps the running node plus the newest other one (rollback) and
+          # uninstalls the rest, in the deploy user's own nvm only: other majors,
+          # the system node and other tenants are never touched. Best effort.
+          PRUNE_NODE='ls -1 "$NVM_DIR/versions/node" | grep "^v$(cat .nvmrc)\." | grep -vx "$(nvm current)" | sort -V | head -n -1 | while read -r old; do echo "pruning superseded node $old"; nvm uninstall "$old" </dev/null || true; done'
+
           # Sync public files to server
           rsync -avz -e ssh \
             apps/web/public/ \
@@ -488,6 +495,8 @@ jobs:
               -- start
 
             pm2 save
+
+            $PRUNE_NODE
 
             echo "Frontend deployment complete"
           EOF

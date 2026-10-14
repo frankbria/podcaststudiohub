@@ -275,6 +275,11 @@ rsyncs `.nvmrc`, runs `nvm install` before every `npm` call and before `pm2 star
 `pm2 start` names that node with `--interpreter`, because the PM2 daemon keeps whatever
 node it was started under.
 
+Because `.nvmrc` names a bare major, each new 24.x patch is installed on the next deploy
+(about 200 MB each). After the frontend restarts, the deploy uninstalls the deploy user's
+superseded patches of that major, keeping the running one and the newest other one for
+rollback (#564). Other majors, the system node and other tenants' nvm are not touched.
+
 One-time prerequisite: nvm itself must exist for the deploy user. If the deploy fails with
 `nvm is not installed for <user>`, install it as that user (not root, not globally):
 

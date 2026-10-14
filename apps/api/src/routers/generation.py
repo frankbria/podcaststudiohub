@@ -19,8 +19,7 @@ from ..models.project import Project
 from ..models.content_source import ContentSource
 from ..models.user import User
 from ..dependencies import get_current_user
-from ..services.distribution_target_service import active_platform_map
-from ..services.rss_generation_service import RSSGenerationService
+from ..services.distribution_plan import plan_platforms
 from ..tasks.podcast_generation import generate_podcast_task
 from ..tasks.callbacks import on_workflow_failure
 
@@ -42,7 +41,6 @@ _RESTARTABLE_STATUSES = frozenset(
 _FILE_SOURCE_TYPES = ("pdf", "file", "image")
 # Where url / youtube / text sources keep their raw value in source_data.
 _RAW_SOURCE_FIELD = {"url": "url", "youtube": "url", "text": "content"}
-_RSS_PLATFORM_NAMES = {"spotify": "Spotify", "apple_podcasts": "Apple Podcasts"}
 
 
 async def _load_restartable_episode(db: AsyncSession, episode_id: UUID, tenant_id) -> Episode:
@@ -188,96 +186,12 @@ def _distribution_enabled(requested: bool, episode_id: UUID) -> bool:
     return enabled
 
 
-def _rss_platforms(platforms: dict) -> list:
-    """The platforms that ingest through the project's RSS feed."""
-    if settings.ENABLE_DIRECT_PLATFORM_PUBLISH:
-        return []
-    return [p for p in _RSS_PLATFORM_NAMES if p in platforms]
-
-
-async def _ensure_rss_feed(db: AsyncSession, episode: Episode, user_id, rss_platforms: list) -> None:
-    rss_service = RSSGenerationService()
-    feed = await rss_service.get_rss_feed(db, episode.project_id)
-    if feed is None or not feed.public_url:
-        await rss_service.generate_rss_for_project(db, episode.project_id, user_id)
-        logger.info(
-            "Episode %s: auto-generated missing RSS feed for "
-            "project %s ahead of %s distribution.",
-            episode.id, episode.project_id, ", ".join(rss_platforms),
-        )
-
-
-async def _rss_preflight_error(db: AsyncSession, episode: Episode, user_id, rss_platforms: list):
-    """Make sure the project has a feed; return what went wrong, or None.
-
-    Non-fatal: a failure here must skip the RSS-model platforms with a
-    warning, never 500 the generation kickoff itself. It runs under a
-    SAVEPOINT so a DB-level failure (e.g. the unique-RSSFeed race between two
-    concurrent generations) aborts only the pre-flight work: a whole-session
-    rollback would poison the later 'queued' commit path by expiring loaded
-    instances (and, under the test harness's shared-session wrapping, wipe
-    prior writes).
-    """
-    preflight_sp = await db.begin_nested()
-    try:
-        await _ensure_rss_feed(db, episode, user_id, rss_platforms)
-        # The service commits internally on success, consuming the
-        # savepoint; release it only if it is still open.
-        if preflight_sp.is_active:
-            await preflight_sp.commit()
-        return None
-    except Exception as exc:  # noqa: BLE001 — the savepoint must be rolled back and the RSS platforms dropped whatever failed, and only ValueError's message is user-safe — anything else stays internal so infrastructure details never leak
-        if preflight_sp.is_active:
-            await preflight_sp.rollback()
-        return exc
-
-
-def _skip_rss_platforms(platforms: dict, rss_platforms: list, exc: Exception, episode: Episode) -> str:
-    """Drop the RSS-model platforms and return the warning for the caller."""
-    for p in rss_platforms:
-        del platforms[p]
-    # ValueError carries a user-actionable validation message
-    # (same contract as the RSS router's 422); anything else
-    # stays internal so infrastructure details never leak.
-    reason = (
-        str(exc) if isinstance(exc, ValueError)
-        else "feed generation failed unexpectedly"
-    )
-    skipped = " and ".join(_RSS_PLATFORM_NAMES[p] for p in rss_platforms)
-    logger.warning(
-        "Episode %s: RSS pre-flight failed for project %s; "
-        "skipping %s distribution: %s",
-        episode.id, episode.project_id,
-        ", ".join(rss_platforms), exc,
-    )
-    return (
-        f"Skipped {skipped} distribution: "
-        "these platforms ingest episodes via the project's RSS "
-        f"feed, which has not been generated and could not be "
-        f"auto-generated ({reason}). Set the podcast metadata "
-        "and generate the feed from the project's distribution "
-        "page, then regenerate."
-    )
-
-
 async def _distribution_plan(db: AsyncSession, episode: Episode, user_id, requested: bool) -> tuple:
     """``(enable_distribution, platforms, warnings)`` for this run."""
     if not _distribution_enabled(requested, episode.id):
         return False, {}, []
-    platforms = await active_platform_map(db, episode)
-    # RSS pre-flight (issue #378): under the RSS-feed model, the distribution
-    # task fails permanently for Spotify/Apple when the project has no
-    # generated feed. This router is async (unlike the sync Celery task), so
-    # auto-generating the feed here is one awaited service call. If it can't be
-    # generated (e.g. podcast metadata missing), skip those platforms and tell
-    # the caller instead of dispatching a guaranteed distribution_failed.
-    rss_platforms = _rss_platforms(platforms)
-    if not rss_platforms:
-        return True, platforms, []
-    exc = await _rss_preflight_error(db, episode, user_id, rss_platforms)
-    if exc is None:
-        return True, platforms, []
-    return True, platforms, [_skip_rss_platforms(platforms, rss_platforms, exc, episode)]
+    platforms, warnings = await plan_platforms(db, episode, user_id)
+    return True, platforms, warnings
 
 
 def _task_kwargs(episode: Episode, urls: list, text_content: list, platforms: dict, **flags) -> dict:

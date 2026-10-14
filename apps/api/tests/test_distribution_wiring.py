@@ -421,7 +421,7 @@ def _preflight_patches(rss_service_mock):
         patch.object(generation_router.settings, "ENABLE_PLATFORM_DISTRIBUTION", True),
         patch.object(generation_router.settings, "ENABLE_DIRECT_PLATFORM_PUBLISH", False),
         patch.object(generation_router.settings, "AWS_S3_BUCKET", "test-bucket"),
-        patch("src.routers.generation.RSSGenerationService", rss_service_mock),
+        patch("src.services.distribution_plan.RSSGenerationService", rss_service_mock),
         patch("src.routers.generation.generate_podcast_task.apply_async"),
     )
 

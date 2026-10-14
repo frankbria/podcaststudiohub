@@ -8,9 +8,9 @@ status filtering, and generation status management. RLS ensures tenant isolation
 import asyncio
 import logging
 
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, cast, or_
+from sqlalchemy import select, func, cast, or_, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from uuid import UUID
@@ -26,7 +26,7 @@ from ..tasks.maintenance import drain_storage_deletion_outbox
 from ..config import settings
 from ..tasks.rss_refresh import refresh_project_rss_feed
 from ..tasks.podcast_generation import held_distribution_workflow
-from .distribution_target_service import active_platform_map
+from .distribution_plan import plan_platforms
 from .storage_service import StorageService
 from ..utils.datetime_utils import to_naive_utc
 
@@ -339,22 +339,44 @@ async def _release_held_audio(episode: Episode) -> None:
 		) from exc
 
 
+async def _claim_for_distribution(db: AsyncSession, episode_id: UUID, to_status: str, from_status: str) -> bool:
+	"""Move the episode between statuses only if nothing else moved it first."""
+	values = {"generation_status": to_status}
+	if to_status == "distributing":
+		# The reaper ages an in-flight status by task_started_at (#294).
+		values["task_started_at"] = datetime.now(timezone.utc)
+	claimed = await db.execute(
+		update(Episode)
+		.where(Episode.id == episode_id, Episode.generation_status == from_status)
+		.values(**values)
+	)
+	await db.commit()
+	return claimed.rowcount == 1
+
+
 async def _redispatch_held_distribution(db: AsyncSession, episode: Episode) -> None:
 	"""Run the platform distribution the hold skipped at generation time (#625).
 
-	Best effort: the episode is already approved and in the feed, so a broker
-	failure here is logged, not raised. Regenerating with distribution is the
-	way to retry.
+	The episode is first moved from 'complete' to 'distributing', as a full
+	run's chain does: a regeneration is then refused (409) until
+	on_workflow_complete settles the status, so this stage can never publish or
+	overwrite a newer generation. Best effort: the approval is already
+	committed, so a broker failure is logged and the status restored;
+	regenerating with distribution is the way to retry.
 	"""
 	if not (settings.ENABLE_PLATFORM_DISTRIBUTION and settings.AWS_S3_BUCKET):
 		return
-	platforms = await active_platform_map(db, episode)
-	if not platforms:
-		return
+	platforms, _ = await plan_platforms(db, episode, episode.user_id)
+	if platforms and await _claim_for_distribution(db, episode.id, "distributing", "complete"):
+		await _dispatch_or_release(db, episode, platforms)
+
+
+async def _dispatch_or_release(db: AsyncSession, episode: Episode, platforms: dict) -> None:
 	try:
 		held_distribution_workflow(str(episode.id), platforms).apply_async()
-	except Exception as exc:  # noqa: BLE001 — the approval is committed; whatever the broker raised must not turn a successful approval into an error
+	except Exception as exc:  # noqa: BLE001 — the approval is committed; whatever the broker raised must not turn a successful approval into an error, only undo the claim
 		logger.error("Episode %s: could not re-dispatch held distribution: %s", episode.id, exc)
+		await _claim_for_distribution(db, episode.id, "complete", "distributing")
 
 
 async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:

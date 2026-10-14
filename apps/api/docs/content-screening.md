@@ -55,7 +55,9 @@ trigger it.
 - Approval releases the episode to the RSS feed and, when the held generation
   had asked for platform distribution, re-dispatches that stage to the project's
   currently active targets (#625; `ENABLE_PLATFORM_DISTRIBUTION` and an S3 bucket
-  must still be set). The re-dispatch is best effort: if the task queue is
+  must still be set), with the same RSS pre-flight as generation. The episode is
+  `distributing` until the stage settles, so it cannot be regenerated meanwhile.
+  The re-dispatch is best effort: if the task queue is
   unreachable at that moment the approval still succeeds and the distribution is
   not retried; regenerate with distribution to run it.
 - Screening judges what the script *says*, not tone or framing: an injected

@@ -8,9 +8,8 @@ order. Five explicit branches cannot develop that kind of coupling.
 
 The provider strings are exactly the five ``tts_configurations.provider`` is
 constrained to, including ``gemini_multi`` with the underscore. podcastfy
-registered it as ``geminimulti``, which is the entire reason the rename shim at
-``src/routers/generation.py:53`` exists; nothing here needs it, so #543 can
-delete it.
+spelled it without one, which was the entire reason for the router's rename
+shim (removed in #623); nothing here needs it.
 """
 from src.engine.tts.base import TTSBackend, TTSError
 

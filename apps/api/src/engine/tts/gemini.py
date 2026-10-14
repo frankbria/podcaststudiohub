@@ -2,7 +2,7 @@
 
 The multi-speaker one is not a port. podcastfy pinned the literal
 ``en-US-Studio-MultiSpeaker`` in three places and its ``validate_parameters``
-actively *rejected* any other model (`tts/providers/geminimulti.py:335`), so the
+actively *rejected* any other model (in its multi-speaker provider), so the
 model was not merely a default — it was enforced. That Studio voice is now
 restricted, and Google's supported path is Gemini-TTS, which takes a different
 request shape: speakers are declared up front as aliases in a

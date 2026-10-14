@@ -30,13 +30,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/generation", tags=["Generation"])
 
-# INERT since #543: this translation was for podcastfy, whose provider registry
-# spelled the multi-speaker provider "geminimulti" (issue #217). The task now
-# reads the episode's stored TTS configuration itself and ignores tts_model and
-# conversation_config["text_to_speech"]. Removal needs generate_podcast split
-# first (cc 56), tracked in #623.
-_PODCASTFY_TTS_PROVIDER = {"gemini_multi": "geminimulti"}
-
 # Statuses from which a (re)generation may be started. Anything else means a run
 # is already in flight (queued/extracting/generating/uploading/composing/
 # distributing/…); starting a second run would race to write s3_url/s3_key/
@@ -46,70 +39,26 @@ _RESTARTABLE_STATUSES = frozenset(
     {"draft", "complete", "failed", "distribution_failed"}
 )
 
-
-def _podcastfy_tts_model(provider: str) -> str:
-    """Map a stored TTS provider name to podcastfy's expected provider key."""
-    return _PODCASTFY_TTS_PROVIDER.get(provider, provider)
-
-
-def _podcastfy_text_to_speech(provider: str, config: dict) -> dict:
-    """Translate a stored TTS config into podcastfy's ``text_to_speech`` schema.
-
-    The app persists a flat per-provider dict (``model`` plus ``voice_1``/
-    ``voice_2`` or ``voice_1_id``/``voice_2_id``), but podcastfy 0.4.1 reads
-    ``text_to_speech.<provider>.default_voices.{question,answer}`` and
-    ``text_to_speech.<provider>.model``. Without this mapping the user's voice/
-    model selection lands on keys podcastfy never reads and is silently ignored.
-    """
-    pf_provider = _podcastfy_tts_model(provider)
-    question = config.get("voice_1") or config.get("voice_1_id")
-    answer = config.get("voice_2") or config.get("voice_2_id")
-
-    provider_block: dict = {}
-    voices = {}
-    if question:
-        voices["question"] = question
-    if answer:
-        voices["answer"] = answer
-    if voices:
-        provider_block["default_voices"] = voices
-    if config.get("model"):
-        provider_block["model"] = config["model"]
-
-    return {"default_tts_model": pf_provider, pf_provider: provider_block}
+# File-backed sources (s3_key): the engine takes text, so these cannot be
+# generated from until extraction has finished.
+_FILE_SOURCE_TYPES = ("pdf", "file", "image")
+# Where url / youtube / text sources keep their raw value in source_data.
+_RAW_SOURCE_FIELD = {"url": "url", "youtube": "url", "text": "content"}
+_RSS_PLATFORM_NAMES = {"spotify": "Spotify", "apple_podcasts": "Apple Podcasts"}
 
 
-@router.post("/episodes/{episode_id}/generate", status_code=status.HTTP_202_ACCEPTED)
-async def generate_podcast(
-    episode_id: UUID,
-    enable_composition: bool = Query(
-        default=False,
-        description="Merge audio snippets after generation (requires ENABLE_AUDIO_COMPOSITION)",
-    ),
-    enable_distribution: bool = Query(
-        default=False,
-        description="Distribute to platforms after generation (requires ENABLE_PLATFORM_DISTRIBUTION)",
-    ),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Start podcast generation for an episode
-
-    Returns HTTP 202 Accepted with task ID for progress tracking
-    """
-    # Get episode, eager-loading the TTS/template config relationships so they
-    # can be resolved below without triggering lazy loads in the async context.
+async def _load_restartable_episode(db: AsyncSession, episode_id: UUID, tenant_id) -> Episode:
+    """The tenant's episode, or 404; 409 while a run is already in flight."""
+    # Eager-load the template relationships so they resolve without a lazy load
+    # in the async context.
     result = await db.execute(
         select(Episode)
         .where(
             Episode.id == episode_id,
-            Episode.tenant_id == current_user.tenant_id,
+            Episode.tenant_id == tenant_id,
         )
         .options(
-            joinedload(Episode.tts_config),
             joinedload(Episode.template),
-            joinedload(Episode.project).joinedload(Project.default_tts_config),
             joinedload(Episode.project).joinedload(Project.default_template),
         )
     )
@@ -118,9 +67,9 @@ async def generate_podcast(
     if not episode:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Episode not found")
 
-    # Reject if a run is already in flight: only draft/complete/failed episodes are
-    # restartable. Checked before any content assembly or dispatch so a duplicate
-    # submission cannot race the in-progress task (issue #214).
+    # Only draft/complete/failed episodes are restartable. Checked before any
+    # content assembly or dispatch so a duplicate submission cannot race the
+    # in-progress task (issue #214).
     if episode.generation_status not in _RESTARTABLE_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -130,8 +79,50 @@ async def generate_podcast(
                 "before submitting again."
             ),
         )
+    return episode
 
-    # Get content sources
+
+def _raw_source_value(source: ContentSource):
+    """The url or pasted text of a source whose extraction has not completed."""
+    if source.extraction_status != "complete":
+        logger.warning(
+            f"Content source {source.id} extraction_status="
+            f"'{source.extraction_status}' — falling back to source_data"
+        )
+    value = source.source_data.get(_RAW_SOURCE_FIELD.get(source.source_type))
+    if not (isinstance(value, str) and value.strip()):
+        return None
+    return value if source.source_type == "text" else value.strip()
+
+
+def _source_input(source: ContentSource) -> tuple:
+    """``(bucket, value)`` for one source: "text", "urls" or "unextracted".
+
+    Extracted content (from ContentExtractionService) is preferred over raw
+    source_data; YouTube URLs flow through ``urls``.
+    """
+    if source.extraction_status == "complete" and source.extracted_content:
+        logger.info(
+            f"Using extracted content for source {source.id} "
+            f"({source.source_type}, {len(source.extracted_content)} chars)"
+        )
+        return "text", source.extracted_content
+    if source.source_type in _FILE_SOURCE_TYPES:
+        return "unextracted", str(source.id)
+    return ("text" if source.source_type == "text" else "urls"), _raw_source_value(source)
+
+
+def _sort_sources(sources) -> dict:
+    buckets: dict = {"urls": [], "text": [], "unextracted": []}
+    for source in sources:
+        bucket, value = _source_input(source)
+        if value:
+            buckets[bucket].append(value)
+    return buckets
+
+
+async def _collect_generation_inputs(db: AsyncSession, episode_id: UUID) -> tuple:
+    """``(urls, text_content)`` from the episode's sources, or 400."""
     content_result = await db.execute(
         select(ContentSource).where(ContentSource.episode_id == episode_id)
     )
@@ -143,217 +134,211 @@ async def generate_podcast(
             detail="Episode must have at least one content source"
         )
 
-    # Prepare content data.
-    # Prefer extracted_content (from ContentExtractionService) over raw source_data.
-    # podcastfy 0.4.1 has no kwarg for file paths, so file/PDF sources MUST be
-    # pre-extracted into text; YouTube URLs flow through `urls`.
-    urls = []
-    text_content = []
-    unextracted_files = []
+    inputs = _sort_sources(content_sources)
 
-    for source in content_sources:
-        if source.extraction_status == "complete" and source.extracted_content:
-            # Use pre-extracted text for all extractable source types
-            text_content.append(source.extracted_content)
-            logger.info(
-                f"Using extracted content for source {source.id} "
-                f"({source.source_type}, {len(source.extracted_content)} chars)"
-            )
-        elif source.source_type in ("pdf", "file", "image"):
-            # File-backed sources (s3_key) without completed extraction cannot be
-            # generated: podcastfy cannot read the raw s3_key. Reject so the caller
-            # knows extraction must finish first (see HTTP 400 below).
-            unextracted_files.append(str(source.id))
-        else:
-            # url / youtube / text can fall back to raw source_data
-            if source.extraction_status != "complete":
-                logger.warning(
-                    f"Content source {source.id} extraction_status="
-                    f"'{source.extraction_status}' — falling back to source_data"
-                )
-            if source.source_type in ("url", "youtube"):
-                url = source.source_data.get("url")
-                if isinstance(url, str) and url.strip():
-                    urls.append(url.strip())
-            elif source.source_type == "text":
-                content = source.source_data.get("content")
-                if isinstance(content, str) and content.strip():
-                    text_content.append(content)
-
-    if unextracted_files:
+    if inputs["unextracted"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 "File sources must finish extraction before generation. "
-                f"Pending extraction for source(s): {', '.join(unextracted_files)}"
+                f"Pending extraction for source(s): {', '.join(inputs['unextracted'])}"
             ),
         )
 
     # Guard against queuing an empty job: every source may have been skipped above
     # (e.g. source_data mutated via the update path to drop its url/content key, which
     # is not re-validated). Without usable urls or text there is nothing to generate.
-    if not urls and not text_content:
+    if not inputs["urls"] and not inputs["text"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No usable content found in the episode's sources; nothing to generate.",
         )
+    return inputs["urls"], inputs["text"]
 
-    # Resolve composition / distribution flags against global feature settings.
-    # Per-request flags are only honoured when the feature is globally enabled.
-    use_composition = enable_composition and settings.ENABLE_AUDIO_COMPOSITION
-    use_distribution = enable_distribution and settings.ENABLE_PLATFORM_DISTRIBUTION
 
-    # Resolve the effective TTS config and conversation template: prefer the
-    # episode-level override, then fall back to the project default. Without this
-    # the task always used its default tts_model ('openai'), silently ignoring the
-    # user's selection (issue #217).
+def _conversation_config(episode: Episode):
+    """The effective conversation template's config: the episode's, else the
+    project default (issue #217), else None so the engine uses its defaults.
+
+    The TTS configuration is not sent: the task reads it from the episode row.
+    """
     project = episode.project
-    effective_tts = episode.tts_config or (project.default_tts_config if project else None)
-    effective_template = episode.template or (project.default_template if project else None)
+    template = episode.template or (project.default_template if project else None)
+    # config is JSONB, dict-validated on write (Pydantic); a non-dict value from
+    # the store degrades to "use defaults" instead of raising at dispatch time.
+    if template and isinstance(template.config, dict):
+        return dict(template.config)
+    return None
 
-    tts_model = _podcastfy_tts_model(effective_tts.provider) if effective_tts else None
 
-    conversation_config = None
-    if effective_template or effective_tts:
-        conversation_config = {}
-        # config columns are JSONB; they are dict-validated on write (Pydantic),
-        # but guard against a non-dict value from the store so a corrupt row
-        # degrades to "use defaults" instead of raising at dispatch time.
-        if effective_template and isinstance(effective_template.config, dict):
-            conversation_config.update(effective_template.config)
-        if effective_tts and isinstance(effective_tts.config, dict):
-            conversation_config["text_to_speech"] = _podcastfy_text_to_speech(
-                effective_tts.provider, effective_tts.config
-            )
+def _distribution_enabled(requested: bool, episode_id: UUID) -> bool:
+    """A per-request flag is only honoured when the feature is globally enabled.
 
-    # Only pass resolved config kwargs; omit them so the task keeps its defaults
-    # (tts_model='openai', conversation_config=None) for unconfigured episodes.
-    extra_kwargs = {}
-    if tts_model is not None:
-        extra_kwargs["tts_model"] = tts_model
-    if conversation_config is not None:
-        extra_kwargs["conversation_config"] = conversation_config
-
-    # Load active distribution targets and build the platforms mapping so the
-    # distribution stage actually fires (issue #211): the task gates distribution
-    # on `enable_distribution and bool(platforms)`, so without this the subsystem
-    # is unreachable. Configs stay encrypted here; the task decrypts them.
-    # Distribution requires a publicly reachable audio URL, i.e. an S3 bucket. With
-    # no bucket the workflow-chain path would schedule an invalid empty-bucket
-    # upload and fail the whole run, whereas the default finalization path degrades
-    # gracefully — so only enable distribution when a bucket is configured.
-    distribution_warnings: list[str] = []
-    if use_distribution and not settings.AWS_S3_BUCKET:
+    Distribution also requires a publicly reachable audio URL, i.e. an S3
+    bucket. With no bucket the workflow-chain path would schedule an invalid
+    empty-bucket upload and fail the whole run, whereas the default finalization
+    path degrades gracefully, so distribution is only enabled with a bucket.
+    """
+    enabled = requested and settings.ENABLE_PLATFORM_DISTRIBUTION
+    if enabled and not settings.AWS_S3_BUCKET:
         logger.warning(
             "Episode %s: distribution requested but AWS_S3_BUCKET is not configured "
             "— skipping distribution.",
             episode_id,
         )
-        use_distribution = False
+        return False
+    return enabled
 
-    if use_distribution:
-        active_targets = await get_active_distribution_targets_for_project(
-            db, episode.project_id
+
+async def _platform_map(db: AsyncSession, episode: Episode) -> dict:
+    """Platform type → (still encrypted) config for the project's active targets.
+
+    Without this the distribution stage is unreachable (issue #211): the task
+    gates it on ``enable_distribution and bool(platforms)``. The task decrypts
+    the configs.
+    """
+    active_targets = await get_active_distribution_targets_for_project(
+        db, episode.project_id
+    )
+    if not active_targets:
+        logger.info(
+            "Episode %s: distribution requested but no active targets for "
+            "project %s — skipping distribution.",
+            episode.id, episode.project_id,
         )
-        if active_targets:
-            # platforms is keyed by platform type (the task's contract), so it
-            # holds at most one config per type. When several active targets share
-            # a type, prefer the project-scoped one over an account-level
-            # (project_id IS NULL) target, then the newest — so an explicit project
-            # target always wins over a global default and we never publish to the
-            # wrong destination. Dropped same-type duplicates are logged rather than
-            # collapsed silently (multi-target-per-type distribution is a follow-up).
-            # The query returns newest-first; a stable sort by "is account-level"
-            # keeps project-scoped targets ahead while preserving newest-first order.
-            ordered_targets = sorted(active_targets, key=lambda t: t.project_id is None)
-            platforms: dict = {}
-            for target in ordered_targets:
-                if target.target_type in platforms:
-                    logger.warning(
-                        "Episode %s: multiple active %s targets apply to project %s; "
-                        "using the preferred target and skipping target %s.",
-                        episode_id, target.target_type, episode.project_id, target.id,
-                    )
-                    continue
-                platforms[target.target_type] = target.config
-
-            # RSS pre-flight (issue #378): under the RSS-feed model, the
-            # distribution task fails permanently for Spotify/Apple when the
-            # project has no generated feed. This router is async (unlike the
-            # sync Celery task), so auto-generating the feed here is one awaited
-            # service call. If it can't be generated (e.g. podcast metadata
-            # missing), skip those platforms and tell the caller instead of
-            # dispatching a guaranteed distribution_failed.
-            rss_platforms = [
-                p for p in ("spotify", "apple_podcasts") if p in platforms
-            ]
-            if rss_platforms and not settings.ENABLE_DIRECT_PLATFORM_PUBLISH:
-                rss_service = RSSGenerationService()
-                # The whole pre-flight is non-fatal: a failure here must skip
-                # the RSS-model platforms with a warning, never 500 the
-                # generation kickoff itself. It runs under a SAVEPOINT so a
-                # DB-level failure (e.g. the unique-RSSFeed race between two
-                # concurrent generations) aborts only the pre-flight work: a
-                # whole-session rollback would poison the later 'queued'
-                # commit path by expiring loaded instances (and, under the
-                # test harness's shared-session wrapping, wipe prior writes).
-                preflight_sp = await db.begin_nested()
-                try:
-                    feed = await rss_service.get_rss_feed(db, episode.project_id)
-                    if feed is None or not feed.public_url:
-                        await rss_service.generate_rss_for_project(
-                            db, episode.project_id, current_user.id
-                        )
-                        logger.info(
-                            "Episode %s: auto-generated missing RSS feed for "
-                            "project %s ahead of %s distribution.",
-                            episode_id, episode.project_id, ", ".join(rss_platforms),
-                        )
-                    # The service commits internally on success, consuming the
-                    # savepoint; release it only if it is still open.
-                    if preflight_sp.is_active:
-                        await preflight_sp.commit()
-                except Exception as exc:  # noqa: BLE001 — the savepoint must be rolled back and the RSS platforms dropped whatever failed, and only ValueError's message is user-safe — anything else stays internal so infrastructure details never leak
-                    if preflight_sp.is_active:
-                        await preflight_sp.rollback()
-                    for p in rss_platforms:
-                        del platforms[p]
-                    # ValueError carries a user-actionable validation message
-                    # (same contract as the RSS router's 422); anything else
-                    # stays internal so infrastructure details never leak.
-                    reason = (
-                        str(exc) if isinstance(exc, ValueError)
-                        else "feed generation failed unexpectedly"
-                    )
-                    display_names = {
-                        "spotify": "Spotify", "apple_podcasts": "Apple Podcasts"
-                    }
-                    skipped = " and ".join(
-                        display_names[p] for p in rss_platforms
-                    )
-                    distribution_warnings.append(
-                        f"Skipped {skipped} distribution: "
-                        "these platforms ingest episodes via the project's RSS "
-                        f"feed, which has not been generated and could not be "
-                        f"auto-generated ({reason}). Set the podcast metadata "
-                        "and generate the feed from the project's distribution "
-                        "page, then regenerate."
-                    )
-                    logger.warning(
-                        "Episode %s: RSS pre-flight failed for project %s; "
-                        "skipping %s distribution: %s",
-                        episode_id, episode.project_id,
-                        ", ".join(rss_platforms), exc,
-                    )
-            if platforms:
-                extra_kwargs["platforms"] = platforms
-        else:
-            logger.info(
-                "Episode %s: distribution requested but no active targets for "
-                "project %s — skipping distribution.",
-                episode_id, episode.project_id,
+        return {}
+    # platforms is keyed by platform type (the task's contract), so it
+    # holds at most one config per type. When several active targets share
+    # a type, prefer the project-scoped one over an account-level
+    # (project_id IS NULL) target, then the newest — so an explicit project
+    # target always wins over a global default and we never publish to the
+    # wrong destination. Dropped same-type duplicates are logged rather than
+    # collapsed silently (multi-target-per-type distribution is a follow-up).
+    # The query returns newest-first; a stable sort by "is account-level"
+    # keeps project-scoped targets ahead while preserving newest-first order.
+    platforms: dict = {}
+    for target in sorted(active_targets, key=lambda t: t.project_id is None):
+        if target.target_type in platforms:
+            logger.warning(
+                "Episode %s: multiple active %s targets apply to project %s; "
+                "using the preferred target and skipping target %s.",
+                episode.id, target.target_type, episode.project_id, target.id,
             )
+            continue
+        platforms[target.target_type] = target.config
+    return platforms
 
+
+def _rss_platforms(platforms: dict) -> list:
+    """The platforms that ingest through the project's RSS feed."""
+    if settings.ENABLE_DIRECT_PLATFORM_PUBLISH:
+        return []
+    return [p for p in _RSS_PLATFORM_NAMES if p in platforms]
+
+
+async def _ensure_rss_feed(db: AsyncSession, episode: Episode, user_id, rss_platforms: list) -> None:
+    rss_service = RSSGenerationService()
+    feed = await rss_service.get_rss_feed(db, episode.project_id)
+    if feed is None or not feed.public_url:
+        await rss_service.generate_rss_for_project(db, episode.project_id, user_id)
+        logger.info(
+            "Episode %s: auto-generated missing RSS feed for "
+            "project %s ahead of %s distribution.",
+            episode.id, episode.project_id, ", ".join(rss_platforms),
+        )
+
+
+async def _rss_preflight_error(db: AsyncSession, episode: Episode, user_id, rss_platforms: list):
+    """Make sure the project has a feed; return what went wrong, or None.
+
+    Non-fatal: a failure here must skip the RSS-model platforms with a
+    warning, never 500 the generation kickoff itself. It runs under a
+    SAVEPOINT so a DB-level failure (e.g. the unique-RSSFeed race between two
+    concurrent generations) aborts only the pre-flight work: a whole-session
+    rollback would poison the later 'queued' commit path by expiring loaded
+    instances (and, under the test harness's shared-session wrapping, wipe
+    prior writes).
+    """
+    preflight_sp = await db.begin_nested()
+    try:
+        await _ensure_rss_feed(db, episode, user_id, rss_platforms)
+        # The service commits internally on success, consuming the
+        # savepoint; release it only if it is still open.
+        if preflight_sp.is_active:
+            await preflight_sp.commit()
+        return None
+    except Exception as exc:  # noqa: BLE001 — the savepoint must be rolled back and the RSS platforms dropped whatever failed, and only ValueError's message is user-safe — anything else stays internal so infrastructure details never leak
+        if preflight_sp.is_active:
+            await preflight_sp.rollback()
+        return exc
+
+
+def _skip_rss_platforms(platforms: dict, rss_platforms: list, exc: Exception, episode: Episode) -> str:
+    """Drop the RSS-model platforms and return the warning for the caller."""
+    for p in rss_platforms:
+        del platforms[p]
+    # ValueError carries a user-actionable validation message
+    # (same contract as the RSS router's 422); anything else
+    # stays internal so infrastructure details never leak.
+    reason = (
+        str(exc) if isinstance(exc, ValueError)
+        else "feed generation failed unexpectedly"
+    )
+    skipped = " and ".join(_RSS_PLATFORM_NAMES[p] for p in rss_platforms)
+    logger.warning(
+        "Episode %s: RSS pre-flight failed for project %s; "
+        "skipping %s distribution: %s",
+        episode.id, episode.project_id,
+        ", ".join(rss_platforms), exc,
+    )
+    return (
+        f"Skipped {skipped} distribution: "
+        "these platforms ingest episodes via the project's RSS "
+        f"feed, which has not been generated and could not be "
+        f"auto-generated ({reason}). Set the podcast metadata "
+        "and generate the feed from the project's distribution "
+        "page, then regenerate."
+    )
+
+
+async def _distribution_plan(db: AsyncSession, episode: Episode, user_id, requested: bool) -> tuple:
+    """``(enable_distribution, platforms, warnings)`` for this run."""
+    if not _distribution_enabled(requested, episode.id):
+        return False, {}, []
+    platforms = await _platform_map(db, episode)
+    # RSS pre-flight (issue #378): under the RSS-feed model, the distribution
+    # task fails permanently for Spotify/Apple when the project has no
+    # generated feed. This router is async (unlike the sync Celery task), so
+    # auto-generating the feed here is one awaited service call. If it can't be
+    # generated (e.g. podcast metadata missing), skip those platforms and tell
+    # the caller instead of dispatching a guaranteed distribution_failed.
+    rss_platforms = _rss_platforms(platforms)
+    if not rss_platforms:
+        return True, platforms, []
+    exc = await _rss_preflight_error(db, episode, user_id, rss_platforms)
+    if exc is None:
+        return True, platforms, []
+    return True, platforms, [_skip_rss_platforms(platforms, rss_platforms, exc, episode)]
+
+
+def _task_kwargs(episode: Episode, urls: list, text_content: list, platforms: dict, **flags) -> dict:
+    """Only resolved config is passed; omitted kwargs keep the task's defaults."""
+    kwargs = {
+        "episode_id": str(episode.id),
+        "urls": urls or None,
+        "text_content": "\n\n".join(text_content) if text_content else None,
+        **flags,
+    }
+    conversation_config = _conversation_config(episode)
+    if conversation_config is not None:
+        kwargs["conversation_config"] = conversation_config
+    if platforms:
+        kwargs["platforms"] = platforms
+    return kwargs
+
+
+async def _enqueue_generation(db: AsyncSession, episode: Episode, task_kwargs: dict) -> str:
+    """Mark the episode queued, dispatch the task, and return its id (or 503)."""
     # Commit 'queued' BEFORE dispatch so the worker's #295 idempotency guard never
     # observes the pre-regeneration status (e.g. 'complete') and skip a legitimate
     # run. The task id is pre-generated and passed to apply_async so the status can
@@ -380,17 +365,10 @@ async def generate_podcast(
     # of leaving it stuck at 'queued' forever (issue #294).
     try:
         generate_podcast_task.apply_async(
-            kwargs={
-                "episode_id": str(episode_id),
-                "urls": urls if urls else None,
-                "text_content": "\n\n".join(text_content) if text_content else None,
-                "enable_composition": use_composition,
-                "enable_distribution": use_distribution,
-                **extra_kwargs,
-            },
+            kwargs=task_kwargs,
             task_id=new_task_id,
             link_error=on_workflow_failure.s(
-                episode_id=str(episode_id), task_name="generate_podcast"
+                episode_id=str(episode.id), task_name="generate_podcast"
             ),
         )
     except Exception as exc:  # noqa: BLE001 — the episode was already committed as 'queued', so any enqueue failure must restore the prior restartable status; leaving it queued would strand it until the reaper (#295)
@@ -398,7 +376,7 @@ async def generate_podcast(
         # the prior restartable status so the episode is immediately retryable and a
         # still-valid 'complete' episode stays downloadable — not stuck 'queued'
         # until the reaper, nor wrongly marked 'failed' (issue #295).
-        logger.error("Failed to enqueue generation for episode %s: %s", episode_id, exc)
+        logger.error("Failed to enqueue generation for episode %s: %s", episode.id, exc)
         episode.generation_status = prior_status
         episode.generation_progress = prior_progress
         episode.task_started_at = None
@@ -407,6 +385,43 @@ async def generate_podcast(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Could not start generation (task queue unavailable); please retry.",
         )
+    return new_task_id
+
+
+@router.post("/episodes/{episode_id}/generate", status_code=status.HTTP_202_ACCEPTED)
+async def generate_podcast(
+    episode_id: UUID,
+    enable_composition: bool = Query(
+        default=False,
+        description="Merge audio snippets after generation (requires ENABLE_AUDIO_COMPOSITION)",
+    ),
+    enable_distribution: bool = Query(
+        default=False,
+        description="Distribute to platforms after generation (requires ENABLE_PLATFORM_DISTRIBUTION)",
+    ),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Start podcast generation for an episode
+
+    Returns HTTP 202 Accepted with task ID for progress tracking
+    """
+    episode = await _load_restartable_episode(db, episode_id, current_user.tenant_id)
+    urls, text_content = await _collect_generation_inputs(db, episode_id)
+    use_distribution, platforms, distribution_warnings = await _distribution_plan(
+        db, episode, current_user.id, enable_distribution
+    )
+    new_task_id = await _enqueue_generation(
+        db,
+        episode,
+        _task_kwargs(
+            episode, urls, text_content, platforms,
+            # Per-request flags are only honoured when the feature is globally enabled.
+            enable_composition=enable_composition and settings.ENABLE_AUDIO_COMPOSITION,
+            enable_distribution=use_distribution,
+        ),
+    )
 
     response = {
         "episode_id": str(episode_id),

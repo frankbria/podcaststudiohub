@@ -716,7 +716,6 @@ def generate_podcast_task(
     text_content: Optional[str] = None,
     image_paths: Optional[List[str]] = None,
     topic: Optional[str] = None,
-    tts_model: str = "openai",
     conversation_config: Optional[Dict[str, Any]] = None,
     longform: bool = False,
     enable_composition: bool = False,
@@ -740,8 +739,6 @@ def generate_podcast_task(
         text_content: Raw text content (also carries pre-extracted file/PDF content)
         image_paths: List of image file paths
         topic: Topic for content generation (uses web search)
-        tts_model: Accepted and ignored: the router still sends it (#623). The
-            engine reads the episode's stored TTS configuration itself
         conversation_config: Custom conversation configuration
         longform: Whether to generate long-form content
         enable_composition: Whether to merge audio snippets after generation

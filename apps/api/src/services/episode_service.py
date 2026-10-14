@@ -339,22 +339,30 @@ async def _release_held_audio(episode: Episode) -> None:
 		) from exc
 
 
-async def _claim_for_distribution(db: AsyncSession, episode_id: UUID, to_status: str, from_status: str) -> bool:
-	"""Move the episode between statuses only if nothing else moved it first."""
+async def _claim_for_distribution(
+	db: AsyncSession, episode_id: UUID, to_status: str, from_status: str, generation: Optional[str]
+) -> bool:
+	"""Move the episode between statuses only if nothing else moved it first,
+	and only while it still holds the approved generation (its celery_task_id)."""
 	values = {"generation_status": to_status}
 	if to_status == "distributing":
 		# The reaper ages an in-flight status by task_started_at (#294).
 		values["task_started_at"] = datetime.now(timezone.utc)
 	claimed = await db.execute(
 		update(Episode)
-		.where(Episode.id == episode_id, Episode.generation_status == from_status)
+		.where(
+			Episode.id == episode_id,
+			Episode.generation_status == from_status,
+			Episode.generation_progress["celery_task_id"].astext == generation,
+		)
 		.values(**values)
+		.execution_options(synchronize_session=False)
 	)
 	await db.commit()
 	return claimed.rowcount == 1
 
 
-async def _redispatch_held_distribution(db: AsyncSession, episode: Episode) -> None:
+async def _redispatch_held_distribution(db: AsyncSession, episode: Episode, generation: Optional[str]) -> None:
 	"""Run the platform distribution the hold skipped at generation time (#625).
 
 	Best effort: the approval is already committed and cannot be repeated (it
@@ -362,7 +370,7 @@ async def _redispatch_held_distribution(db: AsyncSession, episode: Episode) -> N
 	Regenerating with distribution is the way to retry.
 	"""
 	try:
-		await _plan_claim_and_dispatch(db, episode)
+		await _plan_claim_and_dispatch(db, episode, generation)
 	except Exception as exc:  # noqa: BLE001 — the approval is committed; a planning or claim failure (DB, feed service) must leave it intact, roll back only this work, and be logged
 		logger.error("Episode %s: could not re-dispatch held distribution: %s", episode.id, exc)
 		await db.rollback()
@@ -370,28 +378,30 @@ async def _redispatch_held_distribution(db: AsyncSession, episode: Episode) -> N
 		await db.refresh(episode)
 
 
-async def _plan_claim_and_dispatch(db: AsyncSession, episode: Episode) -> None:
+async def _plan_claim_and_dispatch(db: AsyncSession, episode: Episode, generation: Optional[str]) -> None:
 	"""Dispatch the distribution stage once the episode is claimed.
 
 	The episode is first moved from 'complete' to 'distributing', as a full
 	run's chain does: a regeneration is then refused (409) until
 	on_workflow_complete settles the status, so this stage can never publish or
 	overwrite a newer generation. Generation re-checks the status under a row
-	lock before it writes 'queued', so the two cannot both proceed.
+	lock before it writes 'queued', so the two cannot both proceed, and the
+	claim names the approved run, so a newer run that has already completed
+	again is not claimed either.
 	"""
 	if not (settings.ENABLE_PLATFORM_DISTRIBUTION and settings.AWS_S3_BUCKET):
 		return
 	platforms, _ = await plan_platforms(db, episode, episode.user_id)
-	if platforms and await _claim_for_distribution(db, episode.id, "distributing", "complete"):
-		await _dispatch_or_release(db, episode, platforms)
+	if platforms and await _claim_for_distribution(db, episode.id, "distributing", "complete", generation):
+		await _dispatch_or_release(db, episode, platforms, generation)
 
 
-async def _dispatch_or_release(db: AsyncSession, episode: Episode, platforms: dict) -> None:
+async def _dispatch_or_release(db: AsyncSession, episode: Episode, platforms: dict, generation: Optional[str]) -> None:
 	try:
 		held_distribution_workflow(str(episode.id), platforms).apply_async()
 	except Exception as exc:  # noqa: BLE001 — the approval is committed; whatever the broker raised must not turn a successful approval into an error, only undo the claim
 		logger.error("Episode %s: could not dispatch held distribution: %s", episode.id, exc)
-		await _claim_for_distribution(db, episode.id, "complete", "distributing")
+		await _claim_for_distribution(db, episode.id, "complete", "distributing", generation)
 
 
 async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
@@ -428,7 +438,7 @@ async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
 	# Synchronous and documented never to raise, so it runs off the event loop.
 	await asyncio.to_thread(refresh_project_rss_feed, episode.project_id, episode.user_id)
 	if progress.get("distribution_held"):
-		await _redispatch_held_distribution(db, episode)
+		await _redispatch_held_distribution(db, episode, progress.get("celery_task_id"))
 	return episode
 
 

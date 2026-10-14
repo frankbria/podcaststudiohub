@@ -2265,7 +2265,7 @@ async def test_approving_a_held_episode_releases_it_and_refreshes_the_feed(
 
 async def _held_distribution_approval(
 	client, project_and_auth, set_system_fields, monkeypatch, *,
-	held=True, enabled=True, target="webhook", rss_service=None, dispatch_error=None,
+	held=True, enabled=True, target="webhook", rss_service=None, dispatch_error=None, generation="the-held-run",
 ):
 	"""Approve a flagged episode in a project with one active target; return
 	``(episode, mocked re-dispatch workflow factory)`` after the approval."""
@@ -2277,7 +2277,9 @@ async def _held_distribution_approval(
 	episode_id = await _flagged_episode(client, headers, project_id, set_system_fields)
 	if held:
 		current = (await client.get(f"/episodes/{episode_id}", headers=headers)).json()["generation_progress"]
-		await set_system_fields(episode_id, generation_progress={**current, "distribution_held": True})
+		await set_system_fields(
+			episode_id, generation_progress={**current, "distribution_held": True, "celery_task_id": generation}
+		)
 	if target == "webhook":
 		created = await client.post("/distribution-targets/webhook", headers=headers, json={
 			"name": "Hook", "url": "https://hook.example.com/publish", "method": "POST",
@@ -2373,6 +2375,41 @@ async def test_a_planning_failure_still_approves_and_leaves_the_episode_complete
 
 	workflow.assert_not_called()
 	assert episode["generation_progress"]["content_review"] == "approved"
+	assert episode["generation_status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_a_newer_generation_is_never_claimed_by_an_older_approval(
+	client, project_and_auth, set_system_fields, monkeypatch, test_db
+):
+	"""If another run replaced the approved one while approval was planning,
+	the claim names the approved run's task id and so does not match."""
+	from unittest.mock import patch
+
+	from sqlalchemy import cast, update
+	from sqlalchemy.dialects.postgresql import JSONB
+
+	from src.models.episode import Episode
+	from src.services import distribution_plan
+
+	real_plan = distribution_plan.plan_platforms
+
+	async def replaced_meanwhile(db, episode, user_id):
+		await test_db.execute(
+			update(Episode).where(Episode.id == episode.id).values(
+				generation_progress=Episode.generation_progress.op("||")(
+					cast({"celery_task_id": "a-newer-run"}, JSONB)
+				)
+			).execution_options(synchronize_session=False)
+		)
+		return await real_plan(db, episode, user_id)
+
+	with patch("src.services.episode_service.plan_platforms", replaced_meanwhile):
+		episode, workflow = await _held_distribution_approval(
+			client, project_and_auth, set_system_fields, monkeypatch, generation="the-held-run"
+		)
+
+	workflow.assert_not_called()
 	assert episode["generation_status"] == "complete"
 
 

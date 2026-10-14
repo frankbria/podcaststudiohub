@@ -368,10 +368,14 @@ function EpisodeList({ episodes, onCreate, ...actions }: EpisodeListProps) {
       />
     )
   }
-  function renderCard(episode: Episode) {
-    return <EpisodeCard key={episode.id} episode={episode} {...actions} />
-  }
-  return <div className="space-y-4">{episodes.map(renderCard)}</div>
+  const cards = episodes.map((episode) => episodeCard(episode, actions))
+  return <div className="space-y-4">{cards}</div>
+}
+
+function episodeCard(episode: Episode, actions: EpisodeActions) {
+  return (
+    <EpisodeCard key={episode.id} episode={episode} onEdit={actions.onEdit} onDelete={actions.onDelete} />
+  )
 }
 
 interface EpisodeCardProps extends EpisodeActions {

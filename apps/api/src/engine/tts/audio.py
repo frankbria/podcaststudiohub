@@ -44,11 +44,12 @@ def concat_to_mp3(segments: Iterable[bytes], workdir: Path, name: str) -> Path:
     if count == 0:
         raise TTSError("No audio was produced for this script")
 
+    # pydub opens the output path itself and returns that handle unclosed (#653).
     combined.export(
         output,
         format="mp3",
         bitrate=settings.ENGINE_AUDIO_BITRATE,
-    )
+    ).close()
     logger.info("Assembled %d audio segments into %s", count, output)
     return output
 

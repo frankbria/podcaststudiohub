@@ -55,27 +55,35 @@ class ElevenLabsTTS:
         if not turns:
             raise TTSError("Script has no speakable turns")
 
-        client = ElevenLabs(api_key=settings.ELEVENLABS_API_KEY)
         model = _dialogue_model(voices.model)
 
-        segments = []
-        for batch in batch_turns(
-            turns,
-            settings.ENGINE_ELEVENLABS_CHAR_LIMIT,
-            size=lambda turn: len(turn[2]),
-        ):
-            inputs = [
-                elevenlabs.DialogueInput(
-                    text=text, voice_id=voices.voice_for(speaker)
-                )
-                for _, speaker, text in batch
+        # The SDK client has no close(); handing it an httpx client we own lets
+        # its connection pool be closed here instead of by the GC (#653). The
+        # timeout and redirects are the SDK's own defaults.
+        with httpx.Client(timeout=240, follow_redirects=True) as http:
+            client = ElevenLabs(api_key=settings.ELEVENLABS_API_KEY, httpx_client=http)
+            segments = [
+                with_retries(lambda: _render_dialogue(client, inputs, model))
+                for inputs in _dialogue_batches(turns, voices)
             ]
-            segments.append(with_retries(lambda: _render_dialogue(client, inputs, model)))
 
         logger.info(
             "Synthesised %d turns as %d dialogue request(s)", len(turns), len(segments)
         )
         return concat_to_mp3(segments, workdir, "episode.mp3")
+
+
+def _dialogue_batches(turns, voices: VoiceConfig) -> Iterator[list]:
+    """The turns as Text-to-Dialogue inputs, in requests under the character limit."""
+    for batch in batch_turns(
+        turns,
+        settings.ENGINE_ELEVENLABS_CHAR_LIMIT,
+        size=lambda turn: len(turn[2]),
+    ):
+        yield [
+            elevenlabs.DialogueInput(text=text, voice_id=voices.voice_for(speaker))
+            for _, speaker, text in batch
+        ]
 
 
 def _render_dialogue(client, inputs, model: str) -> bytes:

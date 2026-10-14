@@ -1521,3 +1521,28 @@ def test_a_present_but_empty_language_code_falls_back_to_the_default():
     )
 
     assert voices.language_code == "en-US"
+
+
+def test_elevenlabs_closes_its_http_client_after_synthesis(workdir):
+    """The SDK client has no close(); the backend owns the httpx client it is
+    given, so its connection pool is closed, not left for the GC (#653)."""
+    client = MagicMock()
+    client.text_to_dialogue.convert.return_value = iter([MP3])
+    with patch("src.engine.tts.elevenlabs.ElevenLabs", return_value=client) as factory:
+        synthesise("elevenlabs", SCRIPT, ELEVEN_CONFIG, workdir)
+
+    http = factory.call_args.kwargs["httpx_client"]
+    assert http.is_closed
+
+
+def test_the_exported_file_handle_is_closed(workdir, _fake_pydub):
+    """pydub's export returns the file it opened for the path, still open (#653)."""
+    handle = MagicMock()
+    _fake_pydub.empty.return_value.export.side_effect = None
+    _fake_pydub.empty.return_value.export.return_value = handle
+
+    from src.engine.tts.audio import concat_to_mp3
+
+    concat_to_mp3([MP3], workdir, "episode.mp3")
+
+    handle.close.assert_called_once_with()

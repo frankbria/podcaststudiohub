@@ -26,9 +26,6 @@ from tests.unit.test_engine_tts import EDGE_CONFIG, ELEVEN_CONFIG, SCRIPT
 
 pytestmark = [
     pytest.mark.live_tts,
-    # The ElevenLabs SDK client has no close(); its real socket is reclaimed by
-    # the GC, which pytest reports as an unraisable ResourceWarning.
-    pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning"),
     pytest.mark.skipif(
         os.getenv("RUN_LIVE_TTS_TESTS") != "1",
         reason="opt-in: set RUN_LIVE_TTS_TESTS=1 and supply a working provider key",
@@ -40,9 +37,13 @@ def test_live_elevenlabs_dialogue(tmp_path):
     # ELEVEN_CONFIG's voiceA/voiceB are the fakes' placeholders; the real API
     # rejects them before Text-to-Dialogue runs. Any two of the account's
     # voices will do, and a key scoped to TTS + voices_read can list them.
+    import httpx
     from elevenlabs.client import ElevenLabs
 
-    voices = ElevenLabs(api_key=settings.ELEVENLABS_API_KEY).voices.search(page_size=2).voices
+    # Its own httpx client, closed here: the SDK client has no close() (#653).
+    with httpx.Client() as http:
+        account = ElevenLabs(api_key=settings.ELEVENLABS_API_KEY, httpx_client=http)
+        voices = account.voices.search(page_size=2).voices
     assert len(voices) == 2, "the ElevenLabs account needs at least two voices"
     config = {**ELEVEN_CONFIG, "voice_1_id": voices[0].voice_id, "voice_2_id": voices[1].voice_id}
 

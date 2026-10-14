@@ -365,6 +365,45 @@ async def get_active_distribution_targets_for_project(
 	return list(result.scalars().all())
 
 
+async def active_platform_map(db: AsyncSession, episode) -> dict:
+	"""Platform type → (still encrypted) config for the project's active targets.
+
+	Without this the distribution stage is unreachable (issue #211): the task
+	gates it on ``enable_distribution and bool(platforms)``. The task decrypts
+	the configs. Shared by generation and by approval's re-dispatch (#625).
+	"""
+	active_targets = await get_active_distribution_targets_for_project(
+		db, episode.project_id
+	)
+	if not active_targets:
+		logger.info(
+			"Episode %s: distribution requested but no active targets for "
+			"project %s — skipping distribution.",
+			episode.id, episode.project_id,
+		)
+		return {}
+	# platforms is keyed by platform type (the task's contract), so it
+	# holds at most one config per type. When several active targets share
+	# a type, prefer the project-scoped one over an account-level
+	# (project_id IS NULL) target, then the newest — so an explicit project
+	# target always wins over a global default and we never publish to the
+	# wrong destination. Dropped same-type duplicates are logged rather than
+	# collapsed silently (multi-target-per-type distribution is a follow-up).
+	# The query returns newest-first; a stable sort by "is account-level"
+	# keeps project-scoped targets ahead while preserving newest-first order.
+	platforms: dict = {}
+	for target in sorted(active_targets, key=lambda t: t.project_id is None):
+		if target.target_type in platforms:
+			logger.warning(
+				"Episode %s: multiple active %s targets apply to project %s; "
+				"using the preferred target and skipping target %s.",
+				episode.id, target.target_type, episode.project_id, target.id,
+			)
+			continue
+		platforms[target.target_type] = target.config
+	return platforms
+
+
 async def get_distribution_target_by_id(
 	db: AsyncSession,
 	target_id: UUID,

@@ -48,9 +48,12 @@ trigger it.
 
 ## Known limits
 
-- Approval releases the episode to the **RSS feed**. Platform distribution that
-  was skipped is not re-dispatched automatically (platform distribution is off by
-  default, `ENABLE_PLATFORM_DISTRIBUTION=False`); tracked in #625.
+- Approval releases the episode to the RSS feed and, when the held generation
+  had asked for platform distribution, re-dispatches that stage to the project's
+  currently active targets (#625; `ENABLE_PLATFORM_DISTRIBUTION` and an S3 bucket
+  must still be set). The re-dispatch is best effort: if the task queue is
+  unreachable at that moment the approval still succeeds and the distribution is
+  not retried; regenerate with distribution to run it.
 - Screening judges what the script *says*, not tone or framing: an injected
   argument without a domain or a promotional phrase is not caught. A domain spelled
   out for speech ("evil dot example") is not matched either.

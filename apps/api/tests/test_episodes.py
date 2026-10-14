@@ -2263,6 +2263,61 @@ async def test_approving_a_held_episode_releases_it_and_refreshes_the_feed(
 	refresh.assert_called_once()
 
 
+async def _held_distribution_approval(client, project_and_auth, set_system_fields, monkeypatch, *, held=True, enabled=True):
+	"""Approve a flagged episode in a project with one active webhook target;
+	return the mocked re-dispatch workflow factory."""
+	from unittest.mock import AsyncMock, patch
+
+	from src.config import settings
+
+	project_id, headers = project_and_auth
+	episode_id = await _flagged_episode(client, headers, project_id, set_system_fields)
+	if held:
+		current = (await client.get(f"/episodes/{episode_id}", headers=headers)).json()["generation_progress"]
+		await set_system_fields(episode_id, generation_progress={**current, "distribution_held": True})
+	target = await client.post("/distribution-targets/webhook", headers=headers, json={
+		"name": "Hook", "url": "https://hook.example.com/publish", "method": "POST",
+		"headers": {}, "project_id": project_id,
+	})
+	assert target.status_code == 201, target.text
+	monkeypatch.setattr(settings, "ENABLE_PLATFORM_DISTRIBUTION", enabled)
+	monkeypatch.setattr(settings, "AWS_S3_BUCKET", "bucket")
+
+	with patch("src.services.episode_service.refresh_project_rss_feed"), patch(
+		"src.services.episode_service.StorageService"
+	) as storage, patch("src.services.episode_service.held_distribution_workflow") as workflow:
+		storage.return_value.clear_content_review_hold = AsyncMock()
+		response = await client.post(f"/episodes/{episode_id}/content-review/approve", headers=headers)
+
+	assert response.status_code == 200, response.text
+	return episode_id, workflow
+
+
+@pytest.mark.asyncio
+async def test_approving_redispatches_the_distribution_the_hold_skipped(
+	client, project_and_auth, set_system_fields, monkeypatch
+):
+	"""#625: approval used to release the episode to the RSS feed only."""
+	episode_id, workflow = await _held_distribution_approval(client, project_and_auth, set_system_fields, monkeypatch)
+
+	(dispatched_id, platforms), _ = workflow.call_args
+	assert dispatched_id == episode_id
+	assert platforms["webhook"]["url"] == "https://hook.example.com/publish"
+	workflow.return_value.apply_async.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("held,enabled", [(False, True), (True, False)])
+async def test_approving_distributes_nothing_that_was_not_held_or_is_switched_off(
+	client, project_and_auth, set_system_fields, monkeypatch, held, enabled
+):
+	_, workflow = await _held_distribution_approval(
+		client, project_and_auth, set_system_fields, monkeypatch, held=held, enabled=enabled
+	)
+
+	workflow.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_approving_an_episode_with_nothing_to_review_is_a_conflict(
 	client, project_and_auth

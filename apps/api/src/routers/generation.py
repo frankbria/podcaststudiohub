@@ -19,9 +19,7 @@ from ..models.project import Project
 from ..models.content_source import ContentSource
 from ..models.user import User
 from ..dependencies import get_current_user
-from ..services.distribution_target_service import (
-    get_active_distribution_targets_for_project,
-)
+from ..services.distribution_target_service import active_platform_map
 from ..services.rss_generation_service import RSSGenerationService
 from ..tasks.podcast_generation import generate_podcast_task
 from ..tasks.callbacks import on_workflow_failure
@@ -190,45 +188,6 @@ def _distribution_enabled(requested: bool, episode_id: UUID) -> bool:
     return enabled
 
 
-async def _platform_map(db: AsyncSession, episode: Episode) -> dict:
-    """Platform type → (still encrypted) config for the project's active targets.
-
-    Without this the distribution stage is unreachable (issue #211): the task
-    gates it on ``enable_distribution and bool(platforms)``. The task decrypts
-    the configs.
-    """
-    active_targets = await get_active_distribution_targets_for_project(
-        db, episode.project_id
-    )
-    if not active_targets:
-        logger.info(
-            "Episode %s: distribution requested but no active targets for "
-            "project %s — skipping distribution.",
-            episode.id, episode.project_id,
-        )
-        return {}
-    # platforms is keyed by platform type (the task's contract), so it
-    # holds at most one config per type. When several active targets share
-    # a type, prefer the project-scoped one over an account-level
-    # (project_id IS NULL) target, then the newest — so an explicit project
-    # target always wins over a global default and we never publish to the
-    # wrong destination. Dropped same-type duplicates are logged rather than
-    # collapsed silently (multi-target-per-type distribution is a follow-up).
-    # The query returns newest-first; a stable sort by "is account-level"
-    # keeps project-scoped targets ahead while preserving newest-first order.
-    platforms: dict = {}
-    for target in sorted(active_targets, key=lambda t: t.project_id is None):
-        if target.target_type in platforms:
-            logger.warning(
-                "Episode %s: multiple active %s targets apply to project %s; "
-                "using the preferred target and skipping target %s.",
-                episode.id, target.target_type, episode.project_id, target.id,
-            )
-            continue
-        platforms[target.target_type] = target.config
-    return platforms
-
-
 def _rss_platforms(platforms: dict) -> list:
     """The platforms that ingest through the project's RSS feed."""
     if settings.ENABLE_DIRECT_PLATFORM_PUBLISH:
@@ -305,7 +264,7 @@ async def _distribution_plan(db: AsyncSession, episode: Episode, user_id, reques
     """``(enable_distribution, platforms, warnings)`` for this run."""
     if not _distribution_enabled(requested, episode.id):
         return False, {}, []
-    platforms = await _platform_map(db, episode)
+    platforms = await active_platform_map(db, episode)
     # RSS pre-flight (issue #378): under the RSS-feed model, the distribution
     # task fails permanently for Spotify/Apple when the project has no
     # generated feed. This router is async (unlike the sync Celery task), so

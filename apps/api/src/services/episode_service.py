@@ -25,6 +25,8 @@ from ..schemas.episode import EpisodeCreate, EpisodeUpdate, BatchEpisodeCreate
 from ..tasks.maintenance import drain_storage_deletion_outbox
 from ..config import settings
 from ..tasks.rss_refresh import refresh_project_rss_feed
+from ..tasks.podcast_generation import held_distribution_workflow
+from .distribution_target_service import active_platform_map
 from .storage_service import StorageService
 from ..utils.datetime_utils import to_naive_utc
 
@@ -337,6 +339,24 @@ async def _release_held_audio(episode: Episode) -> None:
 		) from exc
 
 
+async def _redispatch_held_distribution(db: AsyncSession, episode: Episode) -> None:
+	"""Run the platform distribution the hold skipped at generation time (#625).
+
+	Best effort: the episode is already approved and in the feed, so a broker
+	failure here is logged, not raised. Regenerating with distribution is the
+	way to retry.
+	"""
+	if not (settings.ENABLE_PLATFORM_DISTRIBUTION and settings.AWS_S3_BUCKET):
+		return
+	platforms = await active_platform_map(db, episode)
+	if not platforms:
+		return
+	try:
+		held_distribution_workflow(str(episode.id), platforms).apply_async()
+	except Exception as exc:  # noqa: BLE001 — the approval is committed; whatever the broker raised must not turn a successful approval into an error
+		logger.error("Episode %s: could not re-dispatch held distribution: %s", episode.id, exc)
+
+
 async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
 	"""Release an episode held by output screening for publication (#576).
 
@@ -370,6 +390,8 @@ async def approve_content_review(db: AsyncSession, episode: Episode) -> Episode:
 	await db.commit()
 	# Synchronous and documented never to raise, so it runs off the event loop.
 	await asyncio.to_thread(refresh_project_rss_feed, episode.project_id, episode.user_id)
+	if progress.get("distribution_held"):
+		await _redispatch_held_distribution(db, episode)
 	return episode
 
 

@@ -1011,3 +1011,21 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
 - **Clear a stranded backlog before the fix deploys,** or the fixed worker runs
   every stale copy. Purge script: dry run, then apply only after re-confirming
   the queue holds nothing but idempotent sweeps; keep real user jobs.
+
+## #649 — the dev worker could not read a single row (PR #650)
+
+- **FORCE RLS fails as "no rows", not as an error.** The worker ran as
+  `podcastfy_app` with no `app.tenant_id`, so every task read returned nothing and
+  surfaced as "not found". Local and CI never showed it: there `DATABASE_URL` is
+  the superuser. A fact about "the worker's role" is a fact about one
+  environment's `.env`; check the deployed one (`pg_stat_activity`).
+- **#560 was hiding it.** Until the worker consumed its queues, no task ran long
+  enough to hit RLS. Fixing one layer of a dead pipeline exposes the next; run a
+  real task end to end before calling the pipeline fixed.
+- **A role-creating migration must work for a non-superuser owner.** 020 creates
+  `podcastfy_worker` only when it runs as a superuser; elsewhere a DBA step
+  pre-creates it, and both CI workflows do that step, so the "dev privilege
+  model" job tests the path the server takes.
+- **Close on the user-visible proof.** The 11 extractions stranded since July
+  were re-dispatched after the deploy and all completed; that, not the green CI,
+  is what showed tasks can read rows.

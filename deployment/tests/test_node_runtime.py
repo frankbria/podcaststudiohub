@@ -134,3 +134,60 @@ def test_prelude_falls_back_to_an_installed_node_when_install_fails(tmp_path):
 	assert r.returncode == 0, r.stderr
 	assert "NPM_RAN" in r.stdout
 	assert (tmp_path / "nvm.log").read_text().split("\n")[:2] == ["nvm install", "nvm use"]
+
+
+# --- #564: prune superseded patches from the deploy user's nvm ---
+
+PRUNE_STUB = (
+	'nvm() {{ case "$1" in current) echo "{current}" ;; '
+	'uninstall) echo "$2" >> "{log}"; [ "$2" != "{current}" ] && rm -rf "$NVM_DIR/versions/node/$2" ;; esac; }}\n'
+)
+
+
+def _run_prune(tmp_path: Path, installed: list[str], current: str) -> list[str]:
+	"""Run the deploy's PRUNE_NODE as the remote shell receives it (expanded once
+	by the runner inside the restart heredoc). Returns the versions left installed."""
+	nvm_dir = tmp_path / ".nvm"
+	frontend = tmp_path / "frontend"
+	frontend.mkdir()
+	(frontend / ".nvmrc").write_text(NVMRC.read_text())
+	for v in installed:
+		(nvm_dir / "versions" / "node" / v).mkdir(parents=True)
+	(nvm_dir / "nvm.sh").write_text(PRUNE_STUB.format(current=current, log=tmp_path / "uninstall.log"))
+
+	assign = re.search(r"^\s*(PRUNE_NODE='[^']+')$", DEPLOY.read_text(), re.M).group(1)
+	remote = subprocess.run(
+		["bash", "-c", f"{assign}\ncat << EOF\n$PRUNE_NODE\nEOF"], capture_output=True, text=True, check=True
+	).stdout
+	script = f'export NVM_DIR="{nvm_dir}"; . "$NVM_DIR/nvm.sh"; cd {frontend} || exit 1\n{remote}'
+	r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+	assert r.returncode == 0, r.stderr
+	return sorted(p.name for p in (nvm_dir / "versions" / "node").iterdir())
+
+
+def test_prune_keeps_the_running_node_and_one_prior(tmp_path):
+	m = _major()
+	left = _run_prune(tmp_path, [f"v{m}.9.0", f"v{m}.10.0", f"v{m}.11.0", f"v{m}.12.0"], current=f"v{m}.12.0")
+	# Version order, not string order: 11 is the prior, 9 and 10 go.
+	assert left == [f"v{m}.11.0", f"v{m}.12.0"]
+
+
+def test_prune_never_removes_the_running_node_even_when_it_is_not_the_newest(tmp_path):
+	m = _major()
+	left = _run_prune(tmp_path, [f"v{m}.1.0", f"v{m}.2.0", f"v{m}.3.0"], current=f"v{m}.1.0")
+	assert left == [f"v{m}.1.0", f"v{m}.3.0"]
+	assert f"v{m}.1.0" not in (tmp_path / "uninstall.log").read_text()
+
+
+def test_prune_leaves_other_majors_alone(tmp_path):
+	m = _major()
+	left = _run_prune(tmp_path, ["v20.19.0", "v22.1.0", f"v{m}0.1.0", f"v{m}.1.0", f"v{m}.2.0"], current=f"v{m}.2.0")
+	assert left == sorted(["v20.19.0", "v22.1.0", f"v{m}0.1.0", f"v{m}.1.0", f"v{m}.2.0"])
+	assert not (tmp_path / "uninstall.log").exists()
+
+
+def test_prune_runs_after_the_frontend_restart_in_the_same_remote_shell():
+	text = DEPLOY.read_text()
+	start = text.index("pm2 start npm")
+	prune = text.index("$PRUNE_NODE", start)
+	assert prune < text.index("EOF", start), "prune must run inside the restart heredoc, after pm2 start"

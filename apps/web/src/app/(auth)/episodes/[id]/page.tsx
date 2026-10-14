@@ -20,15 +20,21 @@ import { useGenerationProgress } from "./use-generation-progress"
 import { useTtsSettings } from "./use-tts-settings"
 import type { ContentSource, Episode } from "./types"
 
+type RouteParams = { id: string }
+
 // The App Router reuses this page's instance when only [id] changes, so its
 // state (loading flag, loaded episode) would carry over and show the previous
 // episode until the new fetch lands. Keying on the id remounts it instead (#529).
 export default function EpisodePageRoute() {
-  const params = useParams<{ id: string }>()
+  const params = useParams<RouteParams>()
   return <EpisodePage key={params.id} />
 }
 
-function PageShell({ children }: { children: ReactNode }) {
+interface PageShellProps {
+  children: ReactNode
+}
+
+function PageShell({ children }: PageShellProps) {
   const content = children
   return (
     <div className="min-h-screen bg-background p-8">
@@ -37,7 +43,11 @@ function PageShell({ children }: { children: ReactNode }) {
   )
 }
 
-function EpisodeNotFound({ onBack }: { onBack: () => void }) {
+interface EpisodeNotFoundProps {
+  onBack: () => void
+}
+
+function EpisodeNotFound({ onBack }: EpisodeNotFoundProps) {
   const action = { label: "Back", onClick: onBack }
   return (
     <EmptyState
@@ -75,7 +85,7 @@ function GenerateButton({ enabled, generating, onGenerate }: GenerateButtonProps
 
 function EpisodePage() {
   const router = useRouter()
-  const params = useParams<{ id: string }>()
+  const params = useParams<RouteParams>()
   const { status: authStatus } = useSession()
   const data = useEpisode(params.id, authStatus)
   const { episode, loadEpisode, setProgress } = data

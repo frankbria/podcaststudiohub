@@ -1,13 +1,17 @@
 "use client"
 
-import { useState } from "react"
+import { useState, type Dispatch } from "react"
 import { Button } from "@/components/ui/button"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon } from "@hugeicons/core-free-icons"
 import { approveContentReview } from "./episode-api"
 import type { ContentFlag, Episode } from "./types"
 
-function ContentFlagItem({ flag }: { flag: ContentFlag }) {
+interface ContentFlagItemProps {
+  flag: ContentFlag
+}
+
+function ContentFlagItem({ flag }: ContentFlagItemProps) {
   const turn = flag.turn + 1 // 0-based from the engine; people count from 1
   return (
     <li>
@@ -36,13 +40,12 @@ function reviewView(episode: Episode): ReviewView {
   return review ? REVIEW_VIEWS[review] : null
 }
 
-export function ContentReviewNotice({
-  episode,
-  onApproved,
-}: {
+interface ReviewProps {
   episode: Episode
-  onApproved: (episode: Episode) => void
-}) {
+  onApproved: Dispatch<Episode>
+}
+
+export function ContentReviewNotice({ episode, onApproved }: ReviewProps) {
   const view = reviewView(episode)
   if (view === "held") return <HeldForReview episode={episode} onApproved={onApproved} />
   if (view !== "approved") return null
@@ -51,16 +54,13 @@ export function ContentReviewNotice({
   )
 }
 
-function HeldForReview({
-  episode,
-  onApproved,
-}: {
-  episode: Episode
-  onApproved: (episode: Episode) => void
-}) {
+function flagsOf(episode: Episode): ContentFlag[] {
+  return episode.generation_progress?.content_flags ?? []
+}
+
+function useApproval(episode: Episode, onApproved: Dispatch<Episode>) {
   const [approving, setApproving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const flags = episode.generation_progress?.content_flags ?? []
 
   async function approve() {
     setApproving(true)
@@ -70,6 +70,13 @@ function HeldForReview({
     if ("episode" in result) onApproved(result.episode)
     else setError(result.error)
   }
+
+  return { approving, error, approve }
+}
+
+function HeldForReview({ episode, onApproved }: ReviewProps) {
+  const { approving, error, approve } = useApproval(episode, onApproved)
+  const flags = flagsOf(episode)
 
   return (
     <section

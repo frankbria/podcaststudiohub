@@ -8,7 +8,11 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { FileEditIcon, Delete02Icon } from "@hugeicons/core-free-icons"
 import type { ContentSource } from "./types"
 
-function SourcePreview({ source }: { source: ContentSource }) {
+interface SourcePreviewProps {
+  source: ContentSource
+}
+
+function SourcePreview({ source }: SourcePreviewProps) {
   if (source.source_type === "url") {
     return <p className="text-sm text-muted-foreground">{source.source_data.url}</p>
   }

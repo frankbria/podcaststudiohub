@@ -37,7 +37,11 @@ const CONNECTION_STATUS_CONFIG: Record<
   complete: { indicator: "●", text: "Generation complete", className: "text-foreground" },
 }
 
-function ProgressConnectionStatus({ status }: { status: ConnectionStatus }) {
+interface ProgressConnectionStatusProps {
+  status: ConnectionStatus
+}
+
+function ProgressConnectionStatus({ status }: ProgressConnectionStatusProps) {
   const config = CONNECTION_STATUS_CONFIG[status]
   if (!config) return null
 
@@ -86,7 +90,11 @@ function GenerationProgressBar(props: GenerationProgressBarProps) {
   )
 }
 
-function FailureMessage({ episode }: { episode: Episode }) {
+interface FailureMessageProps {
+  episode: Episode
+}
+
+function FailureMessage({ episode }: FailureMessageProps) {
   const failed = episode.generation_status === "failed"
   const message = failed ? episode.generation_progress?.error_message : undefined
   if (!message) return null

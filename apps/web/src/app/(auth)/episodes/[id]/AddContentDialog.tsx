@@ -27,7 +27,12 @@ function errorBorder(error: FieldErrorLike): string {
   return error ? "border-destructive" : ""
 }
 
-function FieldErrorText({ id, error }: { id: string; error: FieldErrorLike }) {
+interface FieldErrorTextProps {
+  id: string
+  error: FieldErrorLike
+}
+
+function FieldErrorText({ id, error }: FieldErrorTextProps) {
   if (!error) return null
   return (
     <p id={id} className="text-destructive text-sm mt-1" role="alert">

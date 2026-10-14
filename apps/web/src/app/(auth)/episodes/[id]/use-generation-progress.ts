@@ -30,11 +30,13 @@ function isTerminalMessage(data: unknown): boolean {
   return TERMINAL_NOTIFIERS.has((data as ProgressMessage).status)
 }
 
-function logSseError({ message, attempt, maxRetries }: {
+interface SseErrorInfo {
   message: string
   attempt: number
   maxRetries: number
-}) {
+}
+
+function logSseError({ message, attempt, maxRetries }: SseErrorInfo) {
   console.warn(`SSE error: ${message} (attempt ${attempt}/${maxRetries})`)
 }
 

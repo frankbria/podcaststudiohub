@@ -55,7 +55,11 @@ function MetricTile(props: MetricTileProps) {
   )
 }
 
-function MetricTiles({ metrics }: { metrics: EpisodeAnalyticsMetrics }) {
+interface MetricTilesProps {
+  metrics: EpisodeAnalyticsMetrics
+}
+
+function MetricTiles({ metrics }: MetricTilesProps) {
   const listen = formatListenDuration(metrics.average_listen_duration_seconds)
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -67,15 +71,22 @@ function MetricTiles({ metrics }: { metrics: EpisodeAnalyticsMetrics }) {
   )
 }
 
-function CompletionRate({ metrics }: { metrics: EpisodeAnalyticsMetrics }) {
+const COMPLETION_ARIA_LABEL = "Completion rate"
+
+interface CompletionRateProps {
+  metrics: EpisodeAnalyticsMetrics
+}
+
+function CompletionRate({ metrics }: CompletionRateProps) {
   const percent = Math.round(metrics.completion_rate * 100)
+  const label = `${percent}%`
   return (
     <div>
       <div className="flex justify-between text-sm mb-1">
         <span className="text-muted-foreground">Completion Rate</span>
-        <span className="text-foreground">{percent}%</span>
+        <span className="text-foreground">{label}</span>
       </div>
-      <Progress value={percent} aria-label="Completion rate" />
+      <Progress aria-label={COMPLETION_ARIA_LABEL} value={percent} />
     </div>
   )
 }
@@ -107,7 +118,11 @@ function renderCountry(entry: { country: string; downloads: number }) {
   )
 }
 
-function DeviceBreakdown({ devices }: { devices: DeviceBreakdownData }) {
+interface DeviceBreakdownProps {
+  devices: DeviceBreakdownData
+}
+
+function DeviceBreakdown({ devices }: DeviceBreakdownProps) {
   const rows = Object.entries(devices)
   return (
     <div>
@@ -117,7 +132,11 @@ function DeviceBreakdown({ devices }: { devices: DeviceBreakdownData }) {
   )
 }
 
-function AppBreakdown({ apps }: { apps: Record<string, number> }) {
+interface AppBreakdownProps {
+  apps: Record<string, number>
+}
+
+function AppBreakdown({ apps }: AppBreakdownProps) {
   const rows = Object.entries(apps)
   return (
     <div>
@@ -131,7 +150,12 @@ function AppBreakdown({ apps }: { apps: Record<string, number> }) {
   )
 }
 
-function CountryRows({ countries, isEmpty }: { countries: TopCountriesData; isEmpty: boolean }) {
+interface CountryRowsProps {
+  countries: TopCountriesData
+  isEmpty: boolean
+}
+
+function CountryRows({ countries, isEmpty }: CountryRowsProps) {
   const rows = countries.map(renderCountry)
   if (isEmpty) {
     return <p className="text-sm text-muted-foreground">No country data yet</p>
@@ -139,7 +163,11 @@ function CountryRows({ countries, isEmpty }: { countries: TopCountriesData; isEm
   return <ul className="space-y-1">{rows}</ul>
 }
 
-function TopCountries({ countries }: { countries: TopCountriesData }) {
+interface TopCountriesProps {
+  countries: TopCountriesData
+}
+
+function TopCountries({ countries }: TopCountriesProps) {
   const isEmpty = countries.length === 0
   return (
     <div>
@@ -152,7 +180,11 @@ function TopCountries({ countries }: { countries: TopCountriesData }) {
   )
 }
 
-function AnalyticsDetails({ analytics }: { analytics: EpisodeAnalyticsData }) {
+interface AnalyticsDetailsProps {
+  analytics: EpisodeAnalyticsData
+}
+
+function AnalyticsDetails({ analytics }: AnalyticsDetailsProps) {
   const { metrics } = analytics
   return (
     <div className="space-y-4">
@@ -190,7 +222,8 @@ function AnalyticsBody(props: AnalyticsBodyProps) {
 }
 
 export function AnalyticsCard(props: AnalyticsBodyProps) {
-  const body = <AnalyticsBody {...props} />
+  const { analytics, loading, error } = props
+  const body = <AnalyticsBody analytics={analytics} loading={loading} error={error} />
   return (
     <Card className="mb-6">
       <CardHeader>

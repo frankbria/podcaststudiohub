@@ -20,8 +20,11 @@ working, as migration 003 does for the app role. The secret travels as a
 bound parameter into a transaction-local GUC, then through format(%L), never
 interpolated into SQL text. Idempotent: an existing role is left as it is.
 
-Creating a BYPASSRLS role needs a superuser, which the migration URL is
-(MIGRATION_DATABASE_URL, issue #301).
+Only a superuser can grant BYPASSRLS, and the migration owner need not be one
+(the dev-privilege CI job runs it as a NOSUPERUSER NOCREATEROLE owner). So, as
+with podcastfy_app in migration 003, a DBA may provision the role beforehand
+and the migration leaves it as it is; if it is missing and the connection is
+not a superuser, the migration stops with the exact statement to run.
 
 Revision ID: 020
 Revises: 019
@@ -51,6 +54,11 @@ def upgrade() -> None:
         DO $do$
         BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'podcastfy_worker') THEN
+                IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
+                    RAISE EXCEPTION 'podcastfy_worker is missing and % cannot create it (BYPASSRLS needs a superuser)', current_user
+                        USING HINT = 'As a superuser: CREATE ROLE podcastfy_worker LOGIN PASSWORD ''<WORKER_DB_PASSWORD>'' '
+                                     'NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT BYPASSRLS IN ROLE podcastfy_app; then re-run the migration (#649).';
+                END IF;
                 EXECUTE format(
                     'CREATE ROLE podcastfy_worker '
                     'NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT LOGIN BYPASSRLS '

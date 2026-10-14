@@ -380,6 +380,8 @@ async def test_generate_allowed_from_restartable_status(restartable_status):
 
     db = AsyncMock()
     db.execute.side_effect = [episode_result, content_result]
+    # The locked re-read before 'queued' (#625) finds the status unchanged.
+    db.scalar.return_value = episode.generation_status
 
     current_user = MagicMock()
     current_user.tenant_id = uuid4()
@@ -436,6 +438,8 @@ async def test_generate_enqueue_failure_restores_prior_status():
 
     db = AsyncMock()
     db.execute.side_effect = [episode_result, content_result]
+    # The locked re-read before 'queued' (#625) finds the status unchanged.
+    db.scalar.return_value = episode.generation_status
 
     current_user = MagicMock()
     current_user.tenant_id = uuid4()
@@ -531,3 +535,41 @@ async def test_generate_rejects_when_no_usable_content(client, episode_and_auth)
     assert resp.status_code == 400
     assert "nothing to generate" in resp.json()["detail"].lower()
     mock_delay.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_kickoff_that_lost_the_episode_meanwhile_is_a_conflict(
+    client, episode_project_and_auth, test_db
+):
+    """#625: the restartable check runs before the RSS pre-flight, which may
+    commit. If another kickoff claimed the episode since (approval's re-dispatch
+    moves it to 'distributing'), generation must not overwrite that with 'queued'."""
+    from uuid import UUID
+
+    from sqlalchemy import update
+
+    from src.models.episode import Episode
+    from src.routers import generation as generation_router
+
+    episode_id, _project_id, headers = episode_project_and_auth
+    await _create_text_source(client, episode_id, headers)
+    real_plan = generation_router._distribution_plan
+
+    async def claimed_meanwhile(*args, **kwargs):
+        # Unsynchronized, as the other kickoff's own session would write it:
+        # this request's loaded Episode (and its snapshot) stays as it was.
+        await test_db.execute(
+            update(Episode).where(Episode.id == UUID(episode_id)).values(generation_status="distributing")
+            .execution_options(synchronize_session=False)
+        )
+        return await real_plan(*args, **kwargs)
+
+    with patch.object(generation_router, "_distribution_plan", claimed_meanwhile), patch(
+        "src.routers.generation.generate_podcast_task.apply_async"
+    ) as mock_delay:
+        resp = await client.post(f"/generation/episodes/{episode_id}/generate", headers=headers)
+
+    assert resp.status_code == 409, resp.text
+    mock_delay.assert_not_called()
+    episode = (await client.get(f"/episodes/{episode_id}", headers=headers)).json()
+    assert episode["generation_status"] == "distributing"

@@ -2263,6 +2263,184 @@ async def test_approving_a_held_episode_releases_it_and_refreshes_the_feed(
 	refresh.assert_called_once()
 
 
+async def _held_distribution_approval(
+	client, project_and_auth, set_system_fields, monkeypatch, *,
+	held=True, enabled=True, target="webhook", rss_service=None, dispatch_error=None, generation="the-held-run",
+):
+	"""Approve a flagged episode in a project with one active target; return
+	``(approval response body, mocked re-dispatch workflow factory)``."""
+	from unittest.mock import AsyncMock, MagicMock, patch
+
+	from src.config import settings
+
+	project_id, headers = project_and_auth
+	episode_id = await _flagged_episode(client, headers, project_id, set_system_fields)
+	if held:
+		current = (await client.get(f"/episodes/{episode_id}", headers=headers)).json()["generation_progress"]
+		await set_system_fields(
+			episode_id, generation_progress={**current, "distribution_held": True, "celery_task_id": generation}
+		)
+	if target == "webhook":
+		created = await client.post("/distribution-targets/webhook", headers=headers, json={
+			"name": "Hook", "url": "https://hook.example.com/publish", "method": "POST",
+			"headers": {}, "project_id": project_id,
+		})
+	else:
+		created = await client.post("/distribution-targets/apple", headers=headers, json={
+			"show_id": "show-625", "api_key": "not-a-real-key", "project_id": project_id,
+		})
+	assert created.status_code == 201, created.text
+	monkeypatch.setattr(settings, "ENABLE_PLATFORM_DISTRIBUTION", enabled)
+	monkeypatch.setattr(settings, "ENABLE_DIRECT_PLATFORM_PUBLISH", False)
+	monkeypatch.setattr(settings, "AWS_S3_BUCKET", "bucket")
+
+	with patch("src.services.episode_service.refresh_project_rss_feed"), patch(
+		"src.services.episode_service.StorageService"
+	) as storage, patch("src.services.episode_service.held_distribution_workflow") as workflow, patch(
+		"src.services.distribution_plan.RSSGenerationService", MagicMock(return_value=rss_service)
+	):
+		storage.return_value.clear_content_review_hold = AsyncMock()
+		if dispatch_error:
+			workflow.return_value.apply_async.side_effect = dispatch_error
+		response = await client.post(f"/episodes/{episode_id}/content-review/approve", headers=headers)
+
+	assert response.status_code == 200, response.text
+	# The approval response itself: the episode page acts on it (#625 review).
+	return response.json(), workflow
+
+
+def _feed_service(generate_error=None):
+	from unittest.mock import AsyncMock
+
+	service = AsyncMock()
+	service.get_rss_feed.return_value = None
+	if generate_error:
+		service.generate_rss_for_project.side_effect = generate_error
+	return service
+
+
+@pytest.mark.asyncio
+async def test_approving_redispatches_the_distribution_the_hold_skipped(
+	client, project_and_auth, set_system_fields, monkeypatch
+):
+	"""#625: approval used to release the episode to the RSS feed only."""
+	episode, workflow = await _held_distribution_approval(client, project_and_auth, set_system_fields, monkeypatch)
+
+	(dispatched_id, platforms), _ = workflow.call_args
+	assert dispatched_id == episode["id"]
+	assert platforms["webhook"]["url"] == "https://hook.example.com/publish"
+	workflow.return_value.apply_async.assert_called_once_with()
+	# Claimed like a full run's chain: a regeneration is refused until it settles.
+	assert episode["generation_status"] == "distributing"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("held,enabled", [(False, True), (True, False)])
+async def test_approving_distributes_nothing_that_was_not_held_or_is_switched_off(
+	client, project_and_auth, set_system_fields, monkeypatch, held, enabled
+):
+	episode, workflow = await _held_distribution_approval(
+		client, project_and_auth, set_system_fields, monkeypatch, held=held, enabled=enabled
+	)
+
+	workflow.assert_not_called()
+	assert episode["generation_status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_a_broker_failure_still_approves_and_leaves_the_episode_complete(
+	client, project_and_auth, set_system_fields, monkeypatch
+):
+	episode, _ = await _held_distribution_approval(
+		client, project_and_auth, set_system_fields, monkeypatch, dispatch_error=ConnectionError("broker down")
+	)
+
+	assert episode["generation_progress"]["content_review"] == "approved"
+	assert episode["generation_status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_a_planning_failure_still_approves_and_leaves_the_episode_complete(
+	client, project_and_auth, set_system_fields, monkeypatch
+):
+	"""The approval is already committed and cannot be repeated."""
+	from unittest.mock import AsyncMock, patch
+
+	with patch(
+		"src.services.episode_service.plan_platforms", AsyncMock(side_effect=RuntimeError("db went away"))
+	):
+		episode, workflow = await _held_distribution_approval(
+			client, project_and_auth, set_system_fields, monkeypatch
+		)
+
+	workflow.assert_not_called()
+	assert episode["generation_progress"]["content_review"] == "approved"
+	assert episode["generation_status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_a_newer_generation_is_never_claimed_by_an_older_approval(
+	client, project_and_auth, set_system_fields, monkeypatch, test_db
+):
+	"""If another run replaced the approved one while approval was planning,
+	the claim names the approved run's task id and so does not match."""
+	from unittest.mock import patch
+
+	from sqlalchemy import cast, update
+	from sqlalchemy.dialects.postgresql import JSONB
+
+	from src.models.episode import Episode
+	from src.services import distribution_plan
+
+	real_plan = distribution_plan.plan_platforms
+
+	async def replaced_meanwhile(db, episode, user_id):
+		await test_db.execute(
+			update(Episode).where(Episode.id == episode.id).values(
+				generation_progress=Episode.generation_progress.op("||")(
+					cast({"celery_task_id": "a-newer-run"}, JSONB)
+				)
+			).execution_options(synchronize_session=False)
+		)
+		return await real_plan(db, episode, user_id)
+
+	with patch("src.services.episode_service.plan_platforms", replaced_meanwhile):
+		episode, workflow = await _held_distribution_approval(
+			client, project_and_auth, set_system_fields, monkeypatch, generation="the-held-run"
+		)
+
+	workflow.assert_not_called()
+	assert episode["generation_status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_approval_generates_a_missing_feed_for_an_rss_platform(
+	client, project_and_auth, set_system_fields, monkeypatch
+):
+	"""The same RSS pre-flight as generation (#378): an Apple target added after
+	the held run has no feed yet."""
+	service = _feed_service()
+	_, workflow = await _held_distribution_approval(
+		client, project_and_auth, set_system_fields, monkeypatch, target="apple", rss_service=service
+	)
+
+	service.generate_rss_for_project.assert_awaited_once()
+	assert "apple_podcasts" in workflow.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_approval_skips_an_rss_platform_whose_feed_cannot_be_generated(
+	client, project_and_auth, set_system_fields, monkeypatch
+):
+	episode, workflow = await _held_distribution_approval(
+		client, project_and_auth, set_system_fields, monkeypatch, target="apple",
+		rss_service=_feed_service(ValueError("Missing required podcast metadata fields: author")),
+	)
+
+	workflow.assert_not_called()
+	assert episode["generation_status"] == "complete"
+
+
 @pytest.mark.asyncio
 async def test_approving_an_episode_with_nothing_to_review_is_a_conflict(
 	client, project_and_auth

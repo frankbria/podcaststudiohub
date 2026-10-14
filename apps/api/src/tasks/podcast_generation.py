@@ -300,21 +300,42 @@ def _effective_tts(episode: Episode):
     return episode.project.default_tts_config if episode.project else None
 
 
+def _show_identity(metadata: Dict[str, Any]) -> Dict[str, str]:
+    """The project's show title and description, as the engine's config keys (#621)."""
+    return {
+        key: metadata[field]
+        for key, field in (("podcast_name", "show_title"), ("podcast_tagline", "description"))
+        if metadata.get(field)
+    }
+
+
+def _named_for_show(conversation_config: Optional[Dict[str, Any]], show: Dict[str, str]):
+    """Fill the show's name into a config that sets none: the template's own
+    wins, and without either the engine default is "PODCASTIFY" (#621). A
+    template saved without a tagline stores it as null, which must not win."""
+    if not show:
+        return conversation_config
+    template = {k: v for k, v in (conversation_config or {}).items() if v is not None}
+    return {**show, **template}
+
+
 def _load_native_inputs(episode_id: str) -> tuple:
-    """Return ``(user_id, tts_provider, tts_config)`` for the native engine.
+    """Return ``(user_id, tts_provider, tts_config, show)`` for the native engine.
 
     Read from the episode row, the one source of truth for the configuration,
     rather than from the router's kwargs. An episode with no TTS configuration
-    gets _DEFAULT_TTS_CONFIG.
+    gets _DEFAULT_TTS_CONFIG. ``show`` names the podcast from the project's
+    metadata, for a template that does not (#621).
     """
     with SyncSessionLocal() as db:
         episode = db.get(Episode, uuid_module.UUID(episode_id))
         if episode is None or episode.user_id is None:
             raise EngineError(f"Episode {episode_id} has no owner to store its transcript under")
+        show = _show_identity(episode.project.podcast_metadata)  # NOT NULL column
         tts = _effective_tts(episode)
         if tts is None:
-            return str(episode.user_id), "openai", dict(_DEFAULT_TTS_CONFIG)
-        return str(episode.user_id), tts.provider, dict(tts.config or {})
+            return str(episode.user_id), "openai", dict(_DEFAULT_TTS_CONFIG), show
+        return str(episode.user_id), tts.provider, dict(tts.config or {}), show
 
 
 def _collect_sources(text_content: Optional[str], urls: Optional[List[str]]) -> List[str]:
@@ -347,7 +368,8 @@ def _run_native_engine(
         # No source type produces either today (see test_dependency_reachability);
         # refuse rather than silently generate without them.
         raise EngineError("Image and topic sources are not supported by the engine")
-    user_id, tts_provider, tts_config = _load_native_inputs(episode_id)
+    user_id, tts_provider, tts_config, show = _load_native_inputs(episode_id)
+    conversation_config = _named_for_show(conversation_config, show)
     # Resolved before any paid call, so a misconfigured episode fails for free.
     VoiceConfig.from_tts_config(tts_config, provider=tts_provider)
 

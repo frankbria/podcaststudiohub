@@ -27,7 +27,7 @@ def make_episode():
     """Commit a user + project + episode, optionally with TTS configs."""
     created = []
 
-    def make(episode_tts=None, project_tts=None):
+    def make(episode_tts=None, project_tts=None, podcast_metadata=None):
         tenant_id = uuid.uuid4()
         with SyncSessionLocal() as db:
             user = User(
@@ -53,6 +53,7 @@ def make_episode():
             project = Project(
                 user_id=user.id, tenant_id=tenant_id, name="P",
                 default_tts_config_id=tts(project_tts),
+                podcast_metadata=podcast_metadata or {},
             )
             db.add(project)
             db.flush()
@@ -76,7 +77,7 @@ def make_episode():
 def test_the_episode_config_is_read_with_its_stored_provider_name(make_episode):
     episode_id, user_id = make_episode(episode_tts=("gemini_multi", GEMINI_MULTI))
 
-    assert _load_native_inputs(episode_id) == (user_id, "gemini_multi", GEMINI_MULTI)
+    assert _load_native_inputs(episode_id) == (user_id, "gemini_multi", GEMINI_MULTI, {})
 
 
 def test_the_episode_config_wins_over_the_project_default(make_episode):
@@ -91,7 +92,7 @@ def test_the_episode_config_wins_over_the_project_default(make_episode):
 def test_the_project_default_applies_when_the_episode_has_none(make_episode):
     episode_id, _ = make_episode(project_tts=("elevenlabs", ELEVENLABS))
 
-    _, provider, config = _load_native_inputs(episode_id)
+    _, provider, config, _ = _load_native_inputs(episode_id)
 
     assert (provider, config) == ("elevenlabs", ELEVENLABS)
 
@@ -100,7 +101,7 @@ def test_an_unconfigured_episode_gets_podcastfys_default_voices(make_episode):
     """Behaviour-preserving: podcastfy's own defaults were openai echo / shimmer."""
     episode_id, _ = make_episode()
 
-    _, provider, config = _load_native_inputs(episode_id)
+    _, provider, config, _ = _load_native_inputs(episode_id)
 
     assert provider == "openai"
     assert (config["voice_1"], config["voice_2"]) == ("echo", "shimmer")
@@ -131,3 +132,21 @@ def test_platform_distribution_is_held_while_flags_await_review(
         db.commit()
 
     assert _distribution_allowed(episode_id, requested) is allowed
+
+
+def test_the_projects_show_title_and_description_name_the_show(make_episode):
+    """#621: the engine's own default name is podcastfy's 'PODCASTIFY'."""
+    episode_id, _ = make_episode(
+        podcast_metadata={"show_title": "The Signal Room", "description": "Retrieval, weekly.", "author": "A"}
+    )
+
+    assert _load_native_inputs(episode_id)[3] == {
+        "podcast_name": "The Signal Room",
+        "podcast_tagline": "Retrieval, weekly.",
+    }
+
+
+def test_a_project_without_a_description_names_only_the_show(make_episode):
+    episode_id, _ = make_episode(podcast_metadata={"show_title": "The Signal Room"})
+
+    assert _load_native_inputs(episode_id)[3] == {"podcast_name": "The Signal Room"}

@@ -43,7 +43,11 @@ trigger it.
    feed so the episode appears. It first clears the audio's metadata mark in place
    (content type kept); if that fails it answers 502 and the episode stays pending.
    Approval is refused (409) until generation completes, so an in-flight upload
-   cannot re-mark the audio after the mark is cleared.
+   cannot re-mark the audio after the mark is cleared. A *redelivered* upload
+   (worker lost before the ack) can still land a marked object after approval,
+   so the upload re-checks the hold once its object is written, waiting behind
+   an approval in progress, and rewrites the object unmarked if the hold is
+   gone (#629).
 6. Regenerating the episode screens the new script; a clean result clears the hold.
 
 ## Known limits

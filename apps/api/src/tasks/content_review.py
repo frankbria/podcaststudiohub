@@ -19,10 +19,16 @@ _EPISODE_AUDIO_KEY = re.compile(
 )
 
 
-def episode_held_for_review(episode_id: str) -> bool:
-    """True while screening flags on this episode await the user's review."""
+def episode_held_for_review(episode_id: str, *, after_approval: bool = False) -> bool:
+    """True while screening flags on this episode await the user's review.
+
+    ``after_approval`` reads under FOR SHARE, which waits behind an approval's
+    FOR UPDATE until it commits: approval clears the audio mark before its
+    commit, so a plain read in that gap still says "pending" (#629).
+    """
     with SyncSessionLocal() as db:
-        episode = db.get(Episode, uuid.UUID(episode_id))
+        lock = {"read": True} if after_approval else None
+        episode = db.get(Episode, uuid.UUID(episode_id), with_for_update=lock)
         progress = (episode.generation_progress or {}) if episode is not None else {}
         return progress.get("content_review") == "pending"
 

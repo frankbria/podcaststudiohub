@@ -2268,7 +2268,7 @@ async def _held_distribution_approval(
 	held=True, enabled=True, target="webhook", rss_service=None, dispatch_error=None, generation="the-held-run",
 ):
 	"""Approve a flagged episode in a project with one active target; return
-	``(episode, mocked re-dispatch workflow factory)`` after the approval."""
+	``(approval response body, mocked re-dispatch workflow factory)``."""
 	from unittest.mock import AsyncMock, MagicMock, patch
 
 	from src.config import settings
@@ -2305,8 +2305,8 @@ async def _held_distribution_approval(
 		response = await client.post(f"/episodes/{episode_id}/content-review/approve", headers=headers)
 
 	assert response.status_code == 200, response.text
-	episode = (await client.get(f"/episodes/{episode_id}", headers=headers)).json()
-	return episode, workflow
+	# The approval response itself: the episode page acts on it (#625 review).
+	return response.json(), workflow
 
 
 def _feed_service(generate_error=None):

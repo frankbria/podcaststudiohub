@@ -374,8 +374,10 @@ async def _redispatch_held_distribution(db: AsyncSession, episode: Episode, gene
 	except Exception as exc:  # noqa: BLE001 — the approval is committed; a planning or claim failure (DB, feed service) must leave it intact, roll back only this work, and be logged
 		logger.error("Episode %s: could not re-dispatch held distribution: %s", episode.id, exc)
 		await db.rollback()
-		# rollback expires the instance; the response is built from it.
-		await db.refresh(episode)
+	# The claim is an unsynchronized UPDATE (and a rollback expires the
+	# instance); the response, which the episode page uses to decide whether to
+	# follow progress, is built from this instance.
+	await db.refresh(episode)
 
 
 async def _plan_claim_and_dispatch(db: AsyncSession, episode: Episode, generation: Optional[str]) -> None:

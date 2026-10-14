@@ -168,12 +168,13 @@ async def episode_project_and_auth(client: AsyncClient) -> tuple[str, str, Heade
 
 
 @pytest.mark.asyncio
-async def test_generate_forwards_episode_tts_provider(client, episode_project_and_auth):
-    """A non-OpenAI episode TTS config is forwarded as tts_model to the task."""
+async def test_generate_does_not_send_the_tts_config(client, episode_project_and_auth):
+    """The task reads the episode's stored TTS configuration from the row
+    (tests/test_native_inputs.py); the router sends none of it (#623)."""
     episode_id, _project_id, headers = episode_project_and_auth
     await _create_text_source(client, episode_id, headers)
 
-    tts_id = await _create_tts_config(client, headers, "elevenlabs", ELEVENLABS_TTS_CONFIG)
+    tts_id = await _create_tts_config(client, headers, "gemini_multi", GEMINI_TTS_CONFIG)
     upd = await client.put(
         f"/episodes/{episode_id}", headers=headers, json={"tts_config_id": tts_id}
     )
@@ -186,62 +187,14 @@ async def test_generate_forwards_episode_tts_provider(client, episode_project_an
         )
 
     assert resp.status_code == 202, resp.text
-    mock_delay.assert_called_once()
-    assert mock_delay.call_args.kwargs["kwargs"]["tts_model"] == "elevenlabs"
-
-
-@pytest.mark.asyncio
-async def test_generate_falls_back_to_project_default_tts(client, episode_project_and_auth):
-    """With no episode TTS config, the project default provider is forwarded."""
-    episode_id, project_id, headers = episode_project_and_auth
-    await _create_text_source(client, episode_id, headers)
-
-    tts_id = await _create_tts_config(client, headers, "gemini", GEMINI_TTS_CONFIG)
-    upd = await client.put(
-        f"/projects/{project_id}", headers=headers, json={"default_tts_config_id": tts_id}
-    )
-    assert upd.status_code == 200, upd.text
-
-    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
-        mock_delay.return_value = MagicMock(id="task-gemini")
-        resp = await client.post(
-            f"/generation/episodes/{episode_id}/generate", headers=headers
-        )
-
-    assert resp.status_code == 202, resp.text
-    mock_delay.assert_called_once()
-    assert mock_delay.call_args.kwargs["kwargs"]["tts_model"] == "gemini"
-
-
-@pytest.mark.asyncio
-async def test_generate_normalizes_gemini_multi_provider(client, episode_project_and_auth):
-    """The app's 'gemini_multi' provider is normalized to podcastfy's 'geminimulti'."""
-    episode_id, _project_id, headers = episode_project_and_auth
-    await _create_text_source(client, episode_id, headers)
-
-    tts_id = await _create_tts_config(client, headers, "gemini_multi", GEMINI_TTS_CONFIG)
-    upd = await client.put(
-        f"/episodes/{episode_id}", headers=headers, json={"tts_config_id": tts_id}
-    )
-    assert upd.status_code == 200, upd.text
-
-    with patch("src.routers.generation.generate_podcast_task.apply_async") as mock_delay:
-        mock_delay.return_value = MagicMock(id="task-gm")
-        resp = await client.post(
-            f"/generation/episodes/{episode_id}/generate", headers=headers
-        )
-
-    assert resp.status_code == 202, resp.text
     kwargs = mock_delay.call_args.kwargs["kwargs"]
-    assert kwargs["tts_model"] == "geminimulti"
-    # The nested text_to_speech block is keyed by the normalized provider name.
-    assert "geminimulti" in kwargs["conversation_config"]["text_to_speech"]
-    assert kwargs["conversation_config"]["text_to_speech"]["default_tts_model"] == "geminimulti"
+    assert "tts_model" not in kwargs
+    assert "conversation_config" not in kwargs
 
 
 @pytest.mark.asyncio
 async def test_generate_forwards_conversation_config(client, episode_project_and_auth):
-    """An episode template + TTS config produce a conversation_config dict."""
+    """An episode template is forwarded as the conversation_config dict."""
     episode_id, _project_id, headers = episode_project_and_auth
     await _create_text_source(client, episode_id, headers)
 
@@ -272,17 +225,10 @@ async def test_generate_forwards_conversation_config(client, episode_project_and
 
     assert resp.status_code == 202, resp.text
     conv = mock_delay.call_args.kwargs["kwargs"]["conversation_config"]
-    # Template fields are forwarded at the top level (podcastfy reads them there).
     assert conv["word_count"] == 300
-    # The flat TTS config is translated into podcastfy's nested text_to_speech
-    # schema so the user's model + voices are actually honored (issue #217).
-    tts = conv["text_to_speech"]
-    assert tts["default_tts_model"] == "elevenlabs"
-    assert tts["elevenlabs"]["model"] == "eleven_multilingual_v2"
-    assert tts["elevenlabs"]["default_voices"] == {
-        "question": "21m00Tcm4TlvDq8ikWAM",
-        "answer": "AZnzlk1XvdvUeBnXmlld",
-    }
+    assert conv["podcast_name"] == "X"
+    # The TTS config is not translated into the template's config any more (#623).
+    assert "text_to_speech" not in conv
 
 
 @pytest.mark.asyncio
@@ -299,7 +245,7 @@ async def test_generate_without_config_uses_task_default(client, episode_project
 
     assert resp.status_code == 202, resp.text
     call_kwargs = mock_delay.call_args.kwargs["kwargs"]
-    # Not passed → task default tts_model="openai" / conversation_config=None applies.
+    # Not passed → the task default conversation_config=None applies.
     assert "tts_model" not in call_kwargs
     assert "conversation_config" not in call_kwargs
 
@@ -418,8 +364,7 @@ async def test_generate_allowed_from_restartable_status(restartable_status):
 
     episode = MagicMock()
     episode.generation_status = restartable_status
-    # No TTS/template/project config -> tts_model / conversation_config stay unset.
-    episode.tts_config = None
+    # No template/project config -> conversation_config stays unset.
     episode.template = None
     episode.project = None
 

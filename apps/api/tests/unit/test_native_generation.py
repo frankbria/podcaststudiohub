@@ -160,11 +160,11 @@ def test_native_path_runs_the_engine_end_to_end(harness):
 
 
 def test_the_stored_gemini_multi_name_reaches_the_engine_unrenamed(harness):
-    """The router renames it to podcastfy's "geminimulti"; the engine must not see that."""
+    """The provider name is the stored one, underscore and all."""
     harness.tts_provider = "gemini_multi"
     harness.tts_config = {"model": "gemini-2.5-flash-tts", "language_code": "en-US"}
 
-    harness.run(text_content="Notes.", tts_model="geminimulti")
+    harness.run(text_content="Notes.")
 
     assert harness.synthesise.call_args.args[0] == "gemini_multi"
 
@@ -196,7 +196,7 @@ def test_elevenlabs_is_available_on_the_native_path(harness):
     harness.tts_provider = "elevenlabs"
     harness.tts_config = {"model": "eleven_v3", "voice_1_id": "a", "voice_2_id": "b"}
 
-    result = harness.run(text_content="Notes.", tts_model="elevenlabs")
+    result = harness.run(text_content="Notes.")
 
     assert result["status"] == "success"
     assert harness.synthesise.call_args.args[0] == "elevenlabs"

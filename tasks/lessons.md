@@ -1029,3 +1029,35 @@ was ASCII — the helper was tested, but nothing proved the caller used it.
 - **Close on the user-visible proof.** The 11 extractions stranded since July
   were re-dispatched after the deploy and all completed; that, not the green CI,
   is what showed tasks can read rows.
+
+## #564 / #617 / #621 / #623 / #629 / #625 (PRs #651, #652, #654, #655, #656, #657)
+
+- **`autouse` fixtures reach opt-in live tests in the same module.** The live
+  ElevenLabs test sent the fake key `test-eleven` and wrote a nine-byte "mp3"
+  because `_keys` and `_fake_pydub` applied to it too; the issue only saw the
+  placeholder voice ids. Live tests get their own module.
+- **A review asking to keep a dead kwarg "until queued messages drain" is a
+  queue check, not code.** Before merging #623 every dev queue was empty and
+  every episode `draft`; there is no production yet. Check, then say so on the PR.
+- **`FOR SHARE` is the way to wait out an in-flight `FOR UPDATE`.** Approval
+  clears the S3 mark before it commits, so a plain re-read in that gap still says
+  "pending" (#629). The test holds the lock open in one session and shows the
+  re-check blocks.
+- **A stage dispatched outside the chain must take part in the same status
+  claim.** #625 took five codex rounds, each a real race: approval vs a
+  regeneration (claim `complete → distributing`), the restartable check vs the
+  RSS pre-flight that may commit (re-read `FOR UPDATE` before `queued`), a newer
+  run that completed again (claim on the run's `celery_task_id`), the response
+  built from a stale instance, and a best-effort marker write that could lose the
+  request (moved into the fail-closed screening write). When a reviewer keeps
+  finding races, keep going: each was cheap once named.
+- **`chain.apply()` is not eager for links.** It runs the tasks inline but sends
+  `link` callbacks to the broker (the local Redis `callbacks` queue). Set
+  `celery_app.conf.task_always_eager = True` by hand around `apply_async()`;
+  `patch.object` cannot restore Celery's settings object.
+- **Simulating "another session wrote this" in an API test:** the test client
+  shares one session, and an ORM-enabled `update()` synchronizes the identity
+  map. Use `.execution_options(synchronize_session=False)`, or the test passes
+  for the wrong reason.
+- **Check a race test fails without its fix.** Both #625 race tests were run
+  against the code with the guard switched off.

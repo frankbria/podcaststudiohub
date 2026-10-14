@@ -13,7 +13,7 @@ from botocore.exceptions import ClientError
 
 from src.worker import celery_app
 from src.config import settings
-from src.tasks.content_review import CONTENT_REVIEW_METADATA, held_episode_of
+from src.tasks.content_review import CONTENT_REVIEW_METADATA, episode_held_for_review, held_episode_of
 from src.tasks.retry_utils import calculate_backoff
 
 logger = logging.getLogger(__name__)
@@ -56,12 +56,30 @@ def _cleanup_temp_file(file_path: str) -> None:
         logger.warning("Failed to clean up temp file %s: %s", file_path, exc)
 
 
-def _upload_extra_args(s3_key: str, content_type: str) -> Dict[str, Any]:
+def _upload_extra_args(content_type: str, held: bool) -> Dict[str, Any]:
     """Upload options; held episode audio is marked so the public URL refuses it (#626)."""
     extra: Dict[str, Any] = {"ContentType": content_type}
-    if held_episode_of(s3_key):
+    if held:
         extra["Metadata"] = {CONTENT_REVIEW_METADATA: "pending"}
     return extra
+
+
+def _upload_marking_held(s3_client, file_path: str, bucket_name: str, s3_key: str, content_type: str, callback) -> None:
+    """Upload the file, marked while its episode is held for review."""
+    held = held_episode_of(s3_key)
+
+    def write(marked: bool) -> None:
+        s3_client.upload_file(
+            file_path, bucket_name, s3_key,
+            ExtraArgs=_upload_extra_args(content_type, marked), Callback=callback,
+        )
+
+    write(bool(held))
+    # A redelivered upload can land its marked object after the episode was
+    # approved, and nothing would clear that mark again (#629). The object is
+    # small and this is rare, so it is simply written again without the mark.
+    if held and not episode_held_for_review(held, after_approval=True):
+        write(False)
 
 
 def _s3_object_url(bucket_name: str, s3_key: str) -> str:
@@ -163,13 +181,7 @@ def upload_to_s3_task(
             _report_upload_progress(self, task_id, progress, f'Uploading to S3... {progress}%')
 
         # Upload file
-        s3_client.upload_file(
-            file_path,
-            bucket_name,
-            s3_key,
-            ExtraArgs=_upload_extra_args(s3_key, content_type),
-            Callback=upload_progress
-        )
+        _upload_marking_held(s3_client, file_path, bucket_name, s3_key, content_type, upload_progress)
 
         s3_url = _s3_object_url(bucket_name, s3_key)
 

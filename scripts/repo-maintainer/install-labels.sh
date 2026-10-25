@@ -35,9 +35,7 @@ gh label create "breaking-change" --color "B60205" --description "Contains break
 gh label create "security" --color "B60205" --description "Security-related change" --force
 gh label create "architecture" --color "D93F0B" --description "Architectural change" --force
 
-# PR review labels (used by pr-review.lock.yml)
-gh label create "review-approved" --color "0E8A16" --description "PR review passed" --force
-gh label create "review-changes-requested" --color "D93F0B" --description "PR review requested changes" --force
+# Review finding labels (used by rm-review.yml)
 gh label create "security-concern" --color "B60205" --description "Security concern found in review" --force
 
 # Review completion labels (used by rm-review.yml)

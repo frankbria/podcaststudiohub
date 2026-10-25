@@ -2,7 +2,7 @@ name: "Repo Maintainer: PR Review Completion"
 
 on:
   workflow_run:
-    workflows: ["PR Review Agent"]
+    workflows: ["GLM Review"]
     types: [completed]
   # schedule:
   #   # Every 2 hours, offset from rm-loop's */4 schedule by 1 hour

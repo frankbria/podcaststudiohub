@@ -105,7 +105,6 @@ issue_selection:
 local:
   enabled: true
   use_skill: implementing-issue-plans
-  use_beads: true
 
 # ── Research ────────────────────────────────────────
 research:

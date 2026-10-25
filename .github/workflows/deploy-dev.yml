@@ -14,6 +14,7 @@ on:
       - 'apps/web/package.json'
       - 'apps/web/package-lock.json'
       - 'package-lock.json'
+      - 'package.json'
       - 'apps/web/next.config.mjs'
       - 'apps/web/tailwind.config.ts'
       - 'deployment/**'
@@ -27,6 +28,14 @@ on:
         required: false
         type: boolean
         default: false
+
+# One deploy at a time: overlapping runs rsync and npm-install into the same
+# directories (five merges at once crashed one in the PM2 logrotate install).
+# Not cancelled mid-run; GitHub keeps only the newest pending run, so the
+# latest commit still wins.
+concurrency:
+  group: deploy-development
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -180,6 +189,19 @@ jobs:
           NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
           NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
         run: npm run build
+
+      # The VPS installs from the repo lockfile, rewritten for its layout
+      # (frontend/ instead of apps/web/), so it gets exactly the versions
+      # tested above plus the root overrides. Checked here with a dry run
+      # against the package.json the deploy ships: `npm ci` on the box wipes
+      # node_modules first, so a lock it rejects would take the site down.
+      - name: Prepare VPS npm root
+        run: |
+          python3 deployment/scripts/vps-npm-root.py . "$RUNNER_TEMP/vps-npm-root"
+          mkdir -p "$RUNNER_TEMP/vps-npm-root/frontend"
+          cp apps/web/package.json "$RUNNER_TEMP/vps-npm-root/frontend/"
+          cd "$RUNNER_TEMP/vps-npm-root"
+          npm ci --dry-run --ignore-scripts --no-audit --no-fund
 
       # The VPS firewalls port 22 off the public internet (#441), so the runner
       # reaches it over Tailscale instead. vars.SERVER_HOST must therefore be
@@ -440,11 +462,15 @@ jobs:
             .nvmrc \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/
 
-          # Install dependencies on server
-          # Uses npm install (not npm ci) because the VPS has only the frontend
-          # directory, not the full monorepo. The workspace-scoped lockfile at
-          # the repo root can't be used in isolation.
-          ssh $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend || exit 1; $USE_NODE; npm install"
+          # Install dependencies on server from the lockfile (see "Prepare VPS
+          # npm root"). $SERVER_PATH becomes the workspace root, with frontend/
+          # its only workspace. The frontend/ lockfile and node_modules left by
+          # the old `npm install` would shadow the hoisted tree, so they go.
+          rsync -avz -e ssh \
+            "$RUNNER_TEMP/vps-npm-root/package.json" \
+            "$RUNNER_TEMP/vps-npm-root/package-lock.json" \
+            $SSH_USER@$SSH_HOST:$SERVER_PATH/
+          ssh $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend || exit 1; $USE_NODE; rm -rf package-lock.json node_modules; cd .. && npm ci --no-audit --no-fund"
 
           # Create .env.production with runtime environment variables (needed for build)
           ssh $SSH_USER@$SSH_HOST "echo 'NEXT_PUBLIC_API_URL=$API_URL' > $SERVER_PATH/frontend/.env.production"

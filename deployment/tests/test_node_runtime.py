@@ -57,7 +57,7 @@ def test_deploy_selects_node_before_every_remote_npm_call():
 	assert guard, "deploy-dev.yml must define the USE_NODE prelude"
 	assert '. "$NVM_DIR/nvm.sh"' in guard.group(1)
 
-	remote_npm = [ln for ln in text.splitlines() if re.search(r"ssh .*\bnpm (install|run)\b", ln)]
+	remote_npm = [ln for ln in text.splitlines() if re.search(r"ssh .*\bnpm (ci|install|run)\b", ln)]
 	assert len(remote_npm) == 2, remote_npm
 	for ln in remote_npm:
 		assert "$USE_NODE" in ln, ln

@@ -203,6 +203,16 @@ def test_gemini_timeout_is_sent_in_milliseconds():
     assert client_cls.call_args.kwargs["http_options"].timeout == 90_000
 
 
+def test_gemini_sdk_retries_stay_off_so_they_never_stack_on_the_engine_loop():
+    """google-genai 2.x retries through tenacity, but only one attempt while
+    ``retry_options`` is unset. Setting it would multiply every engine retry
+    (#574) by the SDK's attempts, each one a full timeout and a possible bill."""
+    with use_gemini(load_fixture("short_form")) as client_cls:
+        generate_script(SOURCES, ConversationConfig())
+
+    assert client_cls.call_args.kwargs["http_options"].retry_options is None
+
+
 def test_openai_provider_is_used_when_configured():
     recorded = load_fixture("short_form")
 
@@ -776,24 +786,25 @@ def test_a_permanent_provider_failure_is_not_retried(no_backoff, code, status):
 
 
 @pytest.mark.parametrize("exc_name,retryable,calls", [
-    ("ConnectionError", True, 3),
-    ("ChunkedEncodingError", True, 3),  # body cut off mid-read
+    ("ConnectError", True, 3),
+    ("ReadError", True, 3),
+    ("RemoteProtocolError", True, 3),  # hang-up, or body cut off mid-read
     ("ReadTimeout", False, 1),
-    ("ConnectTimeout", False, 1),  # also a ConnectionError: Timeout wins
-    ("InvalidURL", False, 1),
+    ("ConnectTimeout", False, 1),
+    ("UnsupportedProtocol", False, 1),  # a bad base URL never heals on retry
 ])
 def test_gemini_transport_failures_are_wrapped_and_classified(
     no_backoff, exc_name, retryable, calls
 ):
-    """google-genai's transport is ``requests``, and it wraps only HTTP status
-    errors in APIError, so these used to escape ``generate_json`` raw. A
+    """google-genai's transport is httpx, and it wraps only HTTP status
+    errors in APIError, so these would escape ``generate_json`` raw. A
     timeout is wrapped but not retried: each one already cost the full
     provider timeout, and the provider may have billed the generation."""
-    import requests
+    import httpx
 
     from src.engine.llm import ProviderError
 
-    error = getattr(requests.exceptions, exc_name)("boom")
+    error = getattr(httpx, exc_name)("boom")
     client = gemini_with(*[error] * calls)
 
     with patch("src.engine.llm.genai.Client", return_value=client):
@@ -832,15 +843,15 @@ def hang_up_server():
 def test_a_dropped_gemini_connection_through_the_real_sdk_is_a_retryable_provider_error(
     no_backoff, hang_up_server
 ):
-    """Drift guard for the ``except requests.RequestException`` in llm.py.
+    """Drift guard for the ``except httpx.TransportError`` in llm.py.
 
-    pyproject floors google-genai (``>=1.2.0``) instead of pinning it, and that
-    clause only works while the SDK's transport is ``requests``. This drives the
-    real, installed SDK against a local server that hangs up — no network — so
-    a bump to an httpx-based release fails here instead of letting raw
-    transport errors escape the engine unclassified.
+    pyproject floors google-genai instead of pinning it, and that clause only
+    works while the SDK's sync transport is ``httpx``. This drives the real,
+    installed SDK against a local server that hangs up — no network — so a
+    transport change (``requests`` in 1.x, possibly ``httpx2`` later) fails
+    here instead of letting raw transport errors escape the engine unclassified.
     """
-    import requests
+    import httpx
     from google import genai
     from google.genai import types
 
@@ -861,8 +872,8 @@ def test_a_dropped_gemini_connection_through_the_real_sdk_is_a_retryable_provide
         with pytest.raises(ProviderError) as raised:
             generate_script(SOURCES, ConversationConfig())
 
-    assert isinstance(raised.value.__cause__, requests.ConnectionError), (
-        "google-genai no longer raises requests exceptions for a dropped "
+    assert isinstance(raised.value.__cause__, httpx.TransportError), (
+        "google-genai no longer raises httpx exceptions for a dropped "
         "connection; update the transport except clause in "
         "src/engine/llm.py:_generate_gemini"
     )
@@ -1011,11 +1022,11 @@ def test_a_template_stored_with_nulls_generates_a_script_end_to_end():
     assert len(script.turns) == 12
 
 
-def test_a_non_text_gemini_part_is_a_schema_failure_not_a_raw_valueerror():
-    """`GenerateContentResponse.text` raises ValueError when any part carries a
-    non-text field — a safety block, a function call, inline data. That is a
-    property access, not the API call, so it sits outside the APIError handler
-    and would otherwise escape the module's taxonomy entirely.
+def test_a_non_text_gemini_part_is_a_schema_failure():
+    """A reply whose parts carry no text (a function call, inline data) must
+    land in the module's taxonomy as ``ScriptSchemaError``. In google-genai 2.x,
+    `.text` returns None for it. In 1.x it raised ValueError instead, and this
+    test would catch that again if a later release goes back to raising.
     """
     from google.genai import types
 
@@ -1028,15 +1039,11 @@ def test_a_non_text_gemini_part_is_a_schema_failure_not_a_raw_valueerror():
             )
         ]
     )
-    # Guard the premise: this really does raise in the installed SDK.
-    with pytest.raises(ValueError):
-        _ = blocked.text
-
     client = MagicMock()
     client.models.generate_content = create_autospec(
         _real_gemini_generate_content(), side_effect=[blocked, blocked]
     )
 
     with patch("src.engine.llm.genai.Client", return_value=client):
-        with pytest.raises(ScriptSchemaError, match="non-text response"):
+        with pytest.raises(ScriptSchemaError, match="empty response"):
             generate_script(SOURCES, ConversationConfig())

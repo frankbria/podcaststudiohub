@@ -14,8 +14,8 @@ transcript.
 import logging
 from typing import Optional, Type, TypeVar
 
+import httpx
 import openai
-import requests
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
@@ -126,10 +126,9 @@ def _generate_gemini(
         raise ProviderError(
             f"Gemini call failed: {exc}", retryable=is_retryable_status(exc.code)
         ) from exc
-    except requests.RequestException as exc:
-        # The locked google-genai (1.2.0) sends over `requests` and wraps only
-        # HTTP status errors in APIError, so transport failures arrive here raw.
-        # pyproject only floors the SDK, so a bump could move it to httpx;
+    except httpx.TransportError as exc:
+        # google-genai 2.x sends over httpx and wraps only HTTP status errors in
+        # APIError, so transport failures arrive here raw (1.x used `requests`).
         # test_a_dropped_gemini_connection_... drives the real SDK and fails
         # first if this clause stops seeing its transport errors.
         raise ProviderError(
@@ -138,24 +137,16 @@ def _generate_gemini(
     return _parse_gemini_reply(response, schema)
 
 
-def _gemini_transport_retryable(exc: requests.RequestException) -> bool:
-    # Timeout is checked first: ConnectTimeout is also a ConnectionError.
-    # A body cut off mid-read is ChunkedEncodingError, which is neither.
-    return not isinstance(exc, requests.Timeout) and isinstance(
-        exc, (requests.ConnectionError, requests.exceptions.ChunkedEncodingError)
-    )
+def _gemini_transport_retryable(exc: httpx.TransportError) -> bool:
+    # A hang-up or a body cut off mid-read is RemoteProtocolError, not a
+    # NetworkError. Timeouts are neither, so they are not retried.
+    return isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError))
 
 
 def _parse_gemini_reply(response: types.GenerateContentResponse, schema: Type[T]) -> T:
-    try:
-        text = response.text
-    except ValueError as exc:
-        # `.text` raises when any part carries a non-text field — a safety
-        # block, a function call, inline data. It sits outside the APIError
-        # handler above because it is a property access, not the call, so
-        # without this the one contentless shape Gemini actually produces
-        # escapes as a raw ValueError past the empty-response branch below.
-        raise ScriptSchemaError(f"Gemini returned a non-text response: {exc}") from exc
+    # `.text` is None when no part carries text (a safety block, a function
+    # call, inline data); google-genai 1.x raised ValueError there instead.
+    text = response.text
     if not text:
         raise ScriptSchemaError("Gemini returned an empty response")
     try:

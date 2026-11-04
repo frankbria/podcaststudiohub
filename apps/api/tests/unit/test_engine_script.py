@@ -847,7 +847,7 @@ def hang_up_server():
 def test_a_dropped_gemini_connection_through_the_real_sdk_is_a_retryable_provider_error(
     no_backoff, hang_up_server
 ):
-    """Drift guard for the ``except httpx.TransportError`` in llm.py.
+    """Drift guard for the ``except (httpx.RequestError, httpx.InvalidURL)`` in llm.py.
 
     pyproject floors google-genai instead of pinning it, and that clause only
     works while the SDK's sync transport is ``httpx``. This drives the real,

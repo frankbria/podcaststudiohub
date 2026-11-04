@@ -126,9 +126,10 @@ def _generate_gemini(
         raise ProviderError(
             f"Gemini call failed: {exc}", retryable=is_retryable_status(exc.code)
         ) from exc
-    except httpx.TransportError as exc:
+    except (httpx.RequestError, httpx.InvalidURL) as exc:
         # google-genai 2.x sends over httpx and wraps only HTTP status errors in
-        # APIError, so transport failures arrive here raw (1.x used `requests`).
+        # APIError, so request failures arrive here raw (1.x used `requests`).
+        # InvalidURL is listed because httpx does not make it a RequestError.
         # test_a_dropped_gemini_connection_... drives the real SDK and fails
         # first if this clause stops seeing its transport errors.
         raise ProviderError(
@@ -137,10 +138,13 @@ def _generate_gemini(
     return _parse_gemini_reply(response, schema)
 
 
-def _gemini_transport_retryable(exc: httpx.TransportError) -> bool:
+def _gemini_transport_retryable(exc: httpx.RequestError | httpx.InvalidURL) -> bool:
     # A hang-up or a body cut off mid-read is RemoteProtocolError, not a
-    # NetworkError. Timeouts are neither, so they are not retried.
-    return isinstance(exc, (httpx.NetworkError, httpx.RemoteProtocolError))
+    # NetworkError. Timeouts are neither, so they are not retried. ProxyError
+    # keeps the retry it had under requests, where it was a ConnectionError.
+    return isinstance(
+        exc, (httpx.NetworkError, httpx.RemoteProtocolError, httpx.ProxyError)
+    )
 
 
 def _parse_gemini_reply(response: types.GenerateContentResponse, schema: Type[T]) -> T:

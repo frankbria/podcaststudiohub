@@ -789,9 +789,13 @@ def test_a_permanent_provider_failure_is_not_retried(no_backoff, code, status):
     ("ConnectError", True, 3),
     ("ReadError", True, 3),
     ("RemoteProtocolError", True, 3),  # hang-up, or body cut off mid-read
+    ("ProxyError", True, 3),  # requests counted it a ConnectionError; keep parity
     ("ReadTimeout", False, 1),
     ("ConnectTimeout", False, 1),
     ("UnsupportedProtocol", False, 1),  # a bad base URL never heals on retry
+    ("DecodingError", False, 1),  # server-sent garbage encoding
+    ("TooManyRedirects", False, 1),
+    ("InvalidURL", False, 1),  # not a RequestError in httpx, caught explicitly
 ])
 def test_gemini_transport_failures_are_wrapped_and_classified(
     no_backoff, exc_name, retryable, calls

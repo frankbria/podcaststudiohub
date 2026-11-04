@@ -1,29 +1,25 @@
-# [P2.19.2] #578 — Google Cloud TTS credential wiring — PR #613
+# Open-PR triage — 2026-11-03
 
-Previous plan (#542) is in git history at `9ace356`.
+Previous plan (#578 / PR #613) is in git history at `810b491`.
 
-## Acceptance criteria
+## Diagnosis
+Every open PR's Quality Gate is red because `main` fails pip-audit: pyasn1 0.6.4 (4 HIGH, fixed 0.6.5)
+and dnspython 2.8.0 (1 HIGH, fixed 2.9.0). `review / review` fails on Dependabot PRs only because
+Dependabot runs get no `MODEL_API_KEY` secret. The check isn't required (main is unprotected), so ignore it.
 
-- [x] A host with `GOOGLE_CLOUD_CREDENTIALS` set can synthesise with `gemini` and `gemini_multi` without ADC present
-- [x] A host with neither set fails with the existing clear `TTSProviderError`, not a stack trace
-- [x] `.env.example` documents the expected format
-
-## Decision (autonomous — no fork)
-
-The setting accepts **either** the service-account JSON itself (value starts with `{`) or a
-path to the JSON file. The existing `.env.example` already says "path"; secrets stores and PM2
-env pass inline JSON more easily. Both cost one branch.
-
-A separate setting is not redundant with `GOOGLE_APPLICATION_CREDENTIALS`: pydantic reads
-`apps/api/.env` into `settings` without exporting it to `os.environ`, so ADC never sees it.
-
-## Steps
-
-1. Tests first (`tests/unit/test_engine_tts.py`): real `TextToSpeechClient` built from a
-   generated service-account key (no network at construction), with ADC made to fail —
-   inline JSON, file path, and a malformed value / missing file → `TTSProviderError`
-   that does not echo the credential.
-2. `src/engine/tts/gemini.py::_client()` — build credentials from the setting, fall back to ADC
-   when unset; one helper serves both backends.
-3. `.env.example` (api + root) — document both forms and the ADC fallback.
-4. Platform-level credential note (BYOK lands here if it ever comes for Google) — in the code comment.
+## Plan
+1. [ ] **Unblock main**: branch `fix/audit-pyasn1-dnspython` that upgrades only pyasn1→0.6.5 and dnspython→2.9.0 in
+       `apps/api/uv.lock`. Merge it, then close #693 as superseded.
+2. [ ] Rebase the rest onto the fixed main (`@dependabot rebase`, and `gh pr update-branch` for #694).
+3. [ ] Merge as each one turns green:
+       #694 (glm-review failover, upstream glm-review#17 is merged), #692 boto3, #689 python-dotenv,
+       #690 ruff, #688 pymupdf 2.0 (uses `pymupdf` not `fitz`, so the 2.0 changes don't touch us),
+       #687 postcss, #686 eslint, #685 tailscale action, #684 claude-code-action.
+4. [ ] **#691 google-genai 2.x** = issue #681. Do it on a fresh branch: grpcio 1.84.0 pin, httpx transport
+       classification in `src/engine/llm.py`, non-text-part → `ScriptSchemaError`, ms-timeout re-check,
+       and a test pinning that `retry_options` stays unset. Live smoke if a working GEMINI key exists.
+       Close #691 when the replacement PR merges. Backfill a priority on #681.
+5. [ ] **#611 Tailwind 3→4**: this is a migration, not a bump (TS2322 on `darkMode`). Close it with
+       `@dependabot ignore this major version`. Retitle #610 as the prioritized Tailwind v4 migration issue.
+6. [ ] **#508 TypeScript 7**: typescript-eslint doesn't support TS 7. Close it with
+       `@dependabot ignore this major version` and open a prioritized follow-up issue.

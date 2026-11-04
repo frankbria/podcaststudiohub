@@ -52,6 +52,9 @@ updates:
       # lacks. Move this with the runtime.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # v4 is a CSS-first config migration, not a lockfile bump (#610).
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
     groups:
       security-updates:
         applies-to: security-updates

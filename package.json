@@ -30,7 +30,7 @@
     "docker:logs": "cd .docker && docker-compose logs -f"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.1",
+    "@playwright/test": "^1.64.1",
     "concurrently": "^8.2.2"
   },
   "overrides": {

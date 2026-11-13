@@ -61,7 +61,7 @@ env:
 jobs:
   test:
     name: Run Playwright Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # shortcut: Playwright has no chromium for ubuntu26.04 (ubuntu-latest), return to ubuntu-latest once it does
     timeout-minutes: 60
 
     strategy:

@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "frankbria", email = "frank.bria@gmail.com" }
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.11.5"
 dependencies = [
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.51.0",
@@ -50,6 +50,10 @@ build-backend = "hatchling.build"
 override-dependencies = [
     "setuptools>=78.1.1",
     "wheel>=0.46.2",
+    # GHSA-4j63-6c4x-wfg4, GHSA-mmhr-3c5m-f64f, GHSA-7g44-g9rc-x53w,
+    # GHSA-6655-6qjp-jx7x: only 4.0 fixes all four. Reached via beautifulsoup4,
+    # whose own floor is lower; 4.x needs Python >=3.11.5 (requires-python).
+    "soupsieve>=4.0",
 ]
 
 [dependency-groups]

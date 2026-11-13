@@ -122,9 +122,9 @@ def _scrub(event: dict, _hint: dict) -> dict:
     """Drop request bodies and cookies before an event leaves the process.
 
     This is a multi-tenant app: a request body can hold another tenant's content
-    and cookies hold session material. `send_default_pii=False` already stops
-    Sentry attaching user identity, but the body is sent regardless, so it is
-    removed explicitly here.
+    and cookies hold session material. sentry-sdk's default (no
+    `send_default_pii`, no `data_collection`) already stops it attaching user
+    identity, but the body is sent regardless, so it is removed explicitly here.
     """
     request = event.get("request")
     if isinstance(request, dict):
@@ -154,7 +154,9 @@ def init_sentry() -> bool:
         environment=settings.ENVIRONMENT,
         release=settings.APP_VERSION,
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-        send_default_pii=False,
+        # No send_default_pii (deprecated in 2.73) and no data_collection: unset
+        # resolves to the no-PII profile and keeps the default EventScrubber,
+        # which an explicit data_collection would disable.
         # Frame locals hold provider secrets (a service-account private key on
         # a bad GOOGLE_CLOUD_CREDENTIALS, #578) and tenant scripts; the default
         # scrubber matches top-level names only, so it misses both.

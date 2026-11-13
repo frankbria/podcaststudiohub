@@ -375,7 +375,8 @@ production stack trace is minified. Adopt the official SDK if that stops being
 enough.
 
 Notes:
-- `send_default_pii=False` and a `before_send` scrub strip the request body,
+- sentry-sdk's no-PII default (neither `send_default_pii` nor `data_collection`
+  is set) and a `before_send` scrub strip the request body,
   cookies and `Authorization` before an event leaves the process. This is a
   multi-tenant app: a request body can contain another tenant's content, so do
   not relax those without a deliberate decision.

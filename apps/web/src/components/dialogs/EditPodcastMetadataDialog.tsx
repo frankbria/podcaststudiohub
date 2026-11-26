@@ -176,7 +176,7 @@ export function EditPodcastMetadataDialog({
             <input
               id="podcast-explicit"
               type="checkbox"
-              className="h-4 w-4 rounded border-input"
+              className="h-4 w-4 rounded-sm border-input"
               {...register("explicit")}
             />
             <Label htmlFor="podcast-explicit">Explicit content</Label>

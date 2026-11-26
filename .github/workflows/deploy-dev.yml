@@ -16,7 +16,7 @@ on:
       - 'package-lock.json'
       - 'package.json'
       - 'apps/web/next.config.mjs'
-      - 'apps/web/tailwind.config.ts'
+      - 'apps/web/postcss.config.mjs'
       - 'deployment/**'
       - '.github/workflows/deploy-dev.yml'
       - '.nvmrc'
@@ -457,7 +457,6 @@ jobs:
             apps/web/package.json \
             apps/web/next.config.mjs \
             apps/web/tsconfig.json \
-            apps/web/tailwind.config.ts \
             apps/web/postcss.config.mjs \
             .nvmrc \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/frontend/
@@ -471,6 +470,11 @@ jobs:
             "$RUNNER_TEMP/vps-npm-root/package-lock.json" \
             $SSH_USER@$SSH_HOST:$SERVER_PATH/
           ssh $SSH_USER@$SSH_HOST "cd $SERVER_PATH/frontend || exit 1; $USE_NODE; rm -rf package-lock.json node_modules; cd .. && npm ci --no-audit --no-fund"
+
+          # Tailwind v4 (#610) keeps its config in globals.css. A tailwind.config.ts
+          # left by earlier deploys is still type-checked by `next build` (tsconfig
+          # includes **/*.ts) and fails it with TS2322, so remove it.
+          ssh $SSH_USER@$SSH_HOST "rm -f $SERVER_PATH/frontend/tailwind.config.ts"
 
           # Create .env.production with runtime environment variables (needed for build)
           ssh $SSH_USER@$SSH_HOST "echo 'NEXT_PUBLIC_API_URL=$API_URL' > $SERVER_PATH/frontend/.env.production"

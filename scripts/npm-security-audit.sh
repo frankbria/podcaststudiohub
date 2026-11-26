@@ -15,12 +15,7 @@ cd "$(dirname "$0")/.."
 # misreading is what previously masked next-auth 4.24.15.
 #
 # Each entry must carry: why no bump fixes it, an issue link, and a re-check trigger.
-ALLOWED_ADVISORIES=(
-  # braces <=3.0.3 stack-exhaustion DoS. 3.0.3 is the latest release, so no bump
-  # fixes it. Dev-only: tailwindcss@3 -> chokidar@3 build-time watcher, which only
-  # expands our own config globs. #610. Re-check: braces >3.0.3, or Tailwind v4.
-  GHSA-vfj7-8cjw-p6xm
-)
+ALLOWED_ADVISORIES=()
 
 audit_json="$(mktemp)"
 trap 'rm -f "$audit_json"' EXIT

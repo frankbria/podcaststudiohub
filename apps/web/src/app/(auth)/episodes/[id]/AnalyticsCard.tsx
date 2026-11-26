@@ -45,7 +45,7 @@ interface MetricTileProps {
 function MetricTile(props: MetricTileProps) {
   const { icon, label, value } = props
   return (
-    <div className="bg-muted rounded p-3">
+    <div className="bg-muted rounded-sm p-3">
       <div className="flex items-center gap-1 text-xs text-muted-foreground">
         <HugeiconsIcon icon={icon} size={14} />
         {label}

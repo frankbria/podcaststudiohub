@@ -32,7 +32,7 @@ interface ContentSourceItemProps {
 function ContentSourceItem({ source, onDelete }: ContentSourceItemProps) {
   const requestDelete = () => onDelete(source)
   return (
-    <li className="flex items-center justify-between p-3 bg-muted rounded">
+    <li className="flex items-center justify-between p-3 bg-muted rounded-sm">
       <div>
         <span className="font-medium">{source.source_type}</span>
         {source.extraction_status && (

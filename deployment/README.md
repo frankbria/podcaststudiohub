@@ -132,7 +132,7 @@ rsync -avz apps/web/src/ root@<SERVER_IP>:/opt/podcaststudiohub/frontend/src/
 
 # Sync config files
 rsync -avz apps/web/package.json apps/web/next.config.mjs apps/web/tsconfig.json \
-  apps/web/tailwind.config.ts apps/web/postcss.config.mjs \
+  apps/web/postcss.config.mjs \
   root@<SERVER_IP>:/opt/podcaststudiohub/frontend/
 
 # Install dependencies and rebuild on server

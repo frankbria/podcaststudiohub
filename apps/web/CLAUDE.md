@@ -79,7 +79,7 @@ Common mappings from lucide names:
 
 ## Typography
 
-Font: **Nunito Sans** via `next/font/google` — loaded in `layout.tsx` as a CSS variable `--font-nunito-sans`, applied via `tailwind.config.ts` `fontFamily.sans`.
+Font: **Nunito Sans** via `next/font/google` — loaded in `layout.tsx` as a CSS variable `--font-nunito-sans`, applied via `--font-sans` in the `@theme inline` block of `src/app/globals.css` (Tailwind v4 has no `tailwind.config.ts`; the theme lives in CSS since #610). `body` also sets `font-family` directly.
 
 ## Adding New Components
 

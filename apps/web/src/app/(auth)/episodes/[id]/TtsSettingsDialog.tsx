@@ -133,7 +133,7 @@ export function TtsSettingsDialog(props: TtsSettingsDialogProps) {
             onSelect={props.onSelectConfig}
           />
 
-          <div className="border rounded p-3 space-y-3">
+          <div className="border rounded-sm p-3 space-y-3">
             <p className="text-sm font-medium">Create New Configuration</p>
             <div>
               <Label htmlFor="new-tts-name" className="mb-1">Name</Label>

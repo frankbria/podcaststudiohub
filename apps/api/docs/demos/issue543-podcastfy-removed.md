@@ -66,6 +66,8 @@ transcript: 39 words; starts: 'All right, so here we are, in front of the\neleph
 
 **Edge TTS still fails** after the bump to edge-tts 7.2.8 (podcastfy capped it below 7): Microsoft returns 403 to this host even with the current client. The version hypothesis in #616 is therefore falsified; #616 stays open.
 
+> Update 2026-11-26 (#616): the version hypothesis was right after all, one release later. From a second host (US, NTP-synced), edge-tts 7.2.8 still got the same 403, while 7.3.1 (released 2026-10-13, after the run above) synthesized cleanly. The pin moved to `edge-tts>=7.3.1`.
+
 ```bash
 . /tmp/demo543b_env.sh && .venv/bin/python /tmp/demo_543b_checks.py edge 2>&1 | grep -E 'TTSProviderError|edge-tts:' | cut -c1-140; true
 ```

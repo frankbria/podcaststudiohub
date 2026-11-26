@@ -267,7 +267,7 @@ export default function DistributionPage() {
               <div>
                 <p className="text-sm font-medium mb-1">Feed URL</p>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 truncate rounded bg-muted px-3 py-2 text-sm">
+                  <code className="flex-1 truncate rounded-sm bg-muted px-3 py-2 text-sm">
                     {feed.public_url ?? "Not available"}
                   </code>
                   <Button

@@ -207,9 +207,9 @@ export default function ProjectAnalyticsPage() {
                       return (
                         <div key={w.week} className="flex items-center gap-3">
                           <span className="text-sm text-muted-foreground w-20 shrink-0">{w.week}</span>
-                          <div className="flex-1 bg-muted rounded h-2">
+                          <div className="flex-1 bg-muted rounded-sm h-2">
                             <div
-                              className="bg-primary rounded h-2"
+                              className="bg-primary rounded-sm h-2"
                               style={{ width: `${pct}%` }}
                               data-testid={`bar-${w.week}`}
                             />

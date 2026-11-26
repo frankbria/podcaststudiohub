@@ -400,7 +400,7 @@ function EpisodeCard({ episode, onEdit, onDelete }: EpisodeCardProps) {
               <Link
                 href={`/episodes/${episode.id}`}
                 aria-label={`Open episode: ${episode.title}`}
-                className="rounded hover:underline focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                className="rounded-sm hover:underline focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2"
               >
                 {episode.title}
               </Link>
@@ -443,7 +443,7 @@ interface StatusBadgeProps {
 function StatusBadge({ status }: StatusBadgeProps) {
   const color = STATUS_COLORS[status] || STATUS_COLORS.draft
   return (
-    <span className={`px-2 py-1 rounded text-xs ${color}`} aria-label={`Status: ${status}`}>
+    <span className={`px-2 py-1 rounded-sm text-xs ${color}`} aria-label={`Status: ${status}`}>
       {status}
     </span>
   )

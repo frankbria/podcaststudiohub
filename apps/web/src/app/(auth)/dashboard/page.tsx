@@ -237,7 +237,7 @@ export default function DashboardPage() {
                         <Link
                           href={`/projects/${project.id}`}
                           aria-label={`Open project: ${project.title}`}
-                          className="rounded hover:underline focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                          className="rounded-sm hover:underline focus:outline-hidden focus:ring-2 focus:ring-ring focus:ring-offset-2"
                         >
                           {project.title}
                         </Link>

@@ -154,8 +154,11 @@ export function TtsSettingsDialog(props: TtsSettingsDialogProps) {
                 <SelectContent>
                   <SelectItem value="openai">OpenAI</SelectItem>
                   <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
-                  <SelectItem value="gemini">Gemini</SelectItem>
-                  <SelectItem value="gemini_multi">Gemini Multi-Speaker</SelectItem>
+                  {/* Gemini and Gemini Multi-Speaker are hidden until the platform has
+                      Google credentials (#615 skipped for launch): without them those
+                      backends cannot produce audio. The backends and DEFAULT_CONFIGS
+                      stay, and saved configs that use them are still listed. Re-add both items
+                      when the key exists. */}
                   <SelectItem value="edge">Edge TTS (Free)</SelectItem>
                 </SelectContent>
               </Select>

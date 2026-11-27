@@ -916,6 +916,19 @@ describe('EpisodePage TTS config creation', () => {
     )
   })
 
+  it('does not offer the Gemini providers while the platform has no Google key (#615)', async () => {
+    global.fetch = mockEpisodeFetchRouter()
+    render(<EpisodePage />)
+    await screen.findByText('Test Episode')
+
+    await userEvent.click(screen.getByRole('button', { name: /tts settings/i }))
+    await userEvent.click(screen.getByLabelText(/select tts provider/i))
+
+    expect(await screen.findByRole('option', { name: 'ElevenLabs' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Edge TTS (Free)' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /gemini/i })).not.toBeInTheDocument()
+  })
+
   it('requires voice IDs before an ElevenLabs configuration can be saved', async () => {
     global.fetch = mockEpisodeFetchRouter()
     render(<EpisodePage />)
